@@ -2,7 +2,7 @@
 
 # Base directories
 LOAD_DIR="/data/scratch-oc40/pulkitag/ankile/furniture-data/raw/diffik/sim/one_leg/rollout/low"
-SAVE_DIR="/data/scratch/ankile/robust-assembly-video-data/rendered/one_leg/rppo"
+SAVE_DIR="/data/scratch/ankile/huyue233-zhejiang-university-video-data/rendered/one_leg/rppo"
 
 # Loop through indices
 for i in $(seq 0 99); do

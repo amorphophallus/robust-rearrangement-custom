@@ -91,6 +91,7 @@ target/
 
 # exclude data from source control by default
 /data/
+/raw/
 
 # Mac OS-specific storage files
 .DS_Store
@@ -119,3 +120,6 @@ tmp
 
 logs/
 scene.xml
+
+# wandb
+/wandb_cache/

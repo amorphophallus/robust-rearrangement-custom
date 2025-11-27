@@ -72,7 +72,7 @@ control:
 
 
 wandb:
-  entity: robust-assembly
+  entity: huyue233-zhejiang-university
   project: mlp-ppo-dr-${env.randomness}-1
   mode: online
 

@@ -26,4 +26,4 @@ training:
 
 wandb:
   project: ???
-  entity: robust-assembly
+  entity: huyue233-zhejiang-university

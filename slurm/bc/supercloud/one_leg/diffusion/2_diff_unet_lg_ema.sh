@@ -8,6 +8,6 @@
 
 python -m src.train.bc +experiment=state/diff_unet \
     wandb.mode=offline \
-    wandb.entity=robust-assembly \
+    wandb.entity=huyue233-zhejiang-university \
     training.ema.use=true \
     dryrun=false

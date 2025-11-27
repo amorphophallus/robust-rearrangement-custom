@@ -19,5 +19,5 @@ rollout:
   loss_threshold: 1000
 
 wandb:
-  entity: robust-assembly
+  entity: huyue233-zhejiang-university
   project: residual-diffusion-bc-1

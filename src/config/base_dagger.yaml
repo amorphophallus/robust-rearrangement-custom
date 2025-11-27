@@ -51,7 +51,7 @@ control:
   act_rot_repr: rot_6d
 
 wandb:
-  entity: robust-assembly
+  entity: huyue233-zhejiang-university
   project: ol-dagger-low-1
   mode: online
   notes: null

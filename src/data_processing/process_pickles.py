@@ -25,6 +25,7 @@ from src.data_processing.utils import resize, resize_crop
 from src.data_processing.utils import clip_quat_xyzw_magnitude
 
 from ipdb import set_trace as bp  # noqa
+import sys
 
 
 # === Modified Function to Initialize Zarr Store with Full Dimensions ===
@@ -69,6 +70,7 @@ def process_pickle_file(
     pickle_path: Path,
     noop_threshold: float,
     calculate_pos_action_from_delta: bool = False,
+    resize_image: bool = False,
 ):
     """
     Process a single pickle file and return processed data.
@@ -101,18 +103,17 @@ def process_pickle_file(
         color_image1.shape == color_image2.shape
     ), "Color images have different shapes"
 
-    if color_image1.shape[1:] != (240, 320, 3):
-        # We only resize the wrist image to keep the gripper fingers in view
-        color_image1 = resize(color_image1)
+    if resize_image:
+        if color_image1.shape[1:] != (240, 320, 3):
+            # Resize only if the shape is not already correct
+            color_image1 = resize(color_image1)
+            color_image2 = resize_crop(color_image2)
 
-        # The front camera is also cropped as we don't need the edges
-        color_image2 = resize_crop(color_image2)
-
-    assert color_image1.shape[1:] == (
-        240,
-        320,
-        3,
-    ), f"Color image 1 has shape {color_image1.shape[1:]}"
+        # Ensure the shape is consistent with the expected Zarr dataset shape
+        assert color_image1.shape[1:] == (240, 320, 3), f"Unexpected shape for color_image1: {color_image1.shape[1:]}"
+        # assert color_image2.shape[1:] == (240, 320, 3), f"Unexpected shape for color_image2: {color_image2.shape[1:]}"
+    else:
+        print("[INFO] Skipping image resizing as --resize-image is not set.")
 
     if isinstance(obs[0]["robot_state"], dict):
         # Convert the robot state to a numpy array
@@ -213,6 +214,7 @@ def parallel_process_pickle_files(
     noop_threshold,
     num_threads,
     calculate_pos_action_from_delta=False,
+    resize_image=False,
 ):
     """
     Process all pickle files in parallel and aggregate results.
@@ -251,7 +253,7 @@ def parallel_process_pickle_files(
         # Run synchronous version
         for path in tqdm(pickle_paths, desc="Processing files"):
             data = process_pickle_file(
-                path, noop_threshold, calculate_pos_action_from_delta
+                path, noop_threshold, calculate_pos_action_from_delta, resize_image
             )
             aggregate_data(data)
     else:
@@ -263,6 +265,7 @@ def parallel_process_pickle_files(
                     path,
                     noop_threshold,
                     calculate_pos_action_from_delta,
+                    resize_image,
                 )
                 for path in pickle_paths
             ]
@@ -373,6 +376,8 @@ if __name__ == "__main__":
     parser.add_argument("--random-seed", type=int, default=0)
     parser.add_argument("--n-cpus", type=int, default=1)
     parser.add_argument("--chunk-size", type=int, default=1000)
+    parser.add_argument("--batch-size", type=int, default=20)
+    parser.add_argument("--resize-image", action="store_true", help="Resize images to standard dimensions (240x320x3)")
     args = parser.parse_args()
 
     assert not args.randomize_order or args.offset == 0, "Cannot offset with randomize"
@@ -389,7 +394,29 @@ if __name__ == "__main__":
         )
     )
 
+    # Output the shape of the first pickle file
     total_files = len(pickle_paths)
+    if total_files > 0:
+        first_pickle_data = unpickle_data(pickle_paths[0])
+        print("[INFO] Shape of the first pickle file's data:")
+        for key, value in first_pickle_data.items():
+            if key == "success" or key == "task" or key == "action_type":
+                print(f"{key}: {value} (type: {type(value)})")
+            elif key == "rewards" or key == "actions":
+                print(f"{key}: shape {np.shape(value)}")
+            elif key == "observations":
+                print(f"{key}: number of observations {len(value)}")
+                if len(value) > 0:
+                    for obs_key, obs_value in value[0].items():
+                        if obs_key == "robot_state":
+                            for sub_key, sub_value in obs_value.items():
+                                print(f"  robot_state/{sub_key}: shape {np.shape(sub_value)}")
+                        elif isinstance(obs_value, np.ndarray):
+                            print(f"  {obs_key}: shape {obs_value.shape}")
+                        else:
+                            print(f"  {obs_key}: type {type(obs_value)}")
+            else:
+                print("[WARNING] No pickle files found for the specified criteria.")
 
     if args.randomize_order:
         print(f"Using random seed: {args.random_seed}")
@@ -426,6 +453,161 @@ if __name__ == "__main__":
     chunksize = args.chunk_size
     noop_threshold = 0.0
     n_cpus = min(os.cpu_count(), args.n_cpus)
+    batch_size = args.batch_size
+
+    # If batch processing requested, do a lightweight scan first to determine total shapes
+    if batch_size > 0 and batch_size < len(pickle_paths):
+        print(f"[INFO] Using batch processing with batch_size={batch_size}")
+        total_timesteps = 0
+        episode_lengths = []
+        tasks_meta = []
+        successes_meta = []
+        pickle_files_meta = []
+        # For determining per-step dims
+        img_shape = None
+        parts_pose_dim = None
+        robot_state_dim = None
+
+        for p in tqdm(pickle_paths, desc="Scanning pickle files for shapes"):
+            data = unpickle_data(p)
+
+            obs = data["observations"]
+            actions = data["actions"]
+            # Adjust for possible extra last obs
+            if len(obs) == len(actions) + 1:
+                obs = obs[:-1]
+            ep_len = len(actions)
+            episode_lengths.append(ep_len)
+            total_timesteps += ep_len
+            tasks_meta.append(data.get("task", data.get("furniture")))
+            successes_meta.append(1 if data.get("success") == "partial_success" else int(data.get("success", 0)))
+            pickle_file_rel = "/".join(p.parts[p.parts.index("raw") + 1 :]) if "raw" in p.parts else p.name
+            pickle_files_meta.append(pickle_file_rel)
+            if robot_state_dim is None:
+                rs = obs[0]["robot_state"]
+                if isinstance(rs, dict):
+                    rs_vec = filter_and_concat_robot_state(rs)
+                else:
+                    rs_vec = rs
+                robot_state_dim = rs_vec.shape[-1] + 2  # will become 6D rotation later but safe placeholder
+            if parts_pose_dim is None and "parts_poses" in obs[0]:
+                parts_pose_dim = len(obs[0]["parts_poses"])
+            if img_shape is None and "color_image1" in obs[0]:
+                img_shape = obs[0]["color_image1"].shape
+        if parts_pose_dim is None:
+            parts_pose_dim = 0
+        if img_shape is None:
+            # No images in this dataset (state-only); set dummy shape (total_timesteps,0,0,0)
+            img_shape = (0, 0, 0)
+
+        # Build full_data_shapes for zarr initialization
+        # Process the first pickle file to determine data shapes
+        sample_data = process_pickle_file(
+            pickle_paths[0],
+            noop_threshold=0.0,
+            calculate_pos_action_from_delta=True,
+            resize_image=args.resize_image,
+        )
+
+        # Define full_data_shapes based on the sample data and total_timesteps
+        full_data_shapes = [
+            ("robot_state", (total_timesteps,) + sample_data["robot_state"].shape[1:], np.float32),
+            ("color_image1", (total_timesteps,) + sample_data["color_image1"].shape[1:], np.uint8),
+            ("color_image2", (total_timesteps,) + sample_data["color_image2"].shape[1:], np.uint8),
+            ("action/delta", (total_timesteps,) + sample_data["action/delta"].shape[1:], np.float32),
+            ("action/pos", (total_timesteps,) + sample_data["action/pos"].shape[1:], np.float32),
+            ("parts_poses", (total_timesteps,) + sample_data["parts_poses"].shape[1:], np.float32),
+            ("reward", (total_timesteps,), np.float32),
+            ("skill", (total_timesteps,), np.float32),
+            ("augment_states", (total_timesteps,), np.float32),
+            ("episode_ends", (len(episode_lengths),), np.uint32),
+            ("task", (len(episode_lengths),), str),
+            ("success", (len(episode_lengths),), np.uint8),
+            ("pickle_file", (len(episode_lengths),), str),
+        ]
+
+        # Output the full_data_shapes for debugging or inspection
+        print("Full data shapes:")
+        for name, shape, dtype in full_data_shapes:
+            print(f"{name}: shape={shape}, dtype={dtype}")
+        sys.stdout.flush()  # Ensure the output is flushed immediately after printing
+
+        # Initialize zarr store early
+        z = initialize_zarr_store(output_path, full_data_shapes, chunksize=chunksize)
+
+        # Fill episode-level metadata arrays
+        cum_end = 0
+        episode_ends_arr = []
+        for L in episode_lengths:
+            cum_end += L
+            episode_ends_arr.append(cum_end)
+        z["episode_ends"][:] = np.array(episode_ends_arr, dtype=np.uint32)
+        z["task"][:] = np.array(tasks_meta, dtype=object)
+        z["success"][:] = np.array(successes_meta, dtype=np.uint8)
+        z["pickle_file"][:] = np.array(pickle_files_meta, dtype=object)
+
+        # Process in batches and write slices
+        write_ptr = 0
+        for start_i in range(0, len(pickle_paths), batch_size):
+            batch_paths = pickle_paths[start_i : start_i + batch_size]
+            batch_timeseries = {
+                "robot_state": [],
+                "color_image1": [],
+                "color_image2": [],
+                "action/delta": [],
+                "action/pos": [],
+                "reward": [],
+                "skill": [],
+                "augment_states": [],
+                "parts_poses": [],
+            }
+            for p in batch_paths:
+                data = process_pickle_file(
+                    p,
+                    noop_threshold=0.0,
+                    calculate_pos_action_from_delta=True,
+                    resize_image=args.resize_image,
+                )
+                for k in batch_timeseries.keys():
+                    batch_timeseries[k].append(data[k])
+            # Concatenate this batch
+            for k in batch_timeseries.keys():
+                if batch_timeseries[k]:
+                    batch_timeseries[k] = np.concatenate(batch_timeseries[k])
+                else:
+                    # Create empty array with correct trailing dims
+                    if k in ["robot_state", "action/delta", "action/pos", "parts_poses"]:
+                        batch_timeseries[k] = np.empty((0, batch_timeseries[k][0].shape[1] if batch_timeseries[k] else 0), dtype=np.float32)
+                    else:
+                        batch_timeseries[k] = np.empty((0,), dtype=np.float32)
+            batch_len = batch_timeseries["action/delta"].shape[0]
+            end_ptr = write_ptr + batch_len
+            # Write slice to zarr
+            for k, arr in batch_timeseries.items():
+                z[k][write_ptr:end_ptr] = arr
+            write_ptr = end_ptr
+            print(f"[INFO] Written batch {start_i//batch_size + 1}, timesteps so far: {write_ptr}/{total_timesteps}")
+
+        # Update metadata attrs and exit early (skip original full aggregation path)
+        z.attrs["time_finished"] = datetime.now().astimezone().isoformat()
+        z.attrs["noop_threshold"] = 0.0
+        z.attrs["chunksize"] = chunksize
+        z.attrs["rotation_mode"] = "rot_6d"
+        z.attrs["n_episodes"] = len(z["episode_ends"])
+        z.attrs["n_timesteps"] = total_timesteps
+        z.attrs["mean_episode_length"] = round(total_timesteps / len(z["episode_ends"]))
+        z.attrs["calculated_pos_action_from_delta"] = True
+        z.attrs["randomize_order"] = args.randomize_order
+        z.attrs["random_seed"] = args.random_seed
+        z.attrs["demo_source"] = args.source
+        z.attrs["controller"] = args.controller
+        z.attrs["domain"] = args.domain if args.domain == "real" else "sim"
+        z.attrs["task"] = args.task
+        z.attrs["randomness"] = args.randomness
+        z.attrs["demo_outcome"] = args.demo_outcome
+        z.attrs["suffix"] = args.suffix
+        print("[INFO] Batch processing complete.")
+        exit(0)
 
     print(
         f"Processing pickle files with {n_cpus} CPUs, chunksize={chunksize}, noop_threshold={noop_threshold}\n"
@@ -438,6 +620,7 @@ if __name__ == "__main__":
         noop_threshold,
         n_cpus,
         calculate_pos_action_from_delta=True,
+        resize_image=args.resize_image,
     )
 
     # Define the full shapes for each dataset
@@ -459,6 +642,12 @@ if __name__ == "__main__":
         ("pickle_file", (len(all_data["pickle_file"]),), str),
     ]
 
+    # Output the full_data_shapes for debugging or inspection
+    print("Full data shapes:")
+    for name, shape, dtype in full_data_shapes:
+        print(f"{name}: shape={shape}, dtype={dtype}")
+    
+    
     # Initialize Zarr store with full dimensions
     z = initialize_zarr_store(output_path, full_data_shapes, chunksize=chunksize)
 

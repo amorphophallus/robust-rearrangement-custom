@@ -48,7 +48,7 @@ google-auth==2.18.0
 google-auth-oauthlib==0.4.6
 gpustat==1.1.1
 grpcio==1.54.0
-gym==0.21.0
+gym  # gym==0.21.0 require python>=3.9
 gym-notices==0.0.8
 gymnasium==0.28.1
 h5py==3.11.0

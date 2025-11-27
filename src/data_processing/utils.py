@@ -86,7 +86,7 @@ def resize_crop(img: Union[np.ndarray, torch.Tensor]):
     )
 
     # Calculate the crop size.
-    crop_size = (new_width - tw) // 2
+    crop_size = max(0, (new_width - tw) // 2)
 
     if isinstance(img, torch.Tensor):
         img = img[..., crop_size : new_width - crop_size]

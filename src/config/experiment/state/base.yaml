@@ -16,12 +16,19 @@ demo_source: teleop
 early_stopper:
   patience: inf
 
+# training:
+#   batch_size: 256
+#   steps_per_epoch: 1000
+#   checkpoint_interval: 500
+#   num_epochs: 5000
+
+# hy diff_unet one_leg low
 training:
-  batch_size: 256
-  steps_per_epoch: 1000
-  checkpoint_interval: 500
-  num_epochs: 5000
+  batch_size: 512
+  steps_per_epoch: 500
+  checkpoint_interval: 100
+  num_epochs: 400
 
 wandb:
   project: ${task}-state-${randomness}
-  entity: robust-assembly
+  entity: huyue233-zhejiang-university

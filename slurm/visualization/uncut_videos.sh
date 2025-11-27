@@ -48,7 +48,7 @@ wt_type="best_success_rate"
 # rollout_steps=1000
 
 while true; do
-    DATA_DIR_RAW=/data/scratch/ankile/robust-assembly-video-data python -m src.eval.evaluate_model \
+    DATA_DIR_RAW=/data/scratch/ankile/huyue233-zhejiang-university-video-data python -m src.eval.evaluate_model \
         --n-envs 32 --n-rollouts 32 -f $task --if-exists append --max-rollout-steps $rollout_steps \
         --action-type pos --randomness $randomness --wt-type $wt_type --run-id $run_id \
         --observation-space image --save-rollouts --save-failures --save-rollouts-suffix $rollout_suffix \

@@ -7,7 +7,7 @@
 #SBATCH -c 20
 
 python -m src.train.bc +experiment=image/diff_unet \
-    wandb.entity=robust-assembly \
+    wandb.entity=huyue233-zhejiang-university \
     demo_source=rollout \
     data.suffix=bc_unet \
     wandb.mode=offline \

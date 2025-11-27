@@ -3,6 +3,15 @@ import os
 from pathlib import Path
 import time
 
+# 需要在 torch 之前加载 isaacgym 本地扩展以避免段错误
+# Preload isaacgym native extensions before importing torch to avoid segfaults
+try:
+    import isaacgym  # noqa: F401
+    from isaacgym import gymapi as _ig_gymapi  # noqa: F401
+    from isaacgym import gymtorch as _ig_gymtorch  # noqa: F401
+except Exception as _e:
+    print(f"[WARN] isaacgym preload failed or unavailable: {_e}")
+
 from gymnasium import Env
 import torch  # needs to be after isaac gym imports
 from omegaconf import DictConfig, OmegaConf

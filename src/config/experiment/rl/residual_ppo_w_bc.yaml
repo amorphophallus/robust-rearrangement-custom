@@ -31,7 +31,7 @@ normalize_reward: false
 residual_l2: 0.0
 
 wandb:
-  entity: robust-assembly
+  entity: huyue233-zhejiang-university
   project: ol-rppo-dr-${env.randomness}-1
   # project: tmp-bc-in-the-loop-rl-test
   mode: online

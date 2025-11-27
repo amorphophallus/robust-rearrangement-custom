@@ -14,7 +14,7 @@ training:
 
   load_checkpoint_run_id: null
   
-  eval_every: 10
+  eval_every: 100
   sample_every: 100
   
   model_save_dir: models
