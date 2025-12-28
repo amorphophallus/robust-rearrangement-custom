@@ -25,6 +25,7 @@ from copy import deepcopy
 
 import wandb
 import zarr
+from datetime import datetime
 
 
 RolloutStats = collections.namedtuple(
@@ -422,6 +423,7 @@ def calculate_success_rate(
                     action_type=env.action_type,
                     rollout_save_dir=rollout_save_dir,
                     compress_pickles=compress_pickles,
+                    have_img_obs=have_img_obs,
                 )
 
         if record_first_state_only:

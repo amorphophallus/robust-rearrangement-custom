@@ -10,6 +10,7 @@ from src.common.types import Trajectory, Observation
 from src.common.geometry import np_action_6d_to_quat
 
 from ipdb import set_trace as bp
+from src.visualization.render_mp4 import create_in_memory_mp4
 
 
 def save_raw_rollout(
@@ -24,6 +25,7 @@ def save_raw_rollout(
     action_type: str,
     rollout_save_dir: Path,
     compress_pickles: bool = False,
+    have_img_obs:  bool = False,
 ):
     observations: List[Observation] = list()
 
@@ -75,11 +77,33 @@ def save_raw_rollout(
         "action_type": action_type,
     }
 
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
     output_path = rollout_save_dir / ("success" if success else "failure")
     output_path.mkdir(parents=True, exist_ok=True)
-    output_path = output_path / f"{datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f')}.pkl"
+    output_path = output_path / f"{timestamp}.pkl"
 
     if compress_pickles:
         output_path = output_path.with_suffix(".pkl.xz")
 
     pickle_data(data, output_path)
+
+
+    # Additionally save MP4 videos for video1 and video2
+    if have_img_obs:
+        # Ensure output directory exists (with success/failure subdirectory)
+        status_dir = Path(rollout_save_dir) / ("success" if success else "failure")
+        status_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create MP4 bytes for each camera stream
+        mp4_cam1 = create_in_memory_mp4(imgs1, fps=20)
+        mp4_cam2 = create_in_memory_mp4(imgs2, fps=20)
+
+        # Build filenames
+        cam1_path = status_dir / f"{timestamp}_cam1.mp4"
+        cam2_path = status_dir / f"{timestamp}_cam2.mp4"
+
+        # Write files
+        with open(cam1_path, "wb") as f1:
+            f1.write(mp4_cam1.getvalue() if hasattr(mp4_cam1, "getvalue") else mp4_cam1)
+        with open(cam2_path, "wb") as f2:
+            f2.write(mp4_cam2.getvalue() if hasattr(mp4_cam2, "getvalue") else mp4_cam2)

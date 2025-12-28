@@ -34,10 +34,14 @@ api = Api()
 
 
 class LocalCheckpointWrapper:
-    def __init__(self, checkpoint_path: str):
+    def __init__(self, checkpoint_path: str, map_location: Optional[torch.device] = None):
         self.checkpoint_path = Path(checkpoint_path)
 
-        self.checkpoint = torch.load(self.checkpoint_path)
+        # Load checkpoint using provided map_location (from main's device) to avoid CUDA mismatches
+        if map_location is None:
+            self.checkpoint = torch.load(self.checkpoint_path)
+        else:
+            self.checkpoint = torch.load(self.checkpoint_path, map_location=map_location)
 
         self.config: DictConfig = OmegaConf.create(self.checkpoint["config"])
         self.name = self.checkpoint_path.stem
@@ -115,11 +119,17 @@ def validate_args(args: argparse.Namespace):
     assert not args.store_video_wandb or args.wandb, "store-video-wandb requires wandb"
 
 
-def get_runs(args: argparse.Namespace) -> List[Run]:
+def get_runs(args: argparse.Namespace, map_location: Optional[torch.device] = None) -> List[Run]:
     # Clear the cache to make sure we get the latest runs
     if args.wt_path:
 
-        run = LocalCheckpointWrapper(args.wt_path)
+        run = LocalCheckpointWrapper(args.wt_path, map_location=map_location)
+        # 输出 checkpoint.config
+        try:
+            print("checkpoint.config:")
+            print(OmegaConf.to_yaml(run.config))
+        except Exception:
+            print(run.config)
         runs = [run]
 
     else:
@@ -300,8 +310,8 @@ if __name__ == "__main__":
     print(f"Starting evaluation loop in continuous mode: {args.continuous_mode}")
     try:
         while True:
-            # Get the run(s) to test
-            runs = get_runs(args)
+            # Get the run(s) to test, using main's device for map_location
+            runs = get_runs(args, map_location=device)
 
             # For now, filter out only the runs with strictly positive success rates to add more runs to them to get a better estimate
             if args.eval_top_k is not None:

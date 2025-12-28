@@ -410,7 +410,8 @@ def rot_6d_to_isaac_quat(rot_6d: torch.Tensor) -> torch.Tensor:
     quat = matrix_to_quaternion(rot_mats)
 
     # Convert quaternion from PyTorch3D format to IsaacGym format
-    quat = pytorch3d_quat_to_isaac_quat(quat)
+    # 已经是 (x, y, z, w) format 了，不用再转
+    # quat = pytorch3d_quat_to_isaac_quat(quat)
 
     return quat
 
@@ -647,6 +648,7 @@ def matrix_to_quaternion(matrix):
 
     Returns:
         quaternions with real part last, as tensor of shape (..., 4).
+        格式为 (x, y, z, w)
     """
     if matrix.size(-1) != 3 or matrix.size(-2) != 3:
         raise ValueError(f"Invalid rotation matrix  shape f{matrix.shape}.")
