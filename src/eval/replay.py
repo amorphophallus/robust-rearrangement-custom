@@ -10,6 +10,50 @@ import torch
 from src.gym import get_rl_env
 from src.common.context import suppress_all_output
 from src.visualization.render_mp4 import create_in_memory_mp4
+from src.pc_util.point_cloud_generator import PointCloudGenerator
+
+
+def _to_numpy_first(x, env_idx: int = 0):
+    """Extract env_idx slice and convert to numpy, handling torch tensors and numpy arrays."""
+    if hasattr(x, "cpu"):
+        arr = x
+        if arr.ndim > 1:
+            arr = arr[env_idx]
+        return arr.cpu().numpy()
+    x_np = np.asarray(x)
+    if x_np.ndim > 1:
+        x_np = x_np[env_idx]
+    return x_np
+
+
+def _extract_robot_state(obs: dict, env_idx: int = 0):
+    rs = obs.get("robot_state")
+    if rs is None:
+        return None
+    if isinstance(rs, dict):
+        return {k: _to_numpy_first(v, env_idx) for k, v in rs.items()}
+    return _to_numpy_first(rs, env_idx)
+
+
+def _extract_image(obs: dict, key: str, env_idx: int = 0):
+    img = obs.get(key)
+    if img is None:
+        return None
+    return _to_numpy_first(img, env_idx)
+
+
+def _done_flag(done, env_idx: int = 0) -> bool:
+    if done is None:
+        return False
+    if hasattr(done, "cpu"):
+        arr = done
+        if arr.ndim > 1:
+            arr = arr[env_idx]
+        return bool(arr.cpu().numpy().item())
+    arr = np.asarray(done)
+    if arr.ndim > 1:
+        arr = arr[env_idx]
+    return bool(arr.item())
 
 
 def _to_tensor_action(action: np.ndarray, num_envs: int, device: torch.device) -> torch.Tensor:
@@ -160,7 +204,7 @@ def render_world_axes(env, img: np.ndarray, origin=np.array([-0.1, -0.1, 0.4], d
     return canvas
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Replay a saved pickle trajectory with pos control")
     parser.add_argument("--pickle-path", type=str, required=False)
     parser.add_argument("--task", "-f", type=str, required=True,
@@ -176,7 +220,22 @@ def main():
     parser.add_argument("--visualize-eepose", action="store_true", help="Draw EE pose arrow after each step")
     parser.add_argument("--visualize-axis", action="store_true", help="Draw world coordinate axes at origin")
     parser.add_argument("--debug-action", action="store_true", help="Run debug action: move EE +X,+Y,+Z (10 steps each) with overlays")
-    args = parser.parse_args()
+    parser.add_argument("--save-pc-for-dp3", action="store_true", help="Enable point cloud generation and pickle export for DP3")
+    parser.add_argument("--pc-points", type=int, default=4096, help="Downsampled point count for generated point clouds")
+    parser.add_argument(
+        "--pc-downsample-mode",
+        type=str,
+        default="random",
+        choices=["random", "uniform", "fps"],
+        help="Downsample mode for point cloud generation",
+    )
+    parser.add_argument(
+        "--pc-out-dir",
+        type=str,
+        default="/data/hy/robust-rearrangement/raw/raw/diffik/sim/one_leg/rollout/low/pc/success",
+        help="Output dir for replay pickle with point clouds when task succeeds",
+    )
+    args = parser.parse_args(argv)
 
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
 
@@ -195,6 +254,19 @@ def main():
             verbose=False,
             headless=not args.visualize and args.headless,
         )
+
+    # Ensure depth/seg tensors exist for point cloud generation when enabled
+    pc_generator = None
+    if args.save_pc_for_dp3:
+        extra_obs_keys = []
+        if "depth_image2" not in env.obs_keys:
+            extra_obs_keys.append("depth_image2")
+        if "seg_image2" not in env.obs_keys:
+            extra_obs_keys.append("seg_image2")
+        if extra_obs_keys:
+            env.obs_keys = list(env.obs_keys) + extra_obs_keys
+            env.set_camera()
+        pc_generator = PointCloudGenerator(env=env, camera_name="front", max_points=args.pc_points)
 
     # Debug action mode: route to run_debug_action
     if args.debug_action:
@@ -217,9 +289,14 @@ def main():
     # Optional buffers for recording
     imgs1_list = []
     imgs2_list = []
+    pc_list = []
+    state_list = []
+    action_list = []
+    img_list = []
 
     # Use robot_state to compute absolute pos actions; iterate over subsequent observations
     # We step from obs[0] to obs[-1], using obs[t] as target pose at step t
+    last_done = None
     for t in range(5, len(observations)):
         obs = observations[t]
         rs = obs.get("robot_state")
@@ -240,6 +317,18 @@ def main():
         ac_t = _to_tensor_action(pos_action, num_envs=args.num_envs, device=device)
         # Step the env (pos control) and record images from the step output
         step_obs, _rew, _done, _info = env.step(ac_t)
+        last_done = _done
+        if args.save_pc_for_dp3 and pc_generator is not None:
+            pc = pc_generator.generate_transformed_cropped_point_cloud(
+                env_idx=0,
+                max_points=args.pc_points,
+                downsample_mode=args.pc_downsample_mode,
+                visualize=True,
+            )
+            pc_list.append(pc.cpu().numpy())
+            img_list.append(_extract_image(step_obs, "color_image2", env_idx=0) if isinstance(step_obs, dict) else None)
+            state_list.append(_extract_robot_state(step_obs, env_idx=0) if isinstance(step_obs, dict) else None)
+            action_list.append(pos_action.astype(np.float32))
         # Render helpers
         if args.visualize_eepose:
             render_eepose_arrow(step_obs, env, length=0.05)
@@ -282,6 +371,29 @@ def main():
                 f2.write(mp4_cam2.getvalue() if hasattr(mp4_cam2, "getvalue") else mp4_cam2)
 
     print("Replay finished.")
+
+    # Save augmented pickle if task succeeded and point cloud saving enabled
+    success = _done_flag(last_done)
+    if success and args.save_pc_for_dp3:
+        out_dir = Path(args.pc_out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # Name file as timestamp + point count
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        out_name = f"{ts}_{args.pc_points}_{args.pc_downsample_mode}.pkl"
+        out_path = out_dir / out_name
+        with open(out_path, "wb") as f:
+            pickle.dump(
+                {
+                    "state": state_list,
+                    "action": action_list,
+                    "point_cloud": pc_list,
+                    "img": img_list,
+                },
+                f,
+            )
+        print(f"Saved replay with point clouds to {out_path}")
+    elif success:
+        print("Success without pc export (save_pc_for_dp3 disabled).")
 
 
 def run_debug_action(env=None, device=None, args=None):
