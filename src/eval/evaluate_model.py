@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 import time
 
+from src.pc_util.point_cloud_generator import PointCloudGenerator
+
 # 需要在 torch 之前加载 isaacgym 本地扩展以避免段错误
 # Preload isaacgym native extensions before importing torch to avoid segfaults
 try:
@@ -278,6 +280,18 @@ if __name__ == "__main__":
 
     parser.add_argument("--save-rollouts-suffix", type=str, default="")
 
+    # additional params for point cloud observation
+    parser.add_argument("--save-pc-for-dp3", action="store_true", help="Enable point cloud generation and pickle export for DP3")
+    parser.add_argument("--pc-points", type=int, default=4096, help="Downsampled point count for generated point clouds")
+    parser.add_argument("--pc-bbox-half-extent", type=float, default=0.2, help="Half-extent of the cubic bbox for point cloud cropping (in meters)")
+    parser.add_argument(
+        "--pc-downsample-mode",
+        type=str,
+        default="random",
+        choices=["random", "uniform", "fps"],
+        help="Downsample mode for point cloud generation",
+    )
+
     # Parse the arguments
     args = parser.parse_args()
 
@@ -433,6 +447,9 @@ if __name__ == "__main__":
                     )
                     continue
 
+                suffix = args.save_rollouts_suffix
+                if args.save_pc_for_dp3:
+                    suffix += f"pc/{args.pc_points}/{args.pc_downsample_mode}"
                 save_dir = (
                     trajectory_save_dir(
                         controller="diffik",
@@ -440,7 +457,7 @@ if __name__ == "__main__":
                         task=args.task,
                         demo_source="rollout",
                         randomness=args.randomness,
-                        suffix=args.save_rollouts_suffix,
+                        suffix=suffix,
                         create=True,
                     )
                     if args.save_rollouts
@@ -473,6 +490,18 @@ if __name__ == "__main__":
                         verbose=args.verbose,
                         headless=not args.visualize,
                     )
+                
+                # 点云 obs 相关
+                if args.save_pc_for_dp3:
+                    pc_generator = None
+                    if args.save_pc_for_dp3:
+                        extra_obs_keys = []
+                        if "depth_image2" not in env.obs_keys:
+                            extra_obs_keys.append("depth_image2")
+                        if extra_obs_keys:
+                            env.obs_keys = list(env.obs_keys) + extra_obs_keys
+                            env.set_camera()
+                        pc_generator = PointCloudGenerator(env=env, camera_name="front", max_points=args.pc_points, bbox_half_extent=args.pc_bbox_half_extent)
 
                 # Perform the rollouts
                 print(f"Starting rollout of run: {run.name}")
@@ -492,6 +521,7 @@ if __name__ == "__main__":
                     break_on_n_success=args.break_on_n_success,
                     stop_after_n_success=args.stop_after_n_success,
                     record_first_state_only=args.record_for_coverage,
+                    pc_generator=pc_generator if args.save_pc_for_dp3 else None,
                 )
 
                 if args.store_video_wandb:

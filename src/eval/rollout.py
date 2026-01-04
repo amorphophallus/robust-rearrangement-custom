@@ -50,6 +50,7 @@ RolloutSaveValues = collections.namedtuple(
         "actions",
         "rewards",
         "parts_poses",
+        "point_clouds",
     ],
 )
 
@@ -148,6 +149,7 @@ def rollout(
     resize_video: bool = True,
     n_parts_assemble: int = 1,
     save_rollouts: bool = False,
+    pc_generator = None,
 ) -> Optional[RolloutSaveValues]:
     # get first observation
     with suppress_all_output(False):
@@ -164,7 +166,7 @@ def rollout(
         resize_image(video_obs, "color_image1")
         resize_crop_image(video_obs, "color_image2")
 
-    # save visualization and rewards
+    # save initial visualization and rewards
     robot_states = [TensorDict(video_obs["robot_state"], batch_size=env.num_envs)]
     imgs1 = [] if "color_image1" not in video_obs else [video_obs["color_image1"].cpu()]
     imgs2 = [] if "color_image2" not in video_obs else [video_obs["color_image2"].cpu()]
@@ -172,6 +174,18 @@ def rollout(
     actions = list()
     rewards = torch.zeros((env.num_envs, rollout_max_steps), dtype=torch.float32)
     done = torch.zeros((env.num_envs, 1), dtype=torch.bool, device="cuda")
+    
+    # Collect point clouds if pc_generator is provided
+    point_clouds = []  # List of lists: [[env0_step0, env1_step0, ...], [env0_step1, ...]]
+    if pc_generator is not None:
+        pcs_step = pc_generator.generate_transformed_cropped_point_cloud_for_all_env()
+        pcs_step_np = []
+        for env_idx, pc in enumerate(pcs_step):
+            pc_np = pc.detach().cpu().numpy()
+            if pc_np.shape[0] == 0:
+                print(f"[DEBUG] Empty point cloud: env={env_idx}, step=0 (initial)")
+            pcs_step_np.append(pc_np)
+        point_clouds.append(pcs_step_np)
 
     step_idx = 0
 
@@ -213,6 +227,18 @@ def rollout(
             actions.append(action_pred.cpu())
             parts_poses.append(video_obs["parts_poses"].cpu())
 
+            # Collect point clouds at each step
+            if pc_generator is not None:
+                pcs_step = pc_generator.generate_transformed_cropped_point_cloud_for_all_env()
+                pcs_step_np = []
+                for env_idx, pc in enumerate(pcs_step):
+                    pc_np = pc.detach().cpu().numpy()
+                    if pc_np.shape[0] == 0:
+                        current_success = (rewards[:, :step_idx+1].sum(dim=1) == n_parts_assemble)[env_idx].item()
+                        print(f"[DEBUG] Empty point cloud: env={env_idx}, step={step_idx+1}, success_so_far={current_success}")
+                    pcs_step_np.append(pc_np)
+                point_clouds.append(pcs_step_np)
+
         # Always store rewards as they are used to calculate success
         rewards[:, step_idx] = reward.squeeze().cpu()
 
@@ -230,6 +256,18 @@ def rollout(
         if done.all():
             break
 
+    # Reorganize point_clouds from [step][env] to [env][step]
+    if pc_generator is not None and point_clouds:
+        # point_clouds is [[env0_s0, env1_s0, ...], [env0_s1, env1_s1, ...], ...]
+        # Convert to [[env0_s0, env0_s1, ...], [env1_s0, env1_s1, ...], ...]
+        num_steps = len(point_clouds)
+        num_envs = len(point_clouds[0]) if point_clouds else 0
+        pcs_per_env = []
+        for env_idx in range(num_envs):
+            pcs_per_env.append([point_clouds[step][env_idx] for step in range(num_steps)])
+    else:
+        pcs_per_env = None
+
     return RolloutSaveValues(
         torch.stack(robot_states, dim=1) if robot_states else [],
         torch.stack(imgs1, dim=1) if imgs1 else [],
@@ -237,6 +275,7 @@ def rollout(
         torch.stack(actions, dim=1) if actions else [],
         rewards,
         torch.stack(parts_poses, dim=1) if parts_poses else [],
+        pcs_per_env,
     )
 
 
@@ -258,6 +297,7 @@ def calculate_success_rate(
     break_on_n_success: bool = False,
     stop_after_n_success: int = 0,
     record_first_state_only: bool = False,
+    pc_generator = None,
 ) -> RolloutStats:
 
     pbar = SuccessTqdm(
@@ -278,16 +318,17 @@ def calculate_success_rate(
     )
 
     n_success = 0
-
-    all_robot_states = list()
-    all_imgs1 = list()
-    all_imgs2 = list()
-    all_actions = list()
-    all_rewards = list()
-    all_parts_poses = list()
-    all_success = list()
+    total_reward = 0
+    episode_returns = []
+    table_rows = []
 
     save_rollouts = rollout_save_dir is not None or save_rollouts_to_wandb
+
+    # For record_first_state_only
+    if record_first_state_only:
+        first_robot_states = []
+        first_part_poses = []
+        first_success = []
 
     pbar.pbar_desc(n_success)
     for i in range(n_rollouts // env.num_envs):
@@ -303,23 +344,94 @@ def calculate_success_rate(
             resize_video=resize_video,
             n_parts_assemble=n_parts_assemble,
             save_rollouts=save_rollouts,
+            pc_generator=pc_generator,
         )
 
         # Calculate the success rate
-        success = rollout_data.rewards.sum(dim=1) == n_parts_assemble
-        n_success += success.sum().item()
+        success_flags = rollout_data.rewards.sum(dim=1) == n_parts_assemble
+        n_success += success_flags.sum().item()
 
-        # Save the results from the rollout
+        # Save the results from the rollout immediately
         if save_rollouts:
-            all_robot_states.extend(
-                [rollout_data.robot_states[i] for i in range(env.num_envs)]
-            )
-            all_imgs1.extend(rollout_data.imgs1)
-            all_imgs2.extend(rollout_data.imgs2)
-            all_actions.extend(rollout_data.actions)
-            all_rewards.extend(rollout_data.rewards)
-            all_parts_poses.extend(rollout_data.parts_poses)
-            all_success.extend(success)
+            have_img_obs = rollout_data.imgs1 is not None and len(rollout_data.imgs1) > 0
+
+            for env_idx in range(env.num_envs):
+                robot_states = tensordict_to_list_of_dicts(rollout_data.robot_states[env_idx])
+                actions = rollout_data.actions[env_idx].numpy()
+                rewards = rollout_data.rewards[env_idx].numpy()
+                parts_poses = rollout_data.parts_poses[env_idx].numpy()
+                success = success_flags[env_idx].item()
+                task = env.furniture_name
+                
+                # Get point clouds for this env (list of arrays per step)
+                pcs_for_rollout = rollout_data.point_clouds[env_idx] if rollout_data.point_clouds is not None else None
+
+                # Calculate episode return
+                episode_return = np.sum(rewards * discount ** np.arange(len(rewards)))
+                episode_returns.append(episode_return)
+                total_reward += np.sum(rewards)
+
+                if record_first_state_only:
+                    first_robot_states.append(robot_states[0])
+                    first_part_poses.append(parts_poses[0])
+                    first_success.append(success)
+                    continue
+
+                video1 = (
+                    rollout_data.imgs1[env_idx].numpy()
+                    if have_img_obs
+                    else np.zeros((len(robot_states), 2, 2, 3), dtype=np.uint8)
+                )
+                video2 = (
+                    rollout_data.imgs2[env_idx].numpy()
+                    if have_img_obs
+                    else np.zeros((len(robot_states), 2, 2, 3), dtype=np.uint8)
+                )
+
+                # Number of steps until success
+                n_steps = (
+                    np.where(rewards == 1)[0][-1] + 1 if success else rollout_max_steps
+                )
+                n_steps += n_steps_padding
+                trim_start_steps = 0
+
+                # Stack the two videos side by side
+                if have_img_obs:
+                    video = np.concatenate([video1, video2], axis=2)[trim_start_steps:n_steps]
+                    video = create_in_memory_mp4(video, fps=20)
+
+                if save_rollouts_to_wandb and have_img_obs:
+                    table_rows.append(
+                        [
+                            wandb.Video(video, fps=20, format="mp4"),
+                            success,
+                            epoch_idx,
+                            np.sum(rewards),
+                            episode_return,
+                            n_steps,
+                        ]
+                    )
+
+                if rollout_save_dir is not None and (save_failures or success):
+                    # Trim point clouds to match n_steps
+                    pcs_trimmed = None
+                    if pcs_for_rollout is not None:
+                        pcs_trimmed = pcs_for_rollout[trim_start_steps : n_steps + 1]
+                    save_raw_rollout(
+                        robot_states=robot_states[trim_start_steps : n_steps + 1],
+                        imgs1=video1[trim_start_steps : n_steps + 1],
+                        imgs2=video2[trim_start_steps : n_steps + 1],
+                        parts_poses=parts_poses[trim_start_steps : n_steps + 1],
+                        actions=actions[trim_start_steps:n_steps],
+                        rewards=rewards[trim_start_steps:n_steps],
+                        success=success,
+                        task=task,
+                        action_type=env.action_type,
+                        rollout_save_dir=rollout_save_dir,
+                        compress_pickles=compress_pickles,
+                        have_img_obs=have_img_obs,
+                        pcs=pcs_trimmed,
+                    )
 
         if break_on_n_success and n_success >= stop_after_n_success:
             print(
@@ -327,130 +439,29 @@ def calculate_success_rate(
             )
             break
 
-    total_reward = np.sum([np.sum(rewards.numpy()) for rewards in all_rewards])
-    episode_returns = [
-        np.sum(rewards.numpy() * discount ** np.arange(len(rewards)))
-        for rewards in all_rewards
-    ]
-
-    if record_first_state_only:
-        first_robot_states = []
-        first_part_poses = []
-        first_success = []
-
-    print(f"Checking if we should save rollouts (rollout_save_dir: {rollout_save_dir})")
-    if save_rollouts:
-        have_img_obs = len(all_imgs1) > 0
-        print(
-            f"Saving rollouts, have image observations: {have_img_obs} (will make dummy video if False)"
+    # Handle record_first_state_only after all rollouts
+    if record_first_state_only and rollout_save_dir is not None:
+        first_state_npz = str(rollout_save_dir / "first_states.npz")
+        print(f"Saving first states to: {first_state_npz}")
+        np.savez(
+            first_state_npz,
+            robot_states=np.asarray(first_robot_states),
+            part_poses=np.asarray(first_part_poses),
+            success=np.asarray(first_success),
         )
-        total_reward = 0
-        table_rows = []
-        for rollout_idx in trange(
-            len(all_robot_states), desc="Saving rollouts", leave=False
-        ):
-            # Get the rewards and images for this rollout
-            robot_states = tensordict_to_list_of_dicts(all_robot_states[rollout_idx])
-            actions = all_actions[rollout_idx].numpy()
-            rewards = all_rewards[rollout_idx].numpy()
-            parts_poses = all_parts_poses[rollout_idx].numpy()
-            success = all_success[rollout_idx].item()
-            task = env.furniture_name
 
-            if record_first_state_only:
-                first_robot_states.append(robot_states[0])
-                first_part_poses.append(parts_poses[0])
-                first_success.append(success)
-                continue
-
-            video1 = (
-                all_imgs1[rollout_idx].numpy()
-                if have_img_obs
-                else np.zeros(
-                    (len(robot_states), 2, 2, 3), dtype=np.uint8
-                )  # dummy video
+    # Handle wandb table after all rollouts
+    if save_rollouts_to_wandb and table_rows:
+        table_rows = sorted(table_rows, key=lambda x: x[4], reverse=True)
+        for row in table_rows:
+            tbl.add_data(*row)
+        if wandb.run is not None:
+            wandb.log(
+                {
+                    "rollouts": tbl,
+                    "epoch": epoch_idx,
+                }
             )
-            video2 = (
-                all_imgs2[rollout_idx].numpy()
-                if have_img_obs
-                else np.zeros(
-                    (len(robot_states), 2, 2, 3), dtype=np.uint8
-                )  # dummy video
-            )
-
-            # Number of steps until success, i.e., the index of the final reward received
-            n_steps = (
-                np.where(rewards == 1)[0][-1] + 1 if success else rollout_max_steps
-            )
-
-            n_steps += n_steps_padding
-            trim_start_steps = 0
-
-            # Stack the two videos side by side into a single video
-            # and keep axes as (T, H, W, C) (and cut off after rollout reaches success)
-            if have_img_obs:
-                video = np.concatenate([video1, video2], axis=2)[
-                    trim_start_steps:n_steps
-                ]
-                video = create_in_memory_mp4(video, fps=20)
-
-            # Calculate the reward and return for this rollout
-            episode_return = episode_returns[rollout_idx]
-
-            if save_rollouts_to_wandb and have_img_obs:
-                table_rows.append(
-                    [
-                        wandb.Video(video, fps=20, format="mp4"),
-                        success,
-                        epoch_idx,
-                        np.sum(rewards),
-                        episode_return,
-                        n_steps,
-                    ]
-                )
-
-            if rollout_save_dir is not None and (save_failures or success):
-                # Save the raw rollout data
-                save_raw_rollout(
-                    robot_states=robot_states[trim_start_steps : n_steps + 1],
-                    imgs1=video1[trim_start_steps : n_steps + 1],
-                    imgs2=video2[trim_start_steps : n_steps + 1],
-                    parts_poses=parts_poses[trim_start_steps : n_steps + 1],
-                    actions=actions[trim_start_steps:n_steps],
-                    rewards=rewards[trim_start_steps:n_steps],
-                    success=success,
-                    task=task,
-                    action_type=env.action_type,
-                    rollout_save_dir=rollout_save_dir,
-                    compress_pickles=compress_pickles,
-                    have_img_obs=have_img_obs,
-                )
-
-        if record_first_state_only:
-            first_state_npz = str(rollout_save_dir / "first_states.npz")
-            print(f"Saving first states to: {first_state_npz}")
-            np.savez(
-                first_state_npz,
-                robot_states=np.asarray(first_robot_states),
-                part_poses=np.asarray(first_part_poses),
-                success=np.asarray(first_success),
-            )
-
-        if save_rollouts_to_wandb:
-            # Sort the table rows by return (highest at the top)
-            table_rows = sorted(table_rows, key=lambda x: x[4], reverse=True)
-
-            for row in table_rows:
-                tbl.add_data(*row)
-
-            # Log the videos to wandb table if a run is active
-            if wandb.run is not None:
-                wandb.log(
-                    {
-                        "rollouts": tbl,
-                        "epoch": epoch_idx,
-                    }
-                )
 
     pbar.close()
 
@@ -460,7 +471,7 @@ def calculate_success_rate(
         n_rollouts=n_rollouts,
         epoch_idx=epoch_idx,
         rollout_max_steps=rollout_max_steps,
-        total_return=np.sum(episode_returns),
+        total_return=np.sum(episode_returns) if episode_returns else 0,
         total_reward=total_reward,
     )
 

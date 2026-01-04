@@ -179,7 +179,7 @@ def render_world_axes(env, img: np.ndarray, origin=np.array([-0.1, -0.1, 0.4], d
     def project_point(pt_world):
         pw = np.array([pt_world[0], pt_world[1], pt_world[2], 1.0], dtype=np.float32).reshape(4, 1)
         clip = P_np @ (V_np @ pw)
-        if clip[3] == 0:
+        if clip[3] == 0:  # 这里 clip[3] 是负数
             return None
         ndc = clip[:3] / clip[3]
         x = int((1.0 - (ndc[1] * 0.5 + 0.5)) * W)
@@ -222,6 +222,7 @@ def main(argv=None):
     parser.add_argument("--debug-action", action="store_true", help="Run debug action: move EE +X,+Y,+Z (10 steps each) with overlays")
     parser.add_argument("--save-pc-for-dp3", action="store_true", help="Enable point cloud generation and pickle export for DP3")
     parser.add_argument("--pc-points", type=int, default=4096, help="Downsampled point count for generated point clouds")
+    parser.add_argument("--pc-bbox-half-extent", type=float, default=0.2, help="Half-extent of the cubic bbox for point cloud cropping (in meters)")
     parser.add_argument(
         "--pc-downsample-mode",
         type=str,
@@ -261,12 +262,10 @@ def main(argv=None):
         extra_obs_keys = []
         if "depth_image2" not in env.obs_keys:
             extra_obs_keys.append("depth_image2")
-        if "seg_image2" not in env.obs_keys:
-            extra_obs_keys.append("seg_image2")
         if extra_obs_keys:
             env.obs_keys = list(env.obs_keys) + extra_obs_keys
             env.set_camera()
-        pc_generator = PointCloudGenerator(env=env, camera_name="front", max_points=args.pc_points)
+        pc_generator = PointCloudGenerator(env=env, camera_name="front", max_points=args.pc_points, bbox_half_extent=args.pc_bbox_half_extent)
 
     # Debug action mode: route to run_debug_action
     if args.debug_action:

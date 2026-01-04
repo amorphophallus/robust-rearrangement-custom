@@ -26,11 +26,12 @@ def save_raw_rollout(
     rollout_save_dir: Path,
     compress_pickles: bool = False,
     have_img_obs:  bool = False,
+    pcs: List[np.ndarray] = None,
 ):
     observations: List[Observation] = list()
 
-    for robot_state, image1, image2, parts_pose in zip(
-        robot_states, imgs1, imgs2, parts_poses
+    for robot_state, image1, image2, parts_pose, pc in zip(
+        robot_states, imgs1, imgs2, parts_poses, pcs
     ):
         observations.append(
             {
@@ -38,6 +39,7 @@ def save_raw_rollout(
                 "color_image1": image1,
                 "color_image2": image2,
                 "parts_poses": parts_pose,
+                "point_cloud": pc,
             }
         )
 
