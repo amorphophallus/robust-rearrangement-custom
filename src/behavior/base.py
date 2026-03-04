@@ -306,6 +306,57 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
 
             # Reshape concatenate the features
             nobs = torch.cat([nrobot_state, feature1, feature2], dim=-1)
+        elif self.observation_type == "rgbd":
+
+            # Get size of the image
+            rgb_size = obs[0]["color_image1"].shape[-3:]
+            d_size = rgb_size[:2] + (1, )
+
+            # Images come in as obs_horizon x (n_envs, 224, 224, 3) concatenate to (n_envs * obs_horizon, 224, 224, 3)
+            rgb_image1 = torch.cat(
+                [o["color_image1"].unsqueeze(1).float() for o in obs], dim=1
+            ).reshape(B * self.obs_horizon, *rgb_size)
+            rgb_image2 = torch.cat(
+                [o["color_image2"].unsqueeze(1).float() for o in obs], dim=1
+            ).reshape(B * self.obs_horizon, *rgb_size)
+            d_image1 = torch.cat(
+                [o['depth_image1'].unsqueeze(-1).unsqueeze(1) for o in obs], dim=1
+            ).reshape(B * self.obs_horizon, *d_size)
+            d_image2 = torch.cat(
+                [o['depth_image2'].unsqueeze(-1).unsqueeze(1) for o in obs], dim=1
+            ).reshape(B * self.obs_horizon, *d_size)
+
+            image1 = torch.cat([rgb_image1 / 255.0, d_image1], dim=-1)
+            image2 = torch.cat([rgb_image2 / 255.0, d_image2], dim=-1)
+
+            # Move the channel to the front (B * obs_horizon, H, W, C) -> (B * obs_horizon, C, H, W)
+            image1 = image1.permute(0, 3, 1, 2).contiguous()
+            image2 = image2.permute(0, 3, 1, 2).contiguous()
+
+            # Apply the transforms to resize the images to 224x224, (B * obs_horizon, C, 224, 224)
+            image1: torch.Tensor = self.camera1_transform(image1)
+            image2: torch.Tensor = self.camera2_transform(image2)
+
+            # Encode the images and reshape back to (B, obs_horizon, -1)
+            feature1: torch.Tensor = self.encoder1_proj(self.encoder1(image1)).reshape(
+                B, self.obs_horizon, -1
+            )
+            feature2: torch.Tensor = self.encoder2_proj(self.encoder2(image2)).reshape(
+                B, self.obs_horizon, -1
+            )
+
+            # Apply the regularization to the features
+            if self.feature_layernorm:
+                feature1 = self.layernorm1(feature1)
+                feature2 = self.layernorm2(feature2)
+
+            if self.camera_2_vib is not None:
+                # Apply the VIB to the front camera features
+                feature2 = self.camera_2_vib(feature2)
+
+            # Reshape concatenate the features
+            nobs = torch.cat([nrobot_state, feature1, feature2], dim=-1)
+
         elif self.observation_type == "state":
             # Convert parts_poses from obs_horizon x (n_envs, parts_poses_dim) -> (n_envs, obs_horizon, parts_poses_dim)
             parts_poses = torch.cat([o["parts_poses"].unsqueeze(1) for o in obs], dim=1)
