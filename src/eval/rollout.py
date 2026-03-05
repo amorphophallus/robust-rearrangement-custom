@@ -65,6 +65,9 @@ def resize_image(obs, key):
 
 def resize_depth(obs, key):
     # key : [B, H, W]
+    if obs[key] is None:
+        return
+
     depth_image = obs[key].unsqueeze(-1) # [B, H, W, C]
     try:
         obs[key] = resize(depth_image).squeeze(-1)
@@ -79,6 +82,9 @@ def resize_crop_image(obs, key):
 
 def resize_crop_depth(obs, key):
     # key : [B, H, W]
+    if obs[key] is None:
+        return
+
     depth_image = obs[key].unsqueeze(-1) # [B, H, W, C]
     try:
         obs[key] = resize_crop(depth_image).squeeze(-1)
@@ -156,6 +162,15 @@ class SuccessTqdm(tqdm):
 
         self.pbar_desc(0)
 
+def move_and_stack(tensor_list, dim):
+    if not tensor_list:
+        return []
+    cpu_tensors = [t.detach().cpu() for t in tensor_list if t is not None]
+
+    if not cpu_tensors:
+        return []
+        
+    return torch.stack(cpu_tensors, dim=dim)
 
 def rollout(
     env: Env,
@@ -321,15 +336,15 @@ def rollout(
     #     print(f"Index {i} device: {t.device}")
 
     return RolloutSaveValues(
-        torch.stack(robot_states, dim=1) if robot_states else [],
-        torch.stack(imgs1, dim=1) if imgs1 else [],
-        torch.stack(imgs2, dim=1) if imgs2 else [],
-        torch.stack(actions, dim=1) if actions else [],
+        move_and_stack(robot_states, dim=1) if robot_states else [],
+        move_and_stack(imgs1, dim=1) if imgs1 else [],
+        move_and_stack(imgs2, dim=1) if imgs2 else [],
+        move_and_stack(actions, dim=1) if actions else [],
         rewards,
-        torch.stack(parts_poses, dim=1) if parts_poses else [],
+        move_and_stack(parts_poses, dim=1) if parts_poses else [],
         pcs_per_env,
-        torch.stack(depth_image1, dim=1) if depth_image1 else [],
-        torch.stack(depth_image2, dim=1) if depth_image2 else [],
+        move_and_stack(depth_image1, dim=1) if depth_image1 else [],
+        move_and_stack(depth_image2, dim=1) if depth_image2 else [],
     )
 
 
