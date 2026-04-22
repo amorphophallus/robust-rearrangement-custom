@@ -444,7 +444,10 @@ def build_episode_manifest(
 
 
 def split_episode_manifest(
-    manifest: List[EpisodeRef], test_split: float, seed: int
+    manifest: List[EpisodeRef],
+    test_split: float,
+    seed: int,
+    stratify_by_task: bool = False,
 ) -> Tuple[List[EpisodeRef], List[EpisodeRef]]:
     if not 0.0 <= test_split <= 1.0:
         raise ValueError(f"test_split must be in [0, 1], got {test_split}.")
@@ -452,15 +455,40 @@ def split_episode_manifest(
     if len(manifest) == 0:
         return [], []
 
+    # Canonicalise manifest order before sampling so the split is reproducible
+    # across different storage backends / rebuilds. Without this, the same seed
+    # can produce different train/val subsets because the input list order
+    # follows the backend's on-disk write order (e.g. LMDB key iteration).
+    ordered = sorted(
+        manifest,
+        key=lambda ref: (ref.task, ref.domain, ref.path_idx, ref.episode_idx),
+    )
+
     rng = np.random.default_rng(int(seed))
-    indices = rng.permutation(len(manifest))
-    train_episode_count = int(len(manifest) * (1 - test_split))
+
+    if stratify_by_task:
+        buckets: Dict[str, List[EpisodeRef]] = {}
+        for ref in ordered:
+            buckets.setdefault(ref.task, []).append(ref)
+
+        train_manifest: List[EpisodeRef] = []
+        val_manifest: List[EpisodeRef] = []
+        for task in sorted(buckets.keys()):
+            bucket = buckets[task]
+            idx = rng.permutation(len(bucket))
+            n_train = int(len(bucket) * (1 - test_split))
+            train_manifest.extend(bucket[i] for i in idx[:n_train])
+            val_manifest.extend(bucket[i] for i in idx[n_train:])
+        return train_manifest, val_manifest
+
+    indices = rng.permutation(len(ordered))
+    train_episode_count = int(len(ordered) * (1 - test_split))
 
     train_indices = indices[:train_episode_count]
     val_indices = indices[train_episode_count:]
 
-    train_manifest = [manifest[idx] for idx in train_indices]
-    val_manifest = [manifest[idx] for idx in val_indices]
+    train_manifest = [ordered[idx] for idx in train_indices]
+    val_manifest = [ordered[idx] for idx in val_indices]
     return train_manifest, val_manifest
 
 

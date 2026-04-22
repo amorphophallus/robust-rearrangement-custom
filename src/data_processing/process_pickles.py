@@ -281,14 +281,34 @@ def process_pickle_file(
         else np.array([], dtype=np.float32)
     )
 
+    # Diagnostic: count how many steps get clipped by the thresholds below.
+    # If this is non-trivial (>1% of steps), the reconstructed action/pos path
+    # (computed from the *clipped* delta) will diverge from the recorded
+    # trajectory and train/test diffusion loss will struggle to converge.
+    pos_clip_limit = 0.025
+    rot_clip_mag = 0.35
+    num_steps = action_delta_quat.shape[0]
+    pos_abs = np.abs(action_delta_quat[:, :3])
+    n_pos_clipped = int(np.any(pos_abs > pos_clip_limit, axis=1).sum())
+    rot_xyz_norm = np.linalg.norm(action_delta_quat[:, 3:6], axis=1)
+    n_rot_clipped = int((rot_xyz_norm > rot_clip_mag).sum())
+    if n_pos_clipped > 0 or n_rot_clipped > 0:
+        print(
+            f"[clip-stats] {pickle_path.name}: "
+            f"pos-delta clipped {n_pos_clipped}/{num_steps} "
+            f"({100.0 * n_pos_clipped / max(num_steps, 1):.2f}%), "
+            f"rot-delta clipped {n_rot_clipped}/{num_steps} "
+            f"({100.0 * n_rot_clipped / max(num_steps, 1):.2f}%)"
+        )
+
     # TODO: Make sure this is rectified in the controller-end and
     # Clip xyz delta position actions to ±0.025
-    action_delta_quat[:, :3] = np.clip(action_delta_quat[:, :3], -0.025, 0.025)
+    action_delta_quat[:, :3] = np.clip(action_delta_quat[:, :3], -pos_clip_limit, pos_clip_limit)
 
     # figure out what to do with the corrupted raw data
     # For now, clip the z-axis rotation to 0.35
     action_delta_quat[:, 3:7] = clip_quat_xyzw_magnitude(
-        action_delta_quat[:, 3:7], clip_mag=0.35
+        action_delta_quat[:, 3:7], clip_mag=rot_clip_mag
     )
 
     # Take the sign of the gripper action
