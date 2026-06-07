@@ -482,7 +482,7 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
         elif self.observation_type == "rgbd":
             skill = self._inference_skill(obs, nrobot_state)
             img_size = obs[0]["color_image1"].shape[-3:]
-            depth_size = obs[0]["depth_image1"].shape[-2:]
+            has_depth = obs[0].get("depth_image1") is not None
 
             image1 = torch.cat(
                 [o["color_image1"].unsqueeze(1) for o in obs], dim=1
@@ -490,12 +490,19 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
             image2 = torch.cat(
                 [o["color_image2"].unsqueeze(1) for o in obs], dim=1
             ).reshape(B * self.obs_horizon, *img_size)
-            depth1 = torch.cat(
-                [o["depth_image1"].unsqueeze(1) for o in obs], dim=1
-            ).reshape(B * self.obs_horizon, *depth_size).unsqueeze(1)
-            depth2 = torch.cat(
-                [o["depth_image2"].unsqueeze(1) for o in obs], dim=1
-            ).reshape(B * self.obs_horizon, *depth_size).unsqueeze(1)
+            if has_depth:
+                depth_size = obs[0]["depth_image1"].shape[-2:]
+                depth1 = torch.cat(
+                    [o["depth_image1"].unsqueeze(1) for o in obs], dim=1
+                ).reshape(B * self.obs_horizon, *depth_size).unsqueeze(1)
+                depth2 = torch.cat(
+                    [o["depth_image2"].unsqueeze(1) for o in obs], dim=1
+                ).reshape(B * self.obs_horizon, *depth_size).unsqueeze(1)
+            else:
+                # img_size from obs[0]["color_image1"].shape[-3:] is (H, W, C)
+                H_img, W_img = img_size[0], img_size[1]
+                depth1 = torch.zeros(B * self.obs_horizon, 1, H_img, W_img, device=self.device)
+                depth2 = torch.zeros(B * self.obs_horizon, 1, H_img, W_img, device=self.device)
 
             image1 = image1.permute(0, 3, 1, 2)
             image2 = image2.permute(0, 3, 1, 2)

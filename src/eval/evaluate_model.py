@@ -422,6 +422,12 @@ if __name__ == "__main__":
 
     parser.add_argument("--save-rollouts", action="store_true")
     parser.add_argument("--save-failures", action="store_true")
+    parser.add_argument(
+        "--init-state-file",
+        type=str,
+        default=None,
+        help="Path to .npz file with training init states for train-init evaluation.",
+    )
     parser.add_argument("--store-full-resolution-video", action="store_true")
 
     parser.add_argument("--wandb", action="store_true")
@@ -986,6 +992,46 @@ if __name__ == "__main__":
                         f"(rollout_after_success={task_rollout_after_success}, "
                         f"perturb_mode={args.perturb_mode})"
                     )
+
+                    # Load init states for train-init evaluation
+                    task_init_states = None
+                    if args.init_state_file is not None:
+                        import numpy as np
+                        data = np.load(args.init_state_file, allow_pickle=True)
+                        tasks_arr = data["tasks"]
+                        parts_poses_arr = data["parts_poses"]
+                        joints_arr = data["joint_positions"]
+                        gf1_arr = data.get("gripper_finger_1_pos", data.get("gripper_finger_1"))
+                        # v2 npz uses gripper_finger_1_pos; v1 used gripper_finger_1 + gripper_finger_2
+                        has_gf2 = "gripper_finger_2" in data
+
+                        # Filter init states by current task
+                        task_init_states = []
+                        for i in range(len(tasks_arr)):
+                            if tasks_arr[i] == task:
+                                pp = np.asarray(parts_poses_arr[i], dtype=np.float64)
+                                # Use default Franka joint positions (same as env.reset() default)
+                                DEFAULT_JP = np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785], dtype=np.float64)
+                                state = {
+                                    "robot_state": {
+                                        "joint_positions": DEFAULT_JP.copy(),
+                                        "gripper_finger_1_pos": 0.04,
+                                        "gripper_finger_2_pos": 0.04,
+                                    },
+                                    "parts_poses": pp,
+                                }
+                                task_init_states.append(state)
+                        print(
+                            f"Loaded {len(task_init_states)} training init states "
+                            f"for task '{task}' (from {args.init_state_file})"
+                        )
+                        if not task_init_states:
+                            print(
+                                f"Warning: No init states found for task '{task}', "
+                                f"falling back to random env reset."
+                            )
+                            task_init_states = None
+
                     actor.set_task(task2idx[task])
                     perturb_runner = (
                         None
@@ -1021,6 +1067,7 @@ if __name__ == "__main__":
                         collect_skill_stats=args.annotate_skill,
                         output_only_pickle=args.output_only_pickle,
                         perturb_runner=perturb_runner,
+                        init_states=task_init_states,
                     )
 
                     if args.store_video_wandb:

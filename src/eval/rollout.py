@@ -91,6 +91,8 @@ def resize_image(obs, key):
 
 def resize_depth(obs, key):
     try:
+        if obs.get(key) is None:
+            return
         # key : [B, H, W]
         depth_image = obs[key].unsqueeze(-1)  # [B, H, W, C]
         obs[key] = resize(depth_image).squeeze(-1)
@@ -105,6 +107,8 @@ def resize_crop_image(obs, key):
 
 def resize_crop_depth(obs, key):
     try:
+        if obs.get(key) is None:
+            return
         # key : [B, H, W]
         depth_image = obs[key].unsqueeze(-1)  # [B, H, W, C]
         obs[key] = resize_crop(depth_image).squeeze(-1)
@@ -423,10 +427,18 @@ def rollout(
     rollout_after_success: int = 0,
     full_length_rollout: bool = False,
     perturb_runner: Optional[PerturbRunner] = None,
+    init_states: Optional[List[dict]] = None,
 ) -> Optional[RolloutSaveValues]:
     # get first observation
     with suppress_all_output(False):
-        obs = env.reset()
+        if init_states is not None:
+            # Use provided init states instead of random reset.
+            # init_states should already have exactly env.num_envs entries.
+            env.reset_to(init_states)
+            env.refresh()
+            obs = env.get_observation()
+        else:
+            obs = env.reset()
         actor.reset()
     collect_skill_annotations = (
         annotate_skill
@@ -827,6 +839,7 @@ def calculate_success_rate(
     output_only_pickle: bool = False,
     perturb_runner: Optional[PerturbRunner] = None,
     target_successes: Optional[int] = None,
+    init_states: Optional[List[dict]] = None,
 ) -> RolloutStats:
 
     use_target_mode = target_successes is not None and target_successes > 0
@@ -878,6 +891,15 @@ def calculate_success_rate(
         # Update the progress bar
         pbar.before_round(n_success)
 
+        # Slice init_states for this round to avoid using the same state every time
+        round_init_states = None
+        if init_states is not None:
+            start = n_total_rollouts % len(init_states)
+            end = start + env.num_envs
+            round_init_states = [
+                init_states[i % len(init_states)] for i in range(start, end)
+            ]
+
         # Perform a rollout with the current model
         rollout_data: RolloutSaveValues = rollout(
             env,
@@ -900,6 +922,7 @@ def calculate_success_rate(
             rollout_after_success=rollout_after_success,
             full_length_rollout=full_length_rollout,
             perturb_runner=perturb_runner,
+            init_states=round_init_states,
         )
 
         # Calculate the success rate
