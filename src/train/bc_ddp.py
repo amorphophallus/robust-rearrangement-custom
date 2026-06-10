@@ -1200,6 +1200,16 @@ def main(cfg: DictConfig):
                 "training.checkpoint_saver_retry_seconds must be positive."
             )
 
+        # Restore original seed from checkpoint on resume to keep train/val split identical
+        if resume_payload.get("cfg_container") is not None:
+            resumed_cfg_dict = resume_payload["cfg_container"]
+            if resumed_cfg_dict.get("seed") is not None:
+                OmegaConf.set_struct(cfg, False)
+                cfg.seed = resumed_cfg_dict["seed"]
+                OmegaConf.set_struct(cfg, True)
+                if main_process:
+                    print(f"Restored seed from checkpoint: {cfg.seed}")
+
         base_seed = resolve_seed(cfg, main_process)
         process_seed = base_seed + rank
         torch.manual_seed(process_seed)
