@@ -1014,7 +1014,10 @@ def emit_timing_metrics(timing_metrics):
     for key, value in timing_metrics.items():
         print(f"TIMING {key}={value:.6f}")
 
-    wandb.summary.update(timing_metrics)
+    try:
+        wandb.summary.update(timing_metrics)
+    except OSError:
+        pass
 
 
 def get_wandb_init_dir() -> Optional[str]:
@@ -1792,21 +1795,31 @@ def main(cfg: DictConfig):
             return True
 
         if main_process:
-            with patch_wandb_access_checks([wandb_init_dir, tempfile.gettempdir()]):
-                run = wandb.init(
-                    id=cfg.wandb.continue_run_id,
-                    name=cfg.wandb.name,
-                    resume=None if cfg.wandb.continue_run_id is None else "allow",
-                    project=cfg.wandb.project,
-                    entity=cfg.wandb.get("entity"),
-                    config=config_dict,
-                    mode=cfg.wandb.mode,
-                    notes=cfg.wandb.notes,
-                    dir=wandb_init_dir,
-                    settings=wandb.Settings(
-                        init_timeout=get_wandb_init_timeout_seconds()
-                    ),
+            wandb_init_kwargs = dict(
+                id=cfg.wandb.continue_run_id,
+                name=cfg.wandb.name,
+                resume=None if cfg.wandb.continue_run_id is None else "allow",
+                project=cfg.wandb.project,
+                entity=cfg.wandb.get("entity"),
+                config=config_dict,
+                mode=cfg.wandb.mode,
+                notes=cfg.wandb.notes,
+                dir=wandb_init_dir,
+                settings=wandb.Settings(
+                    init_timeout=get_wandb_init_timeout_seconds()
+                ),
+            )
+            try:
+                with patch_wandb_access_checks([wandb_init_dir, tempfile.gettempdir()]):
+                    run = wandb.init(**wandb_init_kwargs)
+            except OSError:
+                print(
+                    "[WARNING] wandb.init failed (disk full or I/O error), "
+                    "running with wandb disabled.",
+                    flush=True,
                 )
+                wandb_init_kwargs["mode"] = "disabled"
+                run = wandb.init(**wandb_init_kwargs)
 
             if cfg.wandb.continue_run_id is not None:
                 if run.id != cfg.wandb.continue_run_id:
@@ -1828,12 +1841,17 @@ def main(cfg: DictConfig):
 
             print(f"Run name: {run_dir_name}")
             print(f"Run storage location: {run.dir}")
-            wandb.config.update(config_dict)
-
-            wandb.summary.update(dataset_stats)
-
-            starttime = now()
-            wandb.summary["start_time"] = starttime
+            try:
+                wandb.config.update(config_dict)
+                wandb.summary.update(dataset_stats)
+                starttime = now()
+                wandb.summary["start_time"] = starttime
+            except OSError:
+                print(
+                    "[WARNING] wandb summary write failed (disk full or I/O error), "
+                    "continuing without writing summary.",
+                    flush=True,
+                )
 
             model_dir_name = run_dir_name
             if is_resuming:
@@ -1860,7 +1878,10 @@ def main(cfg: DictConfig):
             timing_metrics["timing/time_to_train_loop_seconds"] = (
                 train_loop_start_perf - job_start_perf
             )
-            wandb.summary.update(timing_metrics)
+            try:
+                wandb.summary.update(timing_metrics)
+            except OSError:
+                pass
         else:
             model_save_dir = None
             train_loop_start_perf = None
@@ -2162,14 +2183,22 @@ def main(cfg: DictConfig):
                 )
 
             if main_process:
-                wandb_log_start_perf = perf_counter()
-                wandb.log(epoch_log, step=global_step)
-                log_slow_phase(
-                    rank,
-                    epoch_idx,
-                    "wandb_log",
-                    perf_counter() - wandb_log_start_perf,
-                )
+                try:
+                    wandb_log_start_perf = perf_counter()
+                    wandb.log(epoch_log, step=global_step)
+                    log_slow_phase(
+                        rank,
+                        epoch_idx,
+                        "wandb_log",
+                        perf_counter() - wandb_log_start_perf,
+                    )
+                except OSError:
+                    if rank == 0:
+                        print(
+                            "[WARNING] wandb.log failed (disk full or I/O error), "
+                            "skipping log for this epoch.",
+                            flush=True,
+                        )
                 epoch_iter.set_postfix(
                     time=now(),
                     loss=epoch_log["epoch_loss"],
@@ -2263,7 +2292,10 @@ def main(cfg: DictConfig):
         )
 
         if run is not None:
-            wandb.finish()
+            try:
+                wandb.finish()
+            except OSError:
+                pass
     finally:
         if checkpoint_saver is not None and not checkpoint_saver_closed:
             checkpoint_saver.terminate()
