@@ -245,10 +245,7 @@ def copy_snapshot_to_checkpoint(
         raise
 
 
-def checkpoint_saver_worker(save_queue, retry_seconds: float,
-                           fallback_dir=None, model_save_dir=None):
-    """Async worker that copies checkpoint snapshots to NAS, falling back to local."""
-    MAX_NAS_RETRIES = 3
+def checkpoint_saver_worker(save_queue, retry_seconds: float):
     while True:
         task = save_queue.get()
         if task is None:
@@ -259,9 +256,7 @@ def checkpoint_saver_worker(save_queue, retry_seconds: float,
         target_path = Path(task.target_path)
         metadata = checkpoint_task_metadata(task)
 
-        # ---- try NAS first (limited retries to avoid D-state hang) ----
-        nas_success = False
-        for attempt in range(MAX_NAS_RETRIES):
+        while True:
             try:
                 copy_snapshot_to_checkpoint(
                     snapshot_path,
@@ -275,68 +270,27 @@ def checkpoint_saver_worker(save_queue, retry_seconds: float,
                     f"to {target_path}.",
                     flush=True,
                 )
-                nas_success = True
                 break
             except Exception as exc:
                 print(
                     "[CheckpointSaver] Failed to write "
                     f"{task.checkpoint_type} checkpoint for epoch {task.epoch} "
-                    f"to {target_path}: {exc!r}. Attempt {attempt+1}/{MAX_NAS_RETRIES}.",
+                    f"to {target_path}: {exc!r}. Retrying in {retry_seconds}s.",
                     flush=True,
                 )
-                if attempt < MAX_NAS_RETRIES - 1:
-                    sleep(retry_seconds)
-
-        # ---- fallback to local if NAS failed ----
-        if not nas_success and fallback_dir is not None:
-            fallback_dir = Path(fallback_dir)
-            fallback_dir.mkdir(parents=True, exist_ok=True)
-            if model_save_dir is not None:
-                rel_target = Path(task.target_path).relative_to(Path(model_save_dir))
-            else:
-                rel_target = Path(task.target_path).name
-            local_target = fallback_dir / rel_target
-            local_target.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                copy_snapshot_to_checkpoint(
-                    snapshot_path,
-                    local_target,
-                    metadata,
-                    delete_source_on_success=task.delete_source_on_success,
-                )
-                print(
-                    "[CheckpointSaver] NAS unavailable, wrote fallback "
-                    f"{task.checkpoint_type} checkpoint for epoch {task.epoch} "
-                    f"to local {local_target}.",
-                    flush=True,
-                )
-                _record_fallback_checkpoint(local_target, target_path)
-            except Exception as exc:
-                print(
-                    f"[CheckpointSaver] CRITICAL: fallback write also failed: {exc!r}",
-                    flush=True,
-                )
+                sleep(retry_seconds)
 
 
 class AsyncCheckpointSaver:
-    def __init__(self, retry_seconds: float, fallback_dir=None, model_save_dir=None):
+    def __init__(self, retry_seconds: float):
         ctx = mp.get_context("spawn")
         self._queue = ctx.Queue()
         self._process = ctx.Process(
             target=checkpoint_saver_worker,
-            args=(self._queue, retry_seconds, fallback_dir, model_save_dir),
+            args=(self._queue, retry_seconds),
             name="checkpoint-saver",
         )
         self._process.start()
-        self._recovery_thread = None
-        if fallback_dir is not None:
-            self._recovery_thread = threading.Thread(
-                target=_recover_fallback_checkpoints,
-                args=(fallback_dir, model_save_dir or ""),
-                name="checkpoint-recovery",
-                daemon=True,
-            )
-            self._recovery_thread.start()
         self._closed = False
 
     def enqueue(self, task: CheckpointSaveTask):
@@ -375,7 +329,6 @@ CHECKPOINT_POLICY_CONFIG_KEYS = (
     "async_checkpoint_saver",
     "checkpoint_saver_tmp_dir",
     "checkpoint_saver_retry_seconds",
-    "checkpoint_fallback_dir",
 )
 
 
@@ -846,13 +799,9 @@ def get_wandb_run_paths(project: str, run_id: str, entity: Optional[str] = None)
 
 
 def find_local_resume_checkpoint(
-    model_save_dir: Union[str, Path], run_name_candidates, search_roots,
-    fallback_dir=None,
+    model_save_dir: Union[str, Path], run_name_candidates, search_roots
 ) -> Optional[Path]:
     model_save_dir = Path(model_save_dir)
-    search_roots = list(search_roots)
-    if fallback_dir is not None:
-        search_roots.append(Path(fallback_dir))
     for run_name in run_name_candidates:
         if not run_name:
             continue
@@ -958,26 +907,16 @@ def resolve_resume_payload(cfg: DictConfig, is_main: bool):
                 cfg.training.model_save_dir,
                 run_name_candidates,
                 search_roots=[Path.cwd(), original_cwd],
-                fallback_dir=cfg.training.get("checkpoint_fallback_dir", None),
             )
 
             if local_checkpoint_path is None:
                 remote_error_message = (
                     f" W&B lookup failed: {remote_error}" if remote_error is not None else ""
                 )
-                fallback_dir = cfg.training.get("checkpoint_fallback_dir", None)
-                fallback_hint = ""
-                if fallback_dir:
-                    fallback_hint = (
-                        f"\n  - Local fallback: '{fallback_dir}'\n"
-                        "The checkpoint may exist on another server's local fallback directory.\n"
-                        "Try launching on the same server where the previous run was executed,\n"
-                        "or manually copy the checkpoint to this server's fallback directory."
-                    )
                 raise FileNotFoundError(
                     "Could not resume training. No checkpoint was found in W&B or in "
                     f"'{cfg.training.model_save_dir}' or under '{original_cwd / 'outputs'}' "
-                    f"for run '{run_id}'.{fallback_hint}"
+                    f"for run '{run_id}'."
                     f"{remote_error_message}"
                 )
 
@@ -1936,11 +1875,7 @@ def main(cfg: DictConfig):
             checkpoint_snapshot_dir = resolve_checkpoint_tmp_dir(cfg, model_dir_name)
             checkpoint_snapshot_dir.mkdir(parents=True, exist_ok=True)
             if async_checkpoint_saver_enabled and enabled_checkpoint_types:
-                checkpoint_saver = AsyncCheckpointSaver(
-                    checkpoint_saver_retry_seconds,
-                    fallback_dir=cfg.training.get("checkpoint_fallback_dir", None),
-                    model_save_dir=str(model_save_dir),
-                )
+                checkpoint_saver = AsyncCheckpointSaver(checkpoint_saver_retry_seconds)
 
             print(f"Job started at: {starttime}")
             print(f"This process has access to {os.cpu_count()} CPUs.")
