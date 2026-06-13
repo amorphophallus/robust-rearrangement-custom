@@ -1,4 +1,5 @@
 import threading
+import threading
 import json
 import multiprocessing as mp
 import os
@@ -316,6 +317,30 @@ def checkpoint_saver_worker(save_queue, retry_seconds: float,
                     f"[CheckpointSaver] CRITICAL: fallback write also failed: {exc!r}",
                     flush=True,
                 )
+
+
+
+def _recover_fallback_checkpoints(fallback_dir: str, model_save_dir: str) -> None:
+    """Daemon thread: periodically sync local fallback checkpoints to NAS."""
+    if not fallback_dir or not model_save_dir:
+        return
+    import shutil as _shutil
+    from pathlib import Path as _Path
+    fallback = _Path(fallback_dir)
+    target = _Path(model_save_dir)
+    while True:
+        sleep(60)  # check every 60 seconds
+        if not fallback.is_dir():
+            continue
+        for ckpt in fallback.glob('*.pt'):
+            if not ckpt.is_file():
+                continue
+            dest = target / ckpt.name
+            try:
+                _shutil.copy2(str(ckpt), str(dest))
+                ckpt.unlink()  # remove local copy after successful sync
+            except (OSError, IOError):
+                continue  # NAS not ready, try again later
 
 
 class AsyncCheckpointSaver:
