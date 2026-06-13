@@ -284,7 +284,8 @@ while 有待跑实验 (pending):
     6. 修改 auto_train_multi_card.sh 超参数 (按 §1 表)
        - 如果目标服务器已有其他实验，设置 GPU_ID="<a>,<b>" 避让
     7. 确认 GPU 仍空闲 → bash ./auto_train_multi_card.sh
-    8. 启动成功后: 记录到 Notion，标记实验为 running
+    8. 启动成功后: **立即登记到 Notion 实验过程表**（ssh, tmux, wandb proj, run_name），标记 running。⚠️ 不可遗漏!
+      获取 run name: 从 tmux 输出或 `wandb.Api().runs()` 查最新 run
     9. 回到步骤 1 立即检查是否还能再启动一个
 ```
 
@@ -312,6 +313,31 @@ ssh <host> "tmux capture-pane -pt <session>:train -S -30" | \
 | 速度显著慢 (>3min/epoch) | 检查 DATA_DIR_PROCESSED 是否在 HDD；迁移到 SSD |
 | tmux 僵死 | ssh <host> "tmux send-keys -t <session>:train C-c" 重启 |
 | 磁盘满 | 清理非受保护数据 |
+
+### 阶段 4: NAS 监控（每 30 分钟）
+
+NAS (`/mnt/nas/share`) 断连或满盘是训练崩溃的首要原因。必须持续监控。
+
+```bash
+# 检查 NAS 连通性和空间
+ssh <any_server> "df -h /mnt/nas/share | tail -1; ls /mnt/nas/share/home/hy/robust-rearrangement-custom/.git >/dev/null 2>&1 && echo NAS_OK || echo NAS_DOWN"
+```
+
+**阈值**:
+- NAS 空间 < 50G: ⚠️ 警告，通知用户清理
+- NAS 空间 < 10G: 🔴 紧急，训练 checkpoint 将失败
+- NAS 不可达 (ls 失败): 🔴 停止启动新实验，已运行实验可能崩溃
+- NAS 恢复后: 检查是否有 D-state 残留进程，清理后重启
+
+**NAS 空间清理优先级**:
+1. 旧 checkpoint (`outputs/` 下超过 7 天的目录)
+2. 旧 wandb runs (wandb 云端的本地缓存)
+3. 其他用户的大文件（需沟通）
+
+```bash
+# 清理 7 天前的 outputs
+ssh <server> "find /mnt/nas/share/home/hy/robust-rearrangement-custom/outputs/ -maxdepth 2 -type d -mtime +7 -exec rm -rf {} \;"
+```
 
 ---
 
@@ -384,4 +410,168 @@ Exp6 (rgb):             同 #1
 - 优先使用已有数据的服务器
 - 如果必须传输，首选带宽大的源-目标对
 - 一次传输整个 lmdb 目录（含所有 shard）
-- 传输完成后立即更新 Notion 数据表，供后续实验复用
+- 传输完成后**立即更新 Notion 数据准备表**，供后续实验复用
+- **数据集有任何传输或删除操作，必须登记到 Notion 数据准备表**。格式: `服务器 /路径 (状态)`，例如 `240 /home SSD (rgbd-skill 125G)`
+- 这是必做步骤，避免后续实验找不到数据
+
+---
+
+## 9. 训练中断与断点重训
+
+### 9.1 检测中断
+
+每轮监控时检查以下信号:
+- tmux pane 中是否有 `Traceback` / `Error` / `Killed` / `OOM`
+- GPU 显存是否异常归零（进程 crash）
+- wandb 面板是否显示 `crashed`
+- SSH 连接是否持续失败（服务器宕机/网络故障）
+
+### 9.2 中断分类与处理
+
+| 类型 | 症状 | 处理 |
+|------|------|------|
+| **OOM** | CUDA out of memory | `training.batch_size` 降到 256，重启 |
+| **磁盘满** | No space left on device | 清理非保护数据，重启 |
+| **NAS 挂死** | 进程 D-state, kill -9 无效 | 等 NAS 恢复后进程自动解除；清理僵尸进程后重启 |
+| **服务器宕机** | SSH timeout 持续 | 等服务器恢复；检查/清理僵尸进程；在新服务器上恢复 |
+| **进程被抢占** | GPU 显存被其他进程占用 | 找其他空闲 GPU/服务器，继续运行 |
+| **wandb 同步断** | 训练正常但 wandb 显示 crashed | 训练本身不受影响，checkpoint 仍在保存；可选重启修复 wandb 显示 |
+
+### 9.3 断点重训流程 (Resume)
+
+当确认训练中断后:
+
+```
+1. 记录中断信息:
+   - 实验编号、wandb run_id、中断原因、当前 epoch (从 tmux 或 wandb 估算)
+
+2. 清理残留:
+   - ssh <host> "tmux kill-session -t <session>"  # 清理旧 tmux
+   - ssh <host> "pkill -9 -u hy -f bc_ddp"         # 清理残留进程 (注意: 只杀目标实验!)
+   - 确认 GPU 释放
+
+3. 检查 checkpoint:
+   - checkpoint 保存在 NAS: /mnt/nas/share/home/hy/robust-rearrangement-custom/outputs/<date>/<time>/models/<run_name>/
+   - 确认最新 checkpoint 存在: actor_chkpt_last.pt
+   - 如果 NAS 不可达，checkpoint 丢失，需要从头训练
+
+4. 选择恢复服务器:
+   - 优先同服务器（数据和 checkpoint 都在）
+   - 否则选任何有空闲 GPU 且有数据的服务器
+   - 如果没有数据，从备份源 SCP (见 §3.3)
+
+5. 修改 auto_train_multi_card.sh:
+   - 设置 WANDB_CONTINUE_RUN_ID="<run_id>"  (注意: 是 run_id 如 rx6nfry4，不是 run_name)
+   - 其他参数与原始实验一致
+   - DATA_DIR_PROCESSED 和 SSH_NAME 根据目标服务器调整
+   - GPU_ID 显式指定空闲 GPU（避免冲突）
+
+6. 启动训练:
+   - bash ./auto_train_multi_card.sh
+   - 等待 wandb 确认 resume 成功 (epoch 不为 0)
+   - 更新 Notion 实验过程表
+
+7. 验证恢复:
+   - 确认 continue_run_id 生效: tmux 输出中应显示 continue_run_id=<run_id>
+   - 确认从 checkpoint 恢复: 起始 epoch > 0
+   - 确认 wandb 状态恢复为 running
+```
+
+### 9.4 continue_run_id 经验总结
+
+**正确用法**:
+- `WANDB_CONTINUE_RUN_ID` 的值是 wandb **run ID**（如 `rx6nfry4`），不是 run name（如 `hopeful-planet-1`）
+- run ID 可以从 wandb 面板 URL 获取，或通过 `wandb.Api().runs()` 查询
+- 训练代码会先尝试从 wandb artifacts 找 checkpoint → 失败后 fallback 到 NAS 本地路径
+
+**已知问题**:
+- 如果 checkpoint 从未上传到 wandb artifacts（wandb.mode=online 不主动上传大文件），resume 依赖 NAS fallback
+- NAS 不可达时 resume 失败（找不到 checkpoint）
+- 部分情况下 wandb 状态无法从 crashed 恢复为 running（训练实际正常）
+- wandb sync 进程 crash 后不会自动重连，需重启训练才能修复 wandb 显示
+- **磁盘监控**: 多实验并行时 `/home/hy/tmp` 易满，需定时清理 pip/torch cache
+- 清理命令: `rm -rf ~/.cache/pip ~/.cache/torch ~/.cache/huggingface`
+- 设置 2h cron 监控 `df -h /`，<2G 时主动清理
+- `pkill -9 -u hy -f bc_ddp` 会杀死**所有** bc_ddp 进程，务必先锁定目标实验的 tmux/gpu
+- **禁止 `pkill -9 -u hy`** — 会误杀同服务器所有实验
+- **禁止 `for pid in $(nvidia-smi ...); do kill -9 $pid; done`** — 会杀死 GPU 上所有进程（包括其他实验和他人进程）
+- **唯一安全的杀进程方法**: 先获取 GPU 上 PID，再验证该 PID 属于目标实验，最后 `kill -9 <PID>`
+  ```bash
+  # 正确做法：
+  # 1. 找目标 GPU 上的 PID
+  TARGET_PID=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader | head -N)
+  # 2. 验证 PID 属于目标实验（检查 cmdline）
+  cat /proc/$TARGET_PID/cmdline | grep -q '<wandb_run_name_or_continue_id>' && kill -9 $TARGET_PID
+  # 或使用 pkill 精确过滤：
+  pkill -f 'continue_run_id=<exact_id>'   # 只杀特定 continue_run_id 的进程
+  pkill -f '<wandb_run_name>'              # 只杀特定 run name 的进程
+  ```
+- **最推荐: `tmux send-keys C-c`** — 只杀指定 tmux session 内的进程，绝不影响同服其他实验:
+  ```bash
+  ssh <host> "tmux send-keys -t <session>:train C-c"   # 发 Ctrl+C
+  sleep 3
+  ssh <host> "tmux kill-session -t <session>"           # 清理 session
+  ```
+  优点: 天然隔离，不可能误杀其他 tmux 的进程。知道实验在哪个 session 就能精确杀。
+
+**SCP 数据源优先级**:
+- 优先从备份数据集 SCP（见 §3.3 三个不可删除的备份）
+- 使用 `ssh <target> "scp -r <source>:/path <target_path>"` 实现服务器间直传（不走本机）
+- 需要先设置 SSH key 互信：将目标服务器的 `~/.ssh/id_rsa.pub` 添加到源服务器的 `authorized_keys`
+- 修复 `chmod 600 ~/.ssh/id_rsa` 权限问题
+- 内网直传速度 ~80-100MB/s (SSD 源)，HDD 源约 3-5MB/s
+
+### 9.5 SCP 传输经验
+
+**速度要求**: 1 小时必须传完（125G 需 >35MB/s），否则换方案。
+
+**传输方式速度对比**:
+| 方式 | 命令 | 速度 | 适用场景 |
+|------|------|------|---------|
+| 服务器间直传 (SSD源) | `ssh <target> "scp -r <src>:/path <dst>"` | **80-100 MB/s** (~20min/125G) | ✅ 首选 |
+| 服务器间直传 (HDD源) | 同上 | **3-5 MB/s** (~7h/125G) | ❌ 太慢，避免 |
+| scp -3 (本机中转) | `scp -3 <src> <dst>` | **2-3 MB/s** (~12h/125G) | ❌ 禁止使用 |
+| tar pipe (本机中转) | `ssh <A> "tar c ..." \| ssh <B> "tar x"` | **<1 MB/s** | ❌ 禁止使用 |
+
+**服务器间直传设置步骤**:
+```bash
+# 1. 获取目标服务器公钥
+ssh <target> "cat ~/.ssh/id_rsa.pub"
+
+# 2. 添加到源服务器 authorized_keys
+ssh <source> "echo '<key>' >> ~/.ssh/authorized_keys"
+
+# 3. 修复权限（常见问题）— ⚠️ 绝不覆盖现有私钥
+# 先检查文件内容，确认是公钥而非私钥后再操作
+ssh <target> "ls -la ~/.ssh/id_rsa ~/.ssh/id_rsa_1 2>/dev/null; head -1 ~/.ssh/id_rsa 2>/dev/null"
+# 只修复权限，不修改文件内容！
+ssh <target> "chmod 600 ~/.ssh/id_rsa 2>/dev/null; chmod 600 ~/.ssh/id_rsa_1 2>/dev/null"
+# ⚠️ 绝不 echo > ~/.ssh/id_rsa（这会覆盖私钥！）
+
+# 4. 测试连通性
+ssh <target> "ssh <source_ip> 'echo OK'"
+
+# 5. 执行传输（从目标拉取）
+ssh <target> "scp -r <source_ip>:/path/to/data.lmdb /local/path/"
+
+# 6. 验证
+ssh <target> "ls /local/path/data.lmdb/data.mdb && du -sh /local/path/data.lmdb"
+```
+
+**传输决策树**:
+```
+需要传输数据?
+├─ 目标服务器已有数据? → 跳过传输
+├─ 源服务器是 SSD? → 服务器间直传 (20min)
+├─ 源服务器是 HDD?
+│   ├─ 有其他 SSD 源? → 优先用 SSD 源
+│   └─ 唯一副本在 HDD? → 接受慢速传输 (但标注风险)
+└─ 无法设置直传?
+    ├─ 尝试 ssh -A agent forwarding
+    └─ 最后手段: scp -3 (标注 12h+)
+```
+
+**数据备份源 (见 §3.3)**:
+- rgbd: 228 /data (NVMe)
+- rgbd+GP (rgbd-skill): 251 /data (HDD) → 慢，优先找 SSD 副本
+- rgbd+colored GP (rgbd-skill-colored): 251 /data (HDD) → 慢，236/240 有 SSD 副本
