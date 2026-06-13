@@ -25,6 +25,7 @@ training:
   async_checkpoint_saver: true
   checkpoint_saver_tmp_dir: null
   checkpoint_saver_retry_seconds: 30
+  checkpoint_fallback_dir: null  # local fallback when NAS unavailable
 
   # Deprecated in bc_ddp.py; kept for compatibility with older entrypoints/configs.
   checkpoint_interval: -1
