@@ -62,7 +62,34 @@ ssh -o ConnectTimeout=5 zju_4090_228 echo ok
 df -h /
 ```
 
-### 3.2 串行执行（手动）
+### 3.2 验证 Checkpoint 配置（eval 前必做）
+
+**严重教训**: 训练启动时的配置错误（如 guidance_point_colored 误设为 false）会导致 checkpoint 内部 config 与实际实验不符。eval 前必须验证每个 checkpoint 的真实配置。
+
+**方法**: 从 checkpoint 的 `.pt` 文件中读取 Hydra config:
+```bash
+conda activate rr
+python3 -c "
+import torch
+sd = torch.load('/path/to/actor_chkpt_last.pt', map_location='cpu', weights_only=False)
+cfg = sd.get('config', {}).get('data', {})
+print(f'GP={cfg.get(\"annotate_guidance_point\")}')
+print(f'colored={cfg.get(\"annotate_guidance_point_colored\")}')
+print(f'skill={cfg.get(\"annotate_skill_one_hot\")}')
+print(f'suffix={cfg.get(\"suffix\")}')
+print(f'experiment={sd.get(\"config\",{}).get(\"experiment_module\",\"?\")}')
+"
+```
+
+**对照实验参数表**（§1），确认:
+- `annotate_guidance_point` / `annotate_skill_one_hot` / `annotate_guidance_point_colored` 与预期一致
+- `suffix` 与预期数据后缀一致
+- `experiment_module` 与预期模型架构一致
+
+**注意**: checkpoint config **绝对可信**——它是 Hydra 在训练启动时写入的运行时配置快照，不会被后续 restart 修改。
+> 如果 checkpoint config 与原定实验参数不符 → 该 run 的实际配置以 checkpoint 为准，更新 §1 实验参数表标注实际配置。
+
+### 3.3 串行执行（手动）
 
 对每个实验，依次：
 

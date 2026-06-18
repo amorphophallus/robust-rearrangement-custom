@@ -205,7 +205,38 @@ ssh <target_host> "ls -d \$(eval echo <DATA_DIR_PROCESSED>)/processed/diffik/sim
 - [ ] 确认 `wandb.project` 正确
 - [ ] 确认 `training.num_epochs=3000`（非 2000）
 
-### 4.3 同服务器多实验并行策略
+### 4.3 串行启动与原子锁（防止配置错误）
+
+**严重教训**: 连续修改 `auto_train_multi_card.sh` 启动多个实验时，极易忘记切换某个参数（如 `DATA_GUIDANCE_POINT_COLORED`），导致实验配置错误。**所有实验启动必须是串行原子操作。**
+
+**原子锁流程**（每个实验）:
+```bash
+LOCKFILE=/tmp/auto_train.lock
+
+# 1. 获取锁
+exec 9>$LOCKFILE
+flock 9 || exit 1
+
+# 2. 修改 auto_train_multi_card.sh 参数（所有 5 个关键变量一次性修改）
+#    DATA_ANNOTATE_GUIDANCE_POINT, DATA_ANNOTATE_SKILL_ONE_HOT,
+#    DATA_GUIDANCE_POINT_COLORED, +experiment, SSH_NAME, GPU_ID, WANDB_CONTINUE_RUN_ID
+
+# 3. 验证参数正确（grep 所有关键变量，打印到 stdout 确认）
+grep -E '^(DATA_ANNOTATE|DATA_GUIDANCE|WANDB_CONTINUE|SSH_NAME|GPU_ID)' auto_train_multi_card.sh
+grep 'experiment=' auto_train_multi_card.sh
+
+# 4. 启动训练
+bash ./auto_train_multi_card.sh
+
+# 5. 确认训练启动成功（GPU 内存 > 10GB）
+
+# 6. 释放锁
+flock -u 9
+```
+
+**禁用并行修改**: 绝不在同一时刻修改 auto_train_multi_card.sh 启动两个实验。前一个完全确认跑起来后再改参数启动下一个。
+
+### 4.4 同服务器多实验并行策略
 
 当一台服务器有空闲的 2+ 张额外 GPU 时，可以在同一台服务器上同时跑多个实验。
 
