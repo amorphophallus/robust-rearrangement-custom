@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 from typing import Dict, Optional
 
@@ -14,6 +14,43 @@ from furniture_bench.furniture.parts.lamp_base import LampBase
 from furniture_bench.furniture.parts.table_top import TableTop
 from furniture_bench.furniture.parts.round_table_top import RoundTableTop
 from furniture_bench.utils.pose import rot_mat
+
+
+# ---------------------------------------------------------------------------
+# Skill-relative reference part mapping
+# ---------------------------------------------------------------------------
+# For consistency verification: which part should the guidance point be
+# stationary relative to?  "anchor" = the assembly anchor (e.g. table top);
+# "operated" = the part being moved by the gripper.
+_SKILL_REFERENCE_MODE = {
+    "place": "anchor",
+    "insert": "anchor",
+    "pick": "operated",
+    "screw": "operated",
+    "push": "operated",
+}
+
+# ---------------------------------------------------------------------------
+# Verify configuration
+# ---------------------------------------------------------------------------
+
+@dataclass
+class VerifyConfig:
+    """Switchable consistency-verification sub-module for SkillAnnotator.
+
+    When enabled, the annotator checks that the guidance point stays at a
+    fixed relative offset from its reference part (e.g. the table for "place")
+    across consecutive steps of the same skill phase.  A drift larger than
+    *relative_tolerance_m* is flagged as a consistency error.
+
+    Attributes:
+        enabled: Whether to run verification at all.
+        relative_tolerance_m: Max allowed drift of (guidance_point - ref_part_pos)
+            from the first observed value in the current skill phase [meters].
+    """
+
+    enabled: bool = False
+    relative_tolerance_m: float = 0.005  # 5 mm
 
 
 VALID_SKILLS = {"pick", "place", "insert", "screw", "push"}
@@ -342,11 +379,20 @@ class SkillAnnotator:
     previous_guidance_point_robot: Optional[np.ndarray] = None
     previous_skill_state: Optional[str] = None
     previous_assembly_step: Optional[str] = None
+    verify_config: Optional[VerifyConfig] = None
+
+    # ---- internal verify state (reset per skill-phase) ----
+    # These are NOT dataclass fields – set in __post_init__ / reset.
+    _verify_ref_skill_state: Optional[str] = field(init=False, repr=False, default=None)
+    _verify_ref_relative_pos: Optional[np.ndarray] = field(init=False, repr=False, default=None)
 
     def __post_init__(self):
         self.furniture = furniture_factory(self.furniture_name)
         self.furniture.reset()
         self.assemble_idx = 0
+        if self._verify_ref_skill_state is not False:  # keep if already set
+            self._verify_ref_skill_state = None
+            self._verify_ref_relative_pos = None
 
     def _reset_parts(self):
         self.furniture.reset()
@@ -358,6 +404,8 @@ class SkillAnnotator:
         self.previous_guidance_point_robot = None
         self.previous_skill_state = None
         self.previous_assembly_step = None
+        self._verify_ref_skill_state = None
+        self._verify_ref_relative_pos = None
 
     def _short_part_name(self, part_name: str) -> str:
         short_name = str(part_name)
@@ -506,6 +554,86 @@ class SkillAnnotator:
         if callable(reset_skill_state_fn):
             reset_skill_state_fn()
 
+    def _verify_consistency(
+        self,
+        skill: str,
+        skill_state_label: Optional[str],
+        guidance_point: Optional[np.ndarray],
+        part1,  # anchor part (e.g. table_top)
+        part2,  # operated part (e.g. leg)
+        active_part_name: Optional[str],
+        annotation_inputs: dict,
+    ) -> Optional[dict]:
+        """Run consistency check: guidance_point should stay at a fixed offset
+        from its reference part within the same skill phase.
+
+        Returns a dict with verification results, or None if the check is
+        not applicable (e.g. no guidance point available).
+        """
+        if skill is None or guidance_point is None or self.verify_config is None:
+            return None
+
+        # --- determine reference part ---
+        ref_mode = _SKILL_REFERENCE_MODE.get(skill)
+        if ref_mode is None:
+            return None
+
+        if ref_mode == "anchor":
+            ref_part = part1
+        elif ref_mode == "operated":
+            # During pre_assemble, the active part IS part1; during assemble
+            # it is part2.  Use the active part as the operated part.
+            if active_part_name is not None and active_part_name == part2.name:
+                ref_part = part2
+            else:
+                ref_part = part1
+        else:
+            return None
+
+        # --- get reference part position in sim frame ---
+        part_idxs = annotation_inputs["part_idxs"]
+        rb_states = annotation_inputs["rb_states"]
+        env_offset = _to_numpy(annotation_inputs["env_offset"])
+
+        if ref_part.name not in part_idxs:
+            return None
+
+        ref_idx = part_idxs[ref_part.name][0]
+        ref_pos_sim_local = _to_numpy(rb_states[ref_idx][:3]).astype(np.float32)
+        ref_pos_sim = ref_pos_sim_local + env_offset.astype(np.float32)
+
+        # --- relative position ---
+        relative_pos = guidance_point.astype(np.float32) - ref_pos_sim
+
+        # --- phase-change detection ---
+        current_key = skill_state_label
+        if current_key is None:
+            current_key = skill  # fallback: use raw skill label
+
+        if current_key != self._verify_ref_skill_state:
+            # New skill phase — store reference
+            self._verify_ref_skill_state = current_key
+            self._verify_ref_relative_pos = relative_pos.copy()
+            return {
+                "status": "reference_set",
+                "ref_part": ref_part.name,
+                "relative_pos": relative_pos,
+            }
+
+        # --- same phase — check drift ---
+        drift = float(np.linalg.norm(relative_pos - self._verify_ref_relative_pos))
+        tolerance = self.verify_config.relative_tolerance_m
+        is_consistent = drift <= tolerance
+
+        return {
+            "status": "consistent" if is_consistent else "offset_detected",
+            "drift_m": drift,
+            "tolerance_m": tolerance,
+            "relative_pos": relative_pos,
+            "ref_relative_pos": self._verify_ref_relative_pos.copy(),
+            "ref_part": ref_part.name,
+        }
+
     def step(
         self,
         env,
@@ -545,6 +673,8 @@ class SkillAnnotator:
                 "guidance_point": self.previous_guidance_point_robot,
                 "guidance_point_2d": {},
                 "camera_info": camera_info,
+                "verify": None,
+                "debug": {},
             }
 
         part1_idx, part2_idx = self.furniture.should_be_assembled[self.assemble_idx]
@@ -618,6 +748,23 @@ class SkillAnnotator:
                 + _to_numpy(annotation_inputs["base_pos"]).astype(np.float32)
             )
 
+        # --- consistency verification ---
+        verify_result = None
+        if (
+            self.verify_config is not None
+            and self.verify_config.enabled
+            and guidance_point is not None
+        ):
+            verify_result = self._verify_consistency(
+                skill=skill,
+                skill_state_label=skill_state_label,
+                guidance_point=guidance_point,
+                part1=part1,
+                part2=part2,
+                active_part_name=debug_info.get("active_part"),
+                annotation_inputs=annotation_inputs,
+            )
+
         guidance_point_2d = {}
         if guidance_point is not None:
             for image_key, cam in camera_info.items():
@@ -635,6 +782,7 @@ class SkillAnnotator:
             "guidance_point_2d": guidance_point_2d,
             "camera_info": camera_info,
             "debug": debug_info,
+            "verify": verify_result,
         }
 
 
@@ -670,6 +818,11 @@ def _get_or_create_skill_annotator(env, env_idx: int) -> SkillAnnotator:
         reset_skill_annotator(env)
         annotators = env._skill_annotators
 
+    # Restore persisted verify config (survives annotator resets)
+    saved_configs = getattr(env, "_skill_annotator_verify_configs", None)
+    if saved_configs is not None and env_idx < len(saved_configs):
+        annotators[env_idx].verify_config = saved_configs[env_idx]
+
     env._skill_annotator = annotators[0]
     return annotators[env_idx]
 
@@ -680,6 +833,8 @@ def get_annotation_bundle_for_env(
     previous_skill: str | None = None,
     annotate_wrist_camera: bool = False,
     resize_images: bool = True,
+    enable_verify: bool = False,
+    verify_tolerance_m: float = 0.005,
 ):
     if getattr(env, "furniture_name", None) not in {"one_leg", "round_table", "lamp"}:
         return {
@@ -690,12 +845,30 @@ def get_annotation_bundle_for_env(
             "guidance_point_2d": {},
             "camera_info": {},
             "debug": {},
+            "verify": None,
         }
 
     annotator = _get_or_create_skill_annotator(env, env_idx)
 
     if previous_skill is not None and annotator.previous_skill is None:
         annotator.previous_skill = previous_skill
+
+    # Enable / disable verification on the cached annotator
+    if enable_verify:
+        if annotator.verify_config is None:
+            annotator.verify_config = VerifyConfig(
+                enabled=True, relative_tolerance_m=verify_tolerance_m
+            )
+        else:
+            annotator.verify_config.enabled = True
+            annotator.verify_config.relative_tolerance_m = verify_tolerance_m
+        # Persist across potential annotator resets
+        num_envs = max(int(getattr(env, "num_envs", 1)), 1)
+        if not hasattr(env, "_skill_annotator_verify_configs") or env._skill_annotator_verify_configs is None:
+            env._skill_annotator_verify_configs = [None] * num_envs
+        env._skill_annotator_verify_configs[env_idx] = annotator.verify_config
+    elif annotator.verify_config is not None:
+        annotator.verify_config.enabled = False
 
     return annotator.step(
         env,
@@ -710,6 +883,8 @@ def get_annotation_bundle_all_envs(
     previous_skills: Optional[list[str | None]] = None,
     annotate_wrist_camera: bool = False,
     resize_images: bool = True,
+    enable_verify: bool = False,
+    verify_tolerance_m: float = 0.005,
 ):
     num_envs = max(int(getattr(env, "num_envs", 1)), 1)
     bundles = []
@@ -724,6 +899,8 @@ def get_annotation_bundle_all_envs(
                 previous_skill=previous_skill,
                 annotate_wrist_camera=annotate_wrist_camera,
                 resize_images=resize_images,
+                enable_verify=enable_verify,
+                verify_tolerance_m=verify_tolerance_m,
             )
         )
     return bundles
@@ -734,6 +911,8 @@ def get_annotation_bundle(
     previous_skill: str | None = None,
     annotate_wrist_camera: bool = False,
     resize_images: bool = True,
+    enable_verify: bool = False,
+    verify_tolerance_m: float = 0.005,
 ):
     return get_annotation_bundle_for_env(
         env,
@@ -741,6 +920,8 @@ def get_annotation_bundle(
         previous_skill=previous_skill,
         annotate_wrist_camera=annotate_wrist_camera,
         resize_images=resize_images,
+        enable_verify=enable_verify,
+        verify_tolerance_m=verify_tolerance_m,
     )
 
 
@@ -749,12 +930,16 @@ def get_skill_label(
     previous_skill: str | None = None,
     annotate_wrist_camera: bool = False,
     resize_images: bool = True,
+    enable_verify: bool = False,
+    verify_tolerance_m: float = 0.005,
 ) -> str | None:
     bundle = get_annotation_bundle(
         env,
         previous_skill=previous_skill,
         annotate_wrist_camera=annotate_wrist_camera,
         resize_images=resize_images,
+        enable_verify=enable_verify,
+        verify_tolerance_m=verify_tolerance_m,
     )
     return bundle["skill"]
 
