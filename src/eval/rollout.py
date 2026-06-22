@@ -424,6 +424,7 @@ def rollout(
     annotate_wrist_camera: bool = False,
     provide_skill_input: bool = False,
     collect_skill_stats: bool = False,
+    enable_annotation_verify: bool = False,
     rollout_after_success: int = 0,
     full_length_rollout: bool = False,
     perturb_runner: Optional[PerturbRunner] = None,
@@ -462,6 +463,7 @@ def rollout(
             previous_skills=previous_skills,
             annotate_wrist_camera=annotate_wrist_camera,
             resize_images=resize_video,
+            enable_verify=enable_annotation_verify,
         )
         if collect_skill_annotations
         else [{} for _ in range(env.num_envs)]
@@ -540,6 +542,17 @@ def rollout(
     guidance_points_2d = [initial_guidance_points_2d]
     camera_infos = [[bundle.get("camera_info", {}) for bundle in initial_annotations]]
     active_skill_states = initial_skill_states
+
+    # Verify history for summary at end of rollout
+    from src.eval.skill_annotation_verify import VerifyHistory, verify_and_record
+    _verify_history = VerifyHistory(furniture_name=getattr(env, "furniture_name", ""))
+    for bundle in initial_annotations:
+        verify_and_record(
+            bundle, _verify_history,
+            step_idx=0,
+            assembly_step=bundle.get("assembly_step", ""),
+            skill=bundle.get("skill", ""),
+        )
     actions = list()
     rewards = torch.zeros((env.num_envs, rollout_max_steps), dtype=torch.float32)
     done = torch.zeros((env.num_envs, 1), dtype=torch.bool, device="cuda")
@@ -635,6 +648,7 @@ def rollout(
                 previous_skills=previous_skills,
                 annotate_wrist_camera=annotate_wrist_camera,
                 resize_images=resize_video,
+                enable_verify=enable_annotation_verify,
             )
             if collect_skill_annotations
             else [{} for _ in range(env.num_envs)]
@@ -669,6 +683,27 @@ def rollout(
                     f"gp_2d={current_guidance_points_2d[env_idx]}",
                     flush=True,
                 )
+                # Print verify warnings
+                v = current_annotation.get("verify")
+                if v and v.get("status") == "offset_detected":
+                    print(
+                        f"[verify-debug] env={env_idx} step={step_idx + 1} "
+                        f"pair={current_assembly_steps[env_idx]} "
+                        f"skill={current_skills[env_idx]} "
+                        f"OFFSET drift={v['drift_m']*1000:.1f}mm "
+                        f"tolerance={v['tolerance_m']*1000:.1f}mm "
+                        f"ref_mode={v.get('ref_mode')}",
+                        flush=True,
+                    )
+
+        # Record verify results for end-of-rollout summary
+        for bundle in current_annotations:
+            verify_and_record(
+                bundle, _verify_history,
+                step_idx=step_idx + 1,
+                assembly_step=bundle.get("assembly_step", ""),
+                skill=bundle.get("skill", ""),
+            )
 
         # Resize the images in the observation if they exist
         resize_image(obs, "color_image1")
@@ -781,11 +816,9 @@ def rollout(
     )
     camera_infos_per_env = _transpose_step_env_annotations(camera_infos, env.num_envs)
 
-    # print(f"[DEBUG] imgs1 shape: {(torch.stack(imgs1, dim=1) if imgs1 else []).shape}", flush=True)
-    # print(f"[DEBUG] imgs2 shape: {(torch.stack(imgs2, dim=1) if imgs2 else []).shape}", flush=True)
-    # print(f"[DEBUG] depth_image2 shape: {(torch.stack(depth_image2, dim=1) if depth_image2 else []).shape}", flush=True)
-    # for i, t in enumerate(depth_image2):
-    #     print(f"Index {i} device: {t.device}")
+    # --- verify summary ---
+    if enable_annotation_verify:
+        print(_verify_history.summary(), flush=True)
 
     return RolloutSaveValues(
         torch.stack(robot_states, dim=1) if robot_states else [],
@@ -835,6 +868,7 @@ def calculate_success_rate(
     annotate_wrist_camera: bool = False,
     provide_skill_input: bool = False,
     collect_skill_stats: bool = False,
+    enable_annotation_verify: bool = False,
     full_length_rollout: bool = False,
     output_only_pickle: bool = False,
     perturb_runner: Optional[PerturbRunner] = None,
@@ -919,6 +953,7 @@ def calculate_success_rate(
             annotate_wrist_camera=annotate_wrist_camera,
             provide_skill_input=provide_skill_input,
             collect_skill_stats=collect_skill_stats,
+            enable_annotation_verify=enable_annotation_verify,
             rollout_after_success=rollout_after_success,
             full_length_rollout=full_length_rollout,
             perturb_runner=perturb_runner,

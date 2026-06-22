@@ -142,6 +142,9 @@ def validate_args(args: argparse.Namespace):
     assert not args.skill_on_image or args.annotate_skill, (
         "--skill-on-image requires --annotate-skill"
     )
+    assert not args.enable_annotation_verify or args.annotate_skill, (
+        "--enable-annotation-verify requires --annotate-skill"
+    )
     assert all(
         value >= 0 for value in rollout_after_success_values
     ), "--rollout-after-success must be non-negative"
@@ -521,6 +524,13 @@ if __name__ == "__main__":
     )
     parser.add_argument("--record-for-coverage", action="store_true")
     parser.add_argument("--annotate-skill", action="store_true")
+    parser.add_argument(
+        "--enable-annotation-verify",
+        action="store_true",
+        help="Enable consistency verification of guidance points during rollout. "
+        "Flags offset_detected when guidance point drifts from its reference part "
+        "within the same skill phase.",
+    )
     parser.add_argument("--guidance-point-on-image", action="store_true")
     parser.add_argument("--guidance-point-colored", action="store_true")
     parser.add_argument("--skill-on-image", action="store_true")
@@ -1058,6 +1068,7 @@ if __name__ == "__main__":
                         record_first_state_only=args.record_for_coverage,
                         pc_generator=pc_generator,
                         annotate_skill=args.annotate_skill,
+                        enable_annotation_verify=args.enable_annotation_verify,
                         annotate_guidance_point=uses_guidance_point,
                         guidance_point_on_image=args.guidance_point_on_image,
                         guidance_point_colored=args.guidance_point_colored,
