@@ -690,9 +690,9 @@ def rollout(
                         f"[verify-debug] env={env_idx} step={step_idx + 1} "
                         f"pair={current_assembly_steps[env_idx]} "
                         f"skill={current_skills[env_idx]} "
-                        f"OFFSET drift={v['drift_m']*1000:.1f}mm "
-                        f"tolerance={v['tolerance_m']*1000:.1f}mm "
-                        f"ref_mode={v.get('ref_mode')}",
+                        f"ref={v.get('ref_mode')} "
+                        f"JUMP={v['jump_m']*1000:.1f}mm "
+                        f"thresh={v['tolerance_m']*1000:.0f}mm",
                         flush=True,
                     )
 

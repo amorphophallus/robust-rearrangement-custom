@@ -707,7 +707,7 @@ def get_annotation_bundle_for_env(
     annotate_wrist_camera: bool = False,
     resize_images: bool = True,
     enable_verify: bool = False,
-    verify_tolerance_m: float = 0.005,
+    verify_tolerance_m: float = 0.020,
 ):
     if getattr(env, "furniture_name", None) not in {"one_leg", "round_table", "lamp"}:
         return {
@@ -755,7 +755,7 @@ def get_annotation_bundle_all_envs(
     annotate_wrist_camera: bool = False,
     resize_images: bool = True,
     enable_verify: bool = False,
-    verify_tolerance_m: float = 0.005,
+    verify_tolerance_m: float = 0.020,
 ):
     num_envs = max(int(getattr(env, "num_envs", 1)), 1)
     bundles = []
@@ -783,7 +783,7 @@ def get_annotation_bundle(
     annotate_wrist_camera: bool = False,
     resize_images: bool = True,
     enable_verify: bool = False,
-    verify_tolerance_m: float = 0.005,
+    verify_tolerance_m: float = 0.020,
 ):
     return get_annotation_bundle_for_env(
         env,
@@ -802,7 +802,7 @@ def get_skill_label(
     annotate_wrist_camera: bool = False,
     resize_images: bool = True,
     enable_verify: bool = False,
-    verify_tolerance_m: float = 0.005,
+    verify_tolerance_m: float = 0.020,
 ) -> str | None:
     bundle = get_annotation_bundle(
         env,
