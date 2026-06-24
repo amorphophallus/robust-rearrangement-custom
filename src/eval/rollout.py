@@ -482,27 +482,6 @@ def rollout(
         raise ValueError(
             f"Actor requires skill one-hot input, but no skill labels were produced for task `{env.furniture_name}`."
         )
-    if annotate_skill:
-        for env_idx, initial_annotation in enumerate(initial_annotations):
-            initial_debug = initial_annotation.get("debug", {})
-            if initial_debug:
-                print(
-                    f"[skill-debug] env={env_idx} step=0 idx={initial_debug.get('assemble_idx')} "
-                    f"part={initial_debug.get('active_part')} phase={initial_debug.get('phase')} "
-                    f"skill={initial_skills[env_idx]}",
-                    flush=True,
-                )
-            else:
-                print(
-                    f"[skill-debug] env={env_idx} step=0 skill={initial_skills[env_idx]}",
-                    flush=True,
-                )
-            print(
-                f"[guidance-debug] env={env_idx} step=0 gp={initial_guidance_points[env_idx]} "
-                f"gp_2d={initial_guidance_points_2d[env_idx]}",
-                flush=True,
-            )
-
     # Resize the images in the observation if they exist
     resize_image(obs, "color_image1")
     resize_crop_image(obs, "color_image2")
@@ -571,8 +550,6 @@ def rollout(
         pcs_step_np = []
         for env_idx, pc in enumerate(pcs_step):
             pc_np = pc.detach().cpu().numpy()
-            if pc_np.shape[0] == 0:
-                print(f"[DEBUG] Empty point cloud: env={env_idx}, step=0 (initial)")
             pcs_step_np.append(pc_np)
         point_clouds.append(pcs_step_np)
 
@@ -663,39 +640,6 @@ def rollout(
         for env_idx, skill in enumerate(current_skills):
             if skill is not None:
                 previous_skills[env_idx] = skill
-        if annotate_skill:
-            for env_idx, current_annotation in enumerate(current_annotations):
-                current_debug = current_annotation.get("debug", {})
-                if current_debug:
-                    print(
-                        f"[skill-debug] env={env_idx} step={step_idx + 1} idx={current_debug.get('assemble_idx')} "
-                        f"part={current_debug.get('active_part')} phase={current_debug.get('phase')} "
-                        f"skill={current_skills[env_idx]}",
-                        flush=True,
-                    )
-                else:
-                    print(
-                        f"[skill-debug] env={env_idx} step={step_idx + 1} skill={current_skills[env_idx]}",
-                        flush=True,
-                    )
-                print(
-                    f"[guidance-debug] env={env_idx} step={step_idx + 1} gp={current_guidance_points[env_idx]} "
-                    f"gp_2d={current_guidance_points_2d[env_idx]}",
-                    flush=True,
-                )
-                # Print verify warnings
-                v = current_annotation.get("verify")
-                if v and v.get("status") == "offset_detected":
-                    print(
-                        f"[verify-debug] env={env_idx} step={step_idx + 1} "
-                        f"pair={current_assembly_steps[env_idx]} "
-                        f"skill={current_skills[env_idx]} "
-                        f"ref={v.get('ref_mode')} "
-                        f"JUMP={v['jump_m']*1000:.1f}mm "
-                        f"thresh={v['tolerance_m']*1000:.0f}mm",
-                        flush=True,
-                    )
-
         # Record verify results for end-of-rollout summary
         for bundle in current_annotations:
             verify_and_record(
@@ -759,9 +703,6 @@ def rollout(
                 pcs_step_np = []
                 for env_idx, pc in enumerate(pcs_step):
                     pc_np = pc.detach().cpu().numpy()
-                    if pc_np.shape[0] == 0:
-                        current_success = (rewards[:, :step_idx+1].sum(dim=1) == n_parts_assemble)[env_idx].item()
-                        print(f"[DEBUG] Empty point cloud: env={env_idx}, step={step_idx+1}, success_so_far={current_success}")
                     pcs_step_np.append(pc_np)
                 point_clouds.append(pcs_step_np)
 

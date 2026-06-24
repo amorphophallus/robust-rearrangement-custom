@@ -161,33 +161,11 @@ class ResidualDiffusionPolicy(DiffusionPolicy):
         residual_nobs = torch.cat([nobs, base_naction], dim=-1)
 
         # Predict the residual (already scaled = actor_mean * action_scale)
-        # Also get unscaled actor_mean for training-metric comparison
         actor_mean = self.residual_policy.actor_mean(residual_nobs)  # unscaled, raw NN output
         residual = actor_mean * self.residual_policy.action_scale  # = get_action(...)
 
         # Add the residual to the base action
         naction = base_naction + residual
-
-        # DEBUG: compute EXACT same metric as training wandb "action_norm_mean"
-        # training code: action_norms = torch.norm(b_actions[:, :3], dim=-1)
-        # where b_actions = unscaled residual_naction (sampled during training, mean during eval)
-        # For eval we use mean (no sampling). To match training exactly, also simulate sampling.
-        unscaled_pos_norm_mean = torch.norm(actor_mean[:, :3], dim=-1)  # per-env, position only
-        # Also simulate with sampling noise: logstd=-1 -> std=exp(-1)=0.368
-        actor_std = torch.exp(self.residual_policy.actor_logstd[:, :3])  # (1, 3)
-        # Expected ||sampled||^2 = ||mu||^2 + 3*sigma^2 (approximately)
-        unscaled_pos_norm_with_noise = torch.sqrt(
-            unscaled_pos_norm_mean ** 2 + 3 * actor_std.mean() ** 2
-        )
-        if not hasattr(self, '_train_metric_norms'):
-            self._train_metric_norms = []
-            self._train_metric_norms_with_noise = []
-            self._base_pos_norms = []
-            self._scaled_res_pos_norms = []
-        self._train_metric_norms.append(unscaled_pos_norm_mean.mean().item())
-        self._train_metric_norms_with_noise.append(unscaled_pos_norm_with_noise.mean().item())
-        self._base_pos_norms.append(torch.norm(base_naction[:, :3], dim=-1).mean().item())
-        self._scaled_res_pos_norms.append(torch.norm(residual[:, :3], dim=-1).mean().item())
 
         # Denormalize the final action
         final_action = self.normalizer(naction, "action", forward=False)  # (B, D)
