@@ -422,7 +422,9 @@ class SkillAnnotator:
         )
         rel_pose = torch_inv(part1_pose) @ part2_pose
         assembled_rel_poses = self.furniture.assembled_rel_poses[(part_idx1, part_idx2)]
-        assembled = self.furniture.assembled(rel_pose.cpu().numpy(), assembled_rel_poses)
+        assembled = self.furniture.assembled(
+            rel_pose.cpu().numpy(), assembled_rel_poses, pair=pair
+        )
         # if self.furniture_name == "round_table":
         #     print(
         #         "[util assembled_debug] "
