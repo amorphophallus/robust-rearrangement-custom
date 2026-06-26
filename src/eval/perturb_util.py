@@ -6,7 +6,7 @@ from typing import Callable, Optional
 import torch
 
 
-PERTURB_MODES = ("none", "random_small", "short_large", "place_slowdown")
+PERTURB_MODES = ("none", "random_small", "short_large", "place_slowdown", "place_drop")
 
 
 @dataclass
@@ -102,17 +102,32 @@ class PerturbRunner:
         self.place_slowdown_subdivide_ratio = 3.0        # new_timesteps / model_generated_timesteps
         self.place_slowdown_pos_noise = 0.0              # optional position noise (meters), 0 = off
 
+        # -- place_drop --
+        # Force the gripper open during the place skill so the held part is
+        # released and drops, exercising the reverse edge (place/insert/screw
+        # -> pick) in the skill state machine. Does not apply force; only
+        # mutates the gripper component of the action.
+        self.place_drop_trigger_state = "place"      # skill state that triggers the release
+        self.place_drop_delay = 25                    # steps to wait after entering target state
+        self.place_drop_hold = 15                     # steps to keep the gripper forced open
+        self.place_drop_open_value = -1.0             # gripper action value (<0 opens)
+        self.place_drop_fired_once = True             # fire at most once per episode
+
         self.stats = PerturbStats()
         self._generator = torch.Generator()
         self._generator.manual_seed(self.perturb_seed)
         self._short_large_match_steps: Optional[torch.Tensor] = None
         self._short_large_fired: Optional[torch.Tensor] = None
+        self._place_drop_match_steps: Optional[torch.Tensor] = None
+        self._place_drop_fired: Optional[torch.Tensor] = None
+        self._place_drop_hold_remaining: Optional[torch.Tensor] = None
 
         self._mode_fns: dict[str, Callable[[PerturbContext], torch.Tensor]] = {
             "none": self._zero_force,
             "random_small": self._random_small,
             "short_large": self._short_large,
             "place_slowdown": self._zero_force,
+            "place_drop": self._zero_force,
         }
 
     # -- public properties --------------------------------------------------
@@ -127,12 +142,12 @@ class PerturbRunner:
 
     @property
     def requires_skill_annotations(self) -> bool:
-        return self.mode in {"short_large", "place_slowdown"}
+        return self.mode in {"short_large", "place_slowdown", "place_drop"}
 
     @property
     def modifies_action(self) -> bool:
-        """Whether the runner wants to set actor.subdivide_ratio."""
-        return self.mode == "place_slowdown"
+        """Whether the runner mutates the action vector (e.g. forces gripper)."""
+        return self.mode == "place_drop"
 
     @property
     def applies_force(self) -> bool:
@@ -140,8 +155,8 @@ class PerturbRunner:
 
     @property
     def subdivides_action(self) -> bool:
-        """Alias: the runner subdivides actions via the actor queue."""
-        return self.modifies_action
+        """Whether the runner wants to set actor.subdivide_ratio."""
+        return self.mode == "place_slowdown"
 
     # -- public methods -----------------------------------------------------
 
@@ -150,6 +165,13 @@ class PerturbRunner:
             num_envs, dtype=torch.int64, device=device
         )
         self._short_large_fired = torch.zeros(num_envs, dtype=torch.bool, device=device)
+        self._place_drop_match_steps = torch.zeros(
+            num_envs, dtype=torch.int64, device=device
+        )
+        self._place_drop_fired = torch.zeros(num_envs, dtype=torch.bool, device=device)
+        self._place_drop_hold_remaining = torch.zeros(
+            num_envs, dtype=torch.int64, device=device
+        )
 
     def compute_force(self, context: PerturbContext) -> torch.Tensor:
         forces = self._mode_fns[self.mode](context)
@@ -159,7 +181,44 @@ class PerturbRunner:
     def modify_action(
         self, action: torch.Tensor, context: PerturbContext
     ) -> torch.Tensor:
-        """No-op — subdivision is handled by the actor via subdivide_ratio."""
+        """Mutate the action vector for action-modifying modes.
+
+        ``place_drop`` forces the gripper component (``action[:, -1]``) open
+        for ``place_drop_hold`` steps, starting ``place_drop_delay`` steps
+        after the env enters the target skill state. Fires at most once per
+        episode when ``place_drop_fired_once`` is set. Other modes are no-ops
+        (``place_slowdown`` subdivides via ``actor.subdivide_ratio``).
+        """
+        if self.mode != "place_drop":
+            return action
+        self._ensure_place_drop_state(context)
+        matches = self._matches_place_drop_target(context)
+        assert self._place_drop_match_steps is not None
+        assert self._place_drop_fired is not None
+        assert self._place_drop_hold_remaining is not None
+
+        # Accumulate contiguous match steps; reset when the env leaves place.
+        self._place_drop_match_steps = torch.where(
+            matches,
+            self._place_drop_match_steps + 1,
+            torch.zeros_like(self._place_drop_match_steps),
+        )
+        # Start the hold countdown once the delay has elapsed (and not fired).
+        start_hold = (
+            matches
+            & ~self._place_drop_fired
+            & (self._place_drop_match_steps >= self.place_drop_delay + 1)
+        )
+        if start_hold.any():
+            self._place_drop_hold_remaining[start_hold] = self.place_drop_hold
+            if self.place_drop_fired_once:
+                self._place_drop_fired[start_hold] = True
+
+        open_mask = self._place_drop_hold_remaining > 0
+        if open_mask.any():
+            action[open_mask, -1] = self.place_drop_open_value
+            self._place_drop_hold_remaining[open_mask] -= 1
+            self.stats.record_action_mod(int(open_mask.sum().item()))
         return action
 
     def get_subdivide_ratio(self, context: PerturbContext) -> float:
@@ -244,6 +303,21 @@ class PerturbRunner:
             return torch.zeros(context.num_envs, dtype=torch.bool, device=context.device)
         return self._matches_skill_suffix(
             context.skill_states, self.short_large_trigger_state
+        ).to(device=context.device)
+
+    def _ensure_place_drop_state(self, context: PerturbContext):
+        if (
+            self._place_drop_match_steps is None
+            or self._place_drop_fired is None
+            or self._place_drop_hold_remaining is None
+            or self._place_drop_match_steps.shape[0] != context.num_envs
+            or self._place_drop_match_steps.device != context.device
+        ):
+            self.reset_episode(context.num_envs, context.device)
+
+    def _matches_place_drop_target(self, context: PerturbContext) -> torch.Tensor:
+        return self._matches_skill_suffix(
+            context.skill_states, self.place_drop_trigger_state
         ).to(device=context.device)
 
     def _matches_skill_suffix(

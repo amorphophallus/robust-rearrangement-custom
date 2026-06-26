@@ -596,7 +596,7 @@ def rollout(
                 skill_states=active_skill_states,
                 ee_pos_vel=ee_pos_vel,
             )
-            if perturb_runner.modifies_action:
+            if perturb_runner.subdivides_action:
                 actor.subdivide_ratio = perturb_runner.get_subdivide_ratio(perturb_ctx)
             if perturb_runner.applies_force:
                 assert apply_ee_force is not None
@@ -607,6 +607,12 @@ def rollout(
 
         # Get the next actions from the actor
         action_pred = actor.action(obs)
+
+        # Mutate the action vector for action-modifying perturb modes
+        # (e.g. place_drop forces the gripper open during the place skill).
+        if perturb_runner is not None and perturb_runner.modifies_action:
+            assert perturb_ctx is not None
+            action_pred = perturb_runner.modify_action(action_pred, perturb_ctx)
 
         obs, reward, done, _ = env.step(action_pred, sample_perturbations=False)
 
