@@ -236,7 +236,48 @@ flock -u 9
 
 **禁用并行修改**: 绝不在同一时刻修改 auto_train_multi_card.sh 启动两个实验。前一个完全确认跑起来后再改参数启动下一个。
 
-### 4.4 同服务器多实验并行策略
+### 4.4 训练启动后必做: Training Config 双检 (Double Check) ⚠️
+
+**每次实验启动后必须执行，不允许跳过。** 脚本的参数设置（bash 变量 → 命令行参数）可能因拼写、copy-paste 或默认覆盖而偏离预期。唯一完全真实的参数来源是训练代码启动时打印的 Hydra config。
+
+**执行时机**: 训练启动后，从 tmux 输出中获取 config dump（约在 wandb init 之前打印）。
+
+**双检项**（对照 §1 实验超参表）:
+
+| 检查项 | config key | 正则 |
+|--------|-----------|------|
+| GP 开关 | `annotate_guidance_point` | `annotate_guidance_point: (true\|false)` |
+| Skill One-hot 开关 | `annotate_skill_one_hot` | `annotate_skill_one_hot: (true\|false)` |
+| Colored GP 开关 | `annotate_guidance_point_colored` | `annotate_guidance_point_colored: (true\|false)` |
+| 数据后缀 | `suffix` | `suffix: <expected>` |
+| Experiment | `experiment` | 隐含在 vision_encoder 加载信息中 |
+
+**执行方法**:
+```bash
+# 从 tmux 输出中提取 config 关键字段
+ssh <host> "tmux capture-pane -pt <session>:train -S -200" 2>/dev/null | \
+  grep -E 'annotate_guidance_point:|annotate_skill_one_hot:|annotate_guidance_point_colored:|suffix:'
+
+# 示例正确输出 (Exp4 rgbd+only skill):
+#   annotate_guidance_point: false
+#   annotate_guidance_point_colored: false
+#   annotate_skill_one_hot: true
+#   suffix: rgbd-only-skill
+```
+
+**判定**: 三项开关 + suffix 必须与 §1 表中该实验的要求完全一致。任何一项不匹配 → **立即 `tmux send-keys C-c` 终止训练**，修正脚本参数后重新启动。
+
+**示例 — Exp4 (rgbd+only skill) 双检实录 (2026-06-27)**:
+```
+annotate_guidance_point: false          ✅ (期望 false)
+annotate_guidance_point_colored: false  ✅ (期望 false)
+annotate_skill_one_hot: true            ✅ (期望 true)
+suffix: rgbd-only-skill                 ✅ (期望 rgbd-only-skill)
+```
+
+> **⚠️ 强制规则**: 此双检流程写入本文档后，对所有后续实验生效。任何实验跳过双检直接运行的，视为配置未验证，结果不可信。
+
+### 4.5 同服务器多实验并行策略
 
 当一台服务器有空闲的 2+ 张额外 GPU 时，可以在同一台服务器上同时跑多个实验。
 
