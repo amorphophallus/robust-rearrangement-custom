@@ -142,6 +142,15 @@ def validate_args(args: argparse.Namespace):
     assert not args.skill_on_image or args.annotate_skill, (
         "--skill-on-image requires --annotate-skill"
     )
+    assert not args.grasp_part_annotate or args.annotate_skill, (
+        "--grasp-part-annotate requires --annotate-skill"
+    )
+    assert not args.grasp_part_annotate or (
+        not args.guidance_point_on_image and not args.grasp_annotation_on_image
+    ), (
+        "--grasp-part-annotate cannot be combined with "
+        "--guidance-point-on-image or --grasp-annotation-on-image"
+    )
     assert not args.enable_annotation_verify or args.annotate_skill, (
         "--enable-annotation-verify requires --annotate-skill"
     )
@@ -532,7 +541,10 @@ if __name__ == "__main__":
         "within the same skill phase.",
     )
     parser.add_argument("--guidance-point-on-image", action="store_true")
+    parser.add_argument("--grasp-annotation-on-image", action="store_true")
+    parser.add_argument("--grasp-part-annotate", action="store_true")
     parser.add_argument("--guidance-point-colored", action="store_true")
+    parser.add_argument("--grasp-annotation-colored", action="store_true")
     parser.add_argument("--skill-on-image", action="store_true")
 
     parser.add_argument("--save-rollouts-suffix", type=str, default="")
@@ -887,16 +899,36 @@ if __name__ == "__main__":
                         suffix = "dp3"
                     if args.save_pc_for_dp3:
                         suffix = f"pc/{args.pc_points}/{args.pc_downsample_mode}"
-                    if args.save_depth_image:
-                        suffix = "rgbd"
-                    if args.annotate_skill:
-                        if args.guidance_point_on_image:
+                    image_mode = "rgbd" if args.save_depth_image else "rgb"
+                    image_annotation_tokens = []
+                    if args.grasp_part_annotate:
+                        part_token = "grasp-part"
+                        if args.grasp_annotation_colored or args.guidance_point_colored:
+                            part_token += "-colored"
+                        image_annotation_tokens.append(part_token)
+                    if args.grasp_annotation_on_image:
+                        grasp_token = "grasp"
+                        if args.grasp_annotation_colored:
+                            grasp_token += "-colored"
+                        image_annotation_tokens.append(grasp_token)
+                    if args.guidance_point_on_image:
+                        point_token = "point"
+                        if args.guidance_point_colored:
+                            point_token += "-colored"
+                        image_annotation_tokens.append(point_token)
+
+                    if image_annotation_tokens:
+                        suffix = "-".join([image_mode, *image_annotation_tokens])
+                    elif args.annotate_skill:
+                        if args.skill_on_image:
+                            skill_tokens = ["skill"]
                             if args.guidance_point_colored:
-                                suffix = "rgbd-skill-colored" if args.save_depth_image else "rgb-skill-colored"
-                            else:
-                                suffix = "rgbd-skill" if args.save_depth_image else "rgb-skill"
+                                skill_tokens.append("colored")
+                            suffix = "-".join([image_mode, *skill_tokens])
                         else:
-                            suffix = "rgbd-only-skill" if args.save_depth_image else "rgb-only-skill"
+                            suffix = f"{image_mode}-only-skill"
+                    elif args.save_depth_image:
+                        suffix = image_mode
                     if task_group:
                         suffix = f"{suffix}/{task_group}" if suffix else task_group
                     if args.rollout_suffix_model_name is not None:
@@ -1071,7 +1103,10 @@ if __name__ == "__main__":
                         enable_annotation_verify=args.enable_annotation_verify,
                         annotate_guidance_point=uses_guidance_point,
                         guidance_point_on_image=args.guidance_point_on_image,
+                        grasp_annotation_on_image=args.grasp_annotation_on_image,
+                        grasp_part_annotate=args.grasp_part_annotate,
                         guidance_point_colored=args.guidance_point_colored,
+                        grasp_annotation_colored=args.grasp_annotation_colored,
                         model_guidance_point_colored=uses_guidance_point_colored,
                         skill_on_image=args.skill_on_image,
                         provide_skill_input=requires_skill_input,

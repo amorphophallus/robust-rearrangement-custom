@@ -24,8 +24,12 @@ GUIDANCE_POINT_COLOR_MAP = {
     "push": (255, 0, 0),      # Red in BGR (original)
     "insert": (255, 0, 0),    # Red in BGR (original)
 }
+GRASP_COLOR_GROUP_A = {"pick", "screw"}
+GRASP_COLOR_GROUP_B = {"place", "push", "insert"}
 OUTPUT_HEIGHT = 240
 OUTPUT_WIDTH = 320
+DEFAULT_GRASP_WIDTH_M = 0.05
+DEFAULT_GRASP_HEIGHT_M = 0.02
 
 
 def _to_numpy(x):
@@ -147,6 +151,8 @@ def _project_sim_local_to_image(
     point = np.ones(4, dtype=np.float32)
     point[:3] = point_sim_local.astype(np.float32)
     point_cam = sim_local_to_camera @ point
+    if not np.isfinite(point_cam).all():
+        return None
     if point_cam[2] <= 1e-8:
         return None
 
@@ -155,12 +161,38 @@ def _project_sim_local_to_image(
     point_img = intrinsics @ point_cv
     u = point_img[0] / (point_img[2] + 1e-8)
     v = point_img[1] / (point_img[2] + 1e-8)
+    if not np.isfinite(u) or not np.isfinite(v):
+        return None
     if u < 0 or u >= image_width or v < 0 or v >= image_height:
         return None
     return np.array(
         [int(round(float(u))), int(round(float(v)))],
         dtype=np.int32,
     )
+
+
+def _project_points_sim_local_to_image(
+    points_sim_local: np.ndarray,
+    intrinsics: np.ndarray,
+    sim_local_to_camera: np.ndarray,
+    image_width: int,
+    image_height: int,
+) -> Optional[np.ndarray]:
+    projected = []
+    for point_sim_local in np.asarray(points_sim_local, dtype=np.float32):
+        uv = _project_sim_local_to_image(
+            point_sim_local,
+            intrinsics,
+            sim_local_to_camera,
+            image_width,
+            image_height,
+        )
+        if uv is None:
+            return None
+        projected.append(uv.astype(np.float32))
+    if not projected:
+        return None
+    return np.stack(projected, axis=0)
 
 
 def project_3d_to_2d(
@@ -185,6 +217,86 @@ def project_3d_to_2d(
     if uv[0] < 0 or uv[0] >= image_width or uv[1] < 0 or uv[1] >= image_height:
         return None
     return uv.astype(np.int32)
+
+
+def _pose_to_numpy(guidance_pose) -> Optional[np.ndarray]:
+    if guidance_pose is None:
+        return None
+    pose_np = _to_numpy(guidance_pose).astype(np.float32)
+    if pose_np.shape != (4, 4):
+        return None
+    return pose_np
+
+
+def _build_grasp_rect_points_3d(
+    guidance_pose,
+    gripper_width: Optional[float] = None,
+    grasp_height: float = DEFAULT_GRASP_HEIGHT_M,
+) -> Optional[np.ndarray]:
+    pose_np = _pose_to_numpy(guidance_pose)
+    if pose_np is None:
+        return None
+
+    center = pose_np[:3, 3]
+    rot = pose_np[:3, :3]
+    width = float(gripper_width) if gripper_width is not None else DEFAULT_GRASP_WIDTH_M
+    width = max(width, 1e-4)
+    height = max(float(grasp_height), 1e-4)
+
+    open_axis = rot[:, 0]
+    height_axis = rot[:, 1]
+    half_open = 0.5 * width
+    half_height = 0.5 * height
+
+    return np.stack(
+        [
+            center - half_open * open_axis - half_height * height_axis,
+            center + half_open * open_axis - half_height * height_axis,
+            center + half_open * open_axis + half_height * height_axis,
+            center - half_open * open_axis + half_height * height_axis,
+        ],
+        axis=0,
+    ).astype(np.float32)
+
+
+def project_pose_to_grasp_annotation_2d(
+    guidance_pose,
+    camera_info: Dict[str, np.ndarray],
+    gripper_width: Optional[float] = None,
+    grasp_height: float = DEFAULT_GRASP_HEIGHT_M,
+) -> Optional[Dict[str, np.ndarray]]:
+    pose_np = _pose_to_numpy(guidance_pose)
+    if pose_np is None:
+        return None
+
+    corners_3d = _build_grasp_rect_points_3d(
+        pose_np,
+        gripper_width=gripper_width,
+        grasp_height=grasp_height,
+    )
+    if corners_3d is None:
+        return None
+
+    image_size = camera_info["image_size"]
+    corners_2d = _project_points_sim_local_to_image(
+        corners_3d,
+        camera_info["intrinsics"],
+        camera_info["sim_local_to_camera"],
+        int(image_size[0]),
+        int(image_size[1]),
+    )
+    if corners_2d is None:
+        return None
+
+    center_2d = project_3d_to_2d(pose_np[:3, 3], camera_info)
+    if center_2d is None:
+        return None
+
+    return {
+        "style": "grasp_rect",
+        "center": center_2d.astype(np.float32),
+        "corners": corners_2d.astype(np.float32),
+    }
 
 
 def _build_camera_info(
@@ -340,6 +452,8 @@ class SkillAnnotator:
     furniture_name: str
     previous_skill: Optional[str] = None
     previous_guidance_point_robot: Optional[np.ndarray] = None
+    previous_guidance_pose_robot: Optional[np.ndarray] = None
+    previous_guidance_gripper_width: Optional[float] = None
     previous_skill_state: Optional[str] = None
     previous_assembly_step: Optional[str] = None
     verifier: Optional[object] = None  # SkillAnnotationVerifier or None
@@ -357,6 +471,8 @@ class SkillAnnotator:
         self.assemble_idx = 0
         self.previous_skill = None
         self.previous_guidance_point_robot = None
+        self.previous_guidance_pose_robot = None
+        self.previous_guidance_gripper_width = None
         self.previous_skill_state = None
         self.previous_assembly_step = None
         if self.verifier is not None:
@@ -463,7 +579,15 @@ class SkillAnnotator:
             )
         skill = part.get_skill_label()
         guidance_point_robot = part.get_guidance_point()
-        return skill_state, skill, guidance_point_robot
+        guidance_pose_robot = part.get_guidance_pose()
+        guidance_gripper_width = part.get_guidance_gripper_width()
+        return (
+            skill_state,
+            skill,
+            guidance_point_robot,
+            guidance_pose_robot,
+            guidance_gripper_width,
+        )
 
     def _update_operated_part(self, part, annotation_inputs, assemble_to_name, assembled):
         skill_state = part.update_skill_state(
@@ -484,7 +608,15 @@ class SkillAnnotator:
         )
         skill = part.get_skill_label()
         guidance_point_robot = part.get_guidance_point()
-        return skill_state, skill, guidance_point_robot
+        guidance_pose_robot = part.get_guidance_pose()
+        guidance_gripper_width = part.get_guidance_gripper_width()
+        return (
+            skill_state,
+            skill,
+            guidance_point_robot,
+            guidance_pose_robot,
+            guidance_gripper_width,
+        )
 
     def _reset_next_pair(self, pair_idx):
         if pair_idx >= len(self.furniture.should_be_assembled):
@@ -524,7 +656,10 @@ class SkillAnnotator:
                 "skill_state": None,
                 "assembly_step": None,
                 "guidance_point": None,
+                "guidance_pose": None,
+                "guidance_gripper_width": None,
                 "guidance_point_2d": {},
+                "grasp_annotation_2d": {},
                 "camera_info": {},
             }
 
@@ -548,7 +683,10 @@ class SkillAnnotator:
                 "skill_state": self.previous_skill_state,
                 "assembly_step": self.previous_assembly_step,
                 "guidance_point": self.previous_guidance_point_robot,
+                "guidance_pose": self.previous_guidance_pose_robot,
+                "guidance_gripper_width": self.previous_guidance_gripper_width,
                 "guidance_point_2d": {},
+                "grasp_annotation_2d": {},
                 "camera_info": camera_info,
                 "verify": None,
                 "debug": {},
@@ -563,6 +701,8 @@ class SkillAnnotator:
         skill = None
         skill_state_label = None
         guidance_point_robot = None
+        guidance_pose_robot = None
+        guidance_gripper_width = None
         debug_info = {
             "assemble_idx": self.assemble_idx,
             "active_part": None,
@@ -575,9 +715,13 @@ class SkillAnnotator:
             and getattr(part1, "skill_state", None) != "done"
         )
         if part1_phase_active:
-            skill_state, skill, guidance_point_robot = self._update_part1_skill_state(
-                part1, annotation_inputs
-            )
+            (
+                skill_state,
+                skill,
+                guidance_point_robot,
+                guidance_pose_robot,
+                guidance_gripper_width,
+            ) = self._update_part1_skill_state(part1, annotation_inputs)
             skill_state_label = self._skill_state_label(part1.name, part2.name, skill)
             if skill_state == "done":
                 part1.pre_assemble_done = True
@@ -589,7 +733,13 @@ class SkillAnnotator:
             getattr(part1, "skill_state", None) == "done"
         )
         if part1_phase_complete:
-            skill_state, skill, guidance_point_robot = self._update_operated_part(
+            (
+                skill_state,
+                skill,
+                guidance_point_robot,
+                guidance_pose_robot,
+                guidance_gripper_width,
+            ) = self._update_operated_part(
                 part2,
                 annotation_inputs,
                 assemble_to_name=part1.name,
@@ -611,12 +761,17 @@ class SkillAnnotator:
             skill_state_label = self.previous_skill_state
             assembly_step = self.previous_assembly_step
             guidance_point_robot = self.previous_guidance_point_robot
+            guidance_pose_robot = self.previous_guidance_pose_robot
+            guidance_gripper_width = self.previous_guidance_gripper_width
         else:
             self.previous_skill = skill
             self.previous_skill_state = skill_state_label
             self.previous_assembly_step = assembly_step
             if guidance_point_robot is not None:
                 self.previous_guidance_point_robot = _to_numpy(guidance_point_robot).astype(np.float32)
+            if guidance_pose_robot is not None:
+                self.previous_guidance_pose_robot = _pose_to_numpy(guidance_pose_robot)
+            self.previous_guidance_gripper_width = guidance_gripper_width
 
         guidance_point = None
         if guidance_point_robot is not None:
@@ -624,6 +779,13 @@ class SkillAnnotator:
                 _to_numpy(guidance_point_robot).astype(np.float32)
                 + _to_numpy(annotation_inputs["base_pos"]).astype(np.float32)
             )
+
+        guidance_pose = None
+        if guidance_pose_robot is not None:
+            guidance_pose = _pose_to_numpy(guidance_pose_robot)
+            if guidance_pose is not None:
+                guidance_pose = guidance_pose.copy()
+                guidance_pose[:3, 3] += _to_numpy(annotation_inputs["base_pos"]).astype(np.float32)
 
         # --- consistency verification (delegated) ---
         verify_result = None
@@ -641,6 +803,7 @@ class SkillAnnotator:
             )
 
         guidance_point_2d = {}
+        grasp_annotation_2d = {}
         if guidance_point is not None:
             for image_key, cam in camera_info.items():
                 uv = project_3d_to_2d(guidance_point, cam)
@@ -648,13 +811,26 @@ class SkillAnnotator:
         else:
             for image_key in camera_info.keys():
                 guidance_point_2d[image_key] = None
+        if guidance_pose is not None:
+            for image_key, cam in camera_info.items():
+                grasp_annotation_2d[image_key] = project_pose_to_grasp_annotation_2d(
+                    guidance_pose,
+                    cam,
+                    gripper_width=guidance_gripper_width,
+                )
+        else:
+            for image_key in camera_info.keys():
+                grasp_annotation_2d[image_key] = None
 
         return {
             "skill": skill,
             "skill_state": skill_state_label,
             "assembly_step": assembly_step,
             "guidance_point": guidance_point,
+            "guidance_pose": guidance_pose,
+            "guidance_gripper_width": guidance_gripper_width,
             "guidance_point_2d": guidance_point_2d,
+            "grasp_annotation_2d": grasp_annotation_2d,
             "camera_info": camera_info,
             "debug": debug_info,
             "verify": verify_result,
@@ -717,7 +893,10 @@ def get_annotation_bundle_for_env(
             "skill_state": None,
             "assembly_step": None,
             "guidance_point": None,
+            "guidance_pose": None,
+            "guidance_gripper_width": None,
             "guidance_point_2d": {},
+            "grasp_annotation_2d": {},
             "camera_info": {},
             "debug": {},
             "verify": None,
@@ -896,3 +1075,56 @@ def draw_guidance_point_on_image(
     if center[0] < 0 or center[0] >= width or center[1] < 0 or center[1] >= height:
         return annotated
     return _draw_point(annotated, center)
+
+
+def draw_grasp_annotation_on_image(
+    image: np.ndarray,
+    grasp_annotation_2d,
+    skill: Optional[str] = None,
+    use_skill_color: bool = False,
+) -> np.ndarray:
+    if not grasp_annotation_2d or grasp_annotation_2d.get("style") != "grasp_rect":
+        return image
+
+    corners = _to_numpy(grasp_annotation_2d.get("corners"))
+    center = _to_numpy(grasp_annotation_2d.get("center"))
+    if corners is None or center is None or corners.shape != (4, 2):
+        return image
+
+    # Default palette: stable geometry-centric colors.
+    main_a_color = (255, 0, 0)    # pure blue in BGR
+    main_b_color = (0, 0, 255)    # pure red in BGR
+    side_a_color = (0, 255, 255)  # yellow in BGR
+    side_b_color = (0, 255, 0)    # green in BGR
+    if use_skill_color and skill in GRASP_COLOR_GROUP_A:
+        # Pick/screw family.
+        main_a_color = (255, 0, 0)    # blue
+        main_b_color = (0, 255, 0)    # green
+        side_a_color = (0, 0, 255)    # red
+        side_b_color = (255, 255, 0)  # cyan
+    elif use_skill_color and skill in GRASP_COLOR_GROUP_B:
+        # Place/push/insert family.
+        main_a_color = (255, 0, 0)    # blue
+        main_b_color = (0, 0, 255)    # red
+        side_a_color = (0, 255, 0)    # green
+        side_b_color = (0, 255, 255)  # yellow
+    pts = np.round(corners).astype(np.int32)
+    center = np.round(center).astype(np.int32)
+
+    def _draw_rect(frame: np.ndarray) -> np.ndarray:
+        overlay = frame.copy()
+        cv2.line(overlay, tuple(pts[0]), tuple(pts[1]), main_a_color, 2, cv2.LINE_AA)
+        cv2.line(overlay, tuple(pts[2]), tuple(pts[3]), main_b_color, 2, cv2.LINE_AA)
+        cv2.line(overlay, tuple(pts[1]), tuple(pts[2]), side_b_color, 1, cv2.LINE_AA)
+        cv2.line(overlay, tuple(pts[3]), tuple(pts[0]), side_a_color, 1, cv2.LINE_AA)
+        cv2.circle(overlay, tuple(center), 2, (255, 255, 255), thickness=-1, lineType=cv2.LINE_AA)
+        return overlay
+
+    if image.ndim == 4:
+        if image.shape[0] != 1:
+            return image
+        annotated = image.copy()
+        annotated[0] = _draw_rect(annotated[0])
+        return annotated
+
+    return _draw_rect(image.copy())

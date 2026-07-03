@@ -34,6 +34,7 @@ import zarr
 from datetime import datetime
 
 from src.eval.skill_annotation_util import (
+    draw_grasp_annotation_on_image,
     draw_guidance_point_on_image,
     draw_skill_on_image,
     get_annotation_bundle_all_envs,
@@ -77,7 +78,10 @@ RolloutSaveValues = collections.namedtuple(
         "skill_states",
         "assembly_steps",
         "guidance_points",
+        "guidance_poses",
+        "guidance_gripper_widths",
         "guidance_points_2d",
+        "grasp_annotations_2d",
         "camera_infos",
     ],
 )
@@ -191,6 +195,64 @@ def _resize_guidance_point_for_image(
     return uv.astype(np.float32)
 
 
+def _resize_grasp_annotation_for_image(
+    grasp_annotation_2d,
+    bundle,
+    image_key: str,
+    image_shape,
+):
+    if not grasp_annotation_2d:
+        return None
+
+    camera_info = bundle.get("camera_info", {}).get(image_key)
+    if not camera_info:
+        return grasp_annotation_2d
+
+    source_width, source_height = [int(v) for v in camera_info["image_size"]]
+    target_height, target_width = image_shape[:2]
+    if source_width == target_width and source_height == target_height:
+        return grasp_annotation_2d
+
+    corners = np.asarray(grasp_annotation_2d.get("corners"), dtype=np.float32)
+    center = np.asarray(grasp_annotation_2d.get("center"), dtype=np.float32)
+
+    def _resize_points(points: np.ndarray) -> Optional[np.ndarray]:
+        pts = points.copy()
+        if image_key == "color_image1":
+            sx = target_width / max(source_width, 1)
+            sy = target_height / max(source_height, 1)
+            pts[:, 0] *= sx
+            pts[:, 1] *= sy
+        elif image_key == "color_image2":
+            aspect_ratio = source_width / max(source_height, 1)
+            resized_width = int(target_height * aspect_ratio)
+            crop_size = max(0, (resized_width - target_width) // 2)
+            sx = resized_width / max(source_width, 1)
+            sy = target_height / max(source_height, 1)
+            pts[:, 0] = pts[:, 0] * sx - crop_size
+            pts[:, 1] *= sy
+        else:
+            return points
+
+        if np.any(pts[:, 0] < 0) or np.any(pts[:, 0] >= target_width):
+            return None
+        if np.any(pts[:, 1] < 0) or np.any(pts[:, 1] >= target_height):
+            return None
+        return pts.astype(np.float32)
+
+    resized_corners = _resize_points(corners)
+    if resized_corners is None:
+        return None
+    resized_center = _resize_points(center[None, :])
+    if resized_center is None:
+        return None
+
+    resized = dict(grasp_annotation_2d)
+    resized["corners"] = resized_corners
+    resized["center"] = resized_center[0]
+    return resized
+
+
 def _draw_guidance_points_for_all_envs(
     video_obs, annotation_bundles, annotate_wrist_camera: bool,
     guidance_point_colored: bool = False,
@@ -212,10 +274,89 @@ def _draw_guidance_points_for_all_envs(
                 annotated_batch[env_idx].shape,
             )
             annotated_batch[env_idx] = draw_guidance_point_on_image(
-                annotated_batch[env_idx], guidance,
+                annotated_batch[env_idx],
+                guidance,
                 skill=bundle.get("skill"),
                 use_skill_color=guidance_point_colored,
             )
+        video_obs[image_key] = torch.from_numpy(annotated_batch).to(video_obs[image_key].device)
+
+
+def _draw_grasp_annotations_for_all_envs(
+    video_obs, annotation_bundles, annotate_wrist_camera: bool,
+    grasp_annotation_colored: bool = False,
+):
+    image_keys = ["color_image2"]
+    if annotate_wrist_camera:
+        image_keys.append("color_image1")
+
+    for image_key in image_keys:
+        if image_key not in video_obs:
+            continue
+        image_batch = video_obs[image_key].cpu().numpy()
+        annotated_batch = image_batch.copy()
+        for env_idx, bundle in enumerate(annotation_bundles):
+            grasp_annotation = _resize_grasp_annotation_for_image(
+                bundle.get("grasp_annotation_2d", {}).get(image_key),
+                bundle,
+                image_key,
+                annotated_batch[env_idx].shape,
+            )
+            annotated_batch[env_idx] = draw_grasp_annotation_on_image(
+                annotated_batch[env_idx],
+                grasp_annotation,
+                skill=bundle.get("skill"),
+                use_skill_color=grasp_annotation_colored,
+            )
+        video_obs[image_key] = torch.from_numpy(annotated_batch).to(video_obs[image_key].device)
+
+
+def _draw_grasp_part_annotations_for_all_envs(
+    video_obs,
+    annotation_bundles,
+    annotate_wrist_camera: bool,
+    guidance_point_colored: bool = False,
+    grasp_annotation_colored: bool = False,
+):
+    image_keys = ["color_image2"]
+    if annotate_wrist_camera:
+        image_keys.append("color_image1")
+
+    grasp_skills = {"pick", "place"}
+    for image_key in image_keys:
+        if image_key not in video_obs:
+            continue
+        image_batch = video_obs[image_key].cpu().numpy()
+        annotated_batch = image_batch.copy()
+        for env_idx, bundle in enumerate(annotation_bundles):
+            skill = bundle.get("skill")
+            frame = annotated_batch[env_idx]
+            if skill in grasp_skills:
+                grasp_annotation = _resize_grasp_annotation_for_image(
+                    bundle.get("grasp_annotation_2d", {}).get(image_key),
+                    bundle,
+                    image_key,
+                    frame.shape,
+                )
+                annotated_batch[env_idx] = draw_grasp_annotation_on_image(
+                    frame,
+                    grasp_annotation,
+                    skill=skill,
+                    use_skill_color=grasp_annotation_colored,
+                )
+            else:
+                guidance = _resize_guidance_point_for_image(
+                    bundle.get("guidance_point_2d", {}).get(image_key),
+                    bundle,
+                    image_key,
+                    frame.shape,
+                )
+                annotated_batch[env_idx] = draw_guidance_point_on_image(
+                    frame,
+                    guidance,
+                    skill=skill,
+                    use_skill_color=guidance_point_colored,
+                )
         video_obs[image_key] = torch.from_numpy(annotated_batch).to(video_obs[image_key].device)
 
 
@@ -418,7 +559,10 @@ def rollout(
     annotate_skill: bool = False,
     annotate_guidance_point: bool = False,
     guidance_point_on_image: bool = False,
+    grasp_annotation_on_image: bool = False,
+    grasp_part_annotate: bool = False,
     guidance_point_colored: bool = False,
+    grasp_annotation_colored: bool = False,
     model_guidance_point_colored: bool = False,
     skill_on_image: bool = False,
     annotate_wrist_camera: bool = False,
@@ -444,6 +588,9 @@ def rollout(
     collect_skill_annotations = (
         annotate_skill
         or annotate_guidance_point
+        or guidance_point_on_image
+        or grasp_annotation_on_image
+        or grasp_part_annotate
         or provide_skill_input
         or collect_skill_stats
         or (
@@ -472,8 +619,15 @@ def rollout(
     initial_skill_states = [bundle.get("skill_state") for bundle in initial_annotations]
     initial_assembly_steps = [bundle.get("assembly_step") for bundle in initial_annotations]
     initial_guidance_points = [bundle.get("guidance_point") for bundle in initial_annotations]
+    initial_guidance_poses = [bundle.get("guidance_pose") for bundle in initial_annotations]
+    initial_guidance_gripper_widths = [
+        bundle.get("guidance_gripper_width") for bundle in initial_annotations
+    ]
     initial_guidance_points_2d = [
         bundle.get("guidance_point_2d", {}) for bundle in initial_annotations
+    ]
+    initial_grasp_annotations_2d = [
+        bundle.get("grasp_annotation_2d", {}) for bundle in initial_annotations
     ]
     for env_idx, skill in enumerate(initial_skills):
         if skill is not None:
@@ -501,10 +655,23 @@ def rollout(
         resize_depth(video_obs, "depth_image1")
         resize_crop_depth(video_obs, "depth_image2")
 
-    if annotate_guidance_point or guidance_point_on_image:
+    if grasp_part_annotate:
+        _draw_grasp_part_annotations_for_all_envs(
+            video_obs,
+            initial_annotations,
+            annotate_wrist_camera=annotate_wrist_camera,
+            guidance_point_colored=guidance_point_colored,
+            grasp_annotation_colored=grasp_annotation_colored,
+        )
+    elif guidance_point_on_image:
         _draw_guidance_points_for_all_envs(
             video_obs, initial_annotations, annotate_wrist_camera=annotate_wrist_camera,
             guidance_point_colored=guidance_point_colored,
+        )
+    if not grasp_part_annotate and grasp_annotation_on_image:
+        _draw_grasp_annotations_for_all_envs(
+            video_obs, initial_annotations, annotate_wrist_camera=annotate_wrist_camera,
+            grasp_annotation_colored=grasp_annotation_colored,
         )
 
     # save initial visualization and rewards
@@ -518,7 +685,10 @@ def rollout(
     skill_states = [initial_skill_states]
     assembly_steps = [initial_assembly_steps]
     guidance_points = [initial_guidance_points]
+    guidance_poses = [initial_guidance_poses]
+    guidance_gripper_widths = [initial_guidance_gripper_widths]
     guidance_points_2d = [initial_guidance_points_2d]
+    grasp_annotations_2d = [initial_grasp_annotations_2d]
     camera_infos = [[bundle.get("camera_info", {}) for bundle in initial_annotations]]
     active_skill_states = initial_skill_states
 
@@ -640,8 +810,15 @@ def rollout(
         current_skill_states = [bundle.get("skill_state") for bundle in current_annotations]
         current_assembly_steps = [bundle.get("assembly_step") for bundle in current_annotations]
         current_guidance_points = [bundle.get("guidance_point") for bundle in current_annotations]
+        current_guidance_poses = [bundle.get("guidance_pose") for bundle in current_annotations]
+        current_guidance_gripper_widths = [
+            bundle.get("guidance_gripper_width") for bundle in current_annotations
+        ]
         current_guidance_points_2d = [
             bundle.get("guidance_point_2d", {}) for bundle in current_annotations
+        ]
+        current_grasp_annotations_2d = [
+            bundle.get("grasp_annotation_2d", {}) for bundle in current_annotations
         ]
         for env_idx, skill in enumerate(current_skills):
             if skill is not None:
@@ -674,10 +851,23 @@ def rollout(
             resize_depth(video_obs, "depth_image1")
             resize_crop_depth(video_obs, "depth_image2")
 
-        if annotate_guidance_point or guidance_point_on_image:
+        if grasp_part_annotate:
+            _draw_grasp_part_annotations_for_all_envs(
+                video_obs,
+                current_annotations,
+                annotate_wrist_camera=annotate_wrist_camera,
+                guidance_point_colored=guidance_point_colored,
+                grasp_annotation_colored=grasp_annotation_colored,
+            )
+        elif guidance_point_on_image:
             _draw_guidance_points_for_all_envs(
                 video_obs, current_annotations, annotate_wrist_camera=annotate_wrist_camera,
                 guidance_point_colored=guidance_point_colored,
+            )
+        if not grasp_part_annotate and grasp_annotation_on_image:
+            _draw_grasp_annotations_for_all_envs(
+                video_obs, current_annotations, annotate_wrist_camera=annotate_wrist_camera,
+                grasp_annotation_colored=grasp_annotation_colored,
             )
 
         skills.append(current_skills)
@@ -701,7 +891,10 @@ def rollout(
             actions.append(action_pred.cpu())
             parts_poses.append(video_obs["parts_poses"].cpu())
             guidance_points.append(current_guidance_points)
+            guidance_poses.append(current_guidance_poses)
+            guidance_gripper_widths.append(current_guidance_gripper_widths)
             guidance_points_2d.append(current_guidance_points_2d)
+            grasp_annotations_2d.append(current_grasp_annotations_2d)
             camera_infos.append([bundle.get("camera_info", {}) for bundle in current_annotations])
 
             # Collect point clouds at each step
@@ -758,8 +951,15 @@ def rollout(
     skill_states_per_env = _transpose_step_env_annotations(skill_states, env.num_envs)
     assembly_steps_per_env = _transpose_step_env_annotations(assembly_steps, env.num_envs)
     guidance_points_per_env = _transpose_step_env_annotations(guidance_points, env.num_envs)
+    guidance_poses_per_env = _transpose_step_env_annotations(guidance_poses, env.num_envs)
+    guidance_gripper_widths_per_env = _transpose_step_env_annotations(
+        guidance_gripper_widths, env.num_envs
+    )
     guidance_points_2d_per_env = _transpose_step_env_annotations(
         guidance_points_2d, env.num_envs
+    )
+    grasp_annotations_2d_per_env = _transpose_step_env_annotations(
+        grasp_annotations_2d, env.num_envs
     )
     camera_infos_per_env = _transpose_step_env_annotations(camera_infos, env.num_envs)
 
@@ -781,7 +981,10 @@ def rollout(
         skill_states_per_env,
         assembly_steps_per_env,
         guidance_points_per_env,
+        guidance_poses_per_env,
+        guidance_gripper_widths_per_env,
         guidance_points_2d_per_env,
+        grasp_annotations_2d_per_env,
         camera_infos_per_env,
     )
 
@@ -809,7 +1012,10 @@ def calculate_success_rate(
     annotate_skill: bool = False,
     annotate_guidance_point: bool = False,
     guidance_point_on_image: bool = False,
+    grasp_annotation_on_image: bool = False,
+    grasp_part_annotate: bool = False,
     guidance_point_colored: bool = False,
+    grasp_annotation_colored: bool = False,
     model_guidance_point_colored: bool = False,
     skill_on_image: bool = False,
     annotate_wrist_camera: bool = False,
@@ -894,7 +1100,10 @@ def calculate_success_rate(
             annotate_skill=annotate_skill,
             annotate_guidance_point=annotate_guidance_point,
             guidance_point_on_image=guidance_point_on_image,
+            grasp_annotation_on_image=grasp_annotation_on_image,
+            grasp_part_annotate=grasp_part_annotate,
             guidance_point_colored=guidance_point_colored,
+            grasp_annotation_colored=grasp_annotation_colored,
             model_guidance_point_colored=model_guidance_point_colored,
             skill_on_image=skill_on_image,
             annotate_wrist_camera=annotate_wrist_camera,
@@ -945,9 +1154,24 @@ def calculate_success_rate(
                     if rollout_data.guidance_points
                     else []
                 )
+                guidance_poses = (
+                    rollout_data.guidance_poses[env_idx]
+                    if rollout_data.guidance_poses
+                    else []
+                )
+                guidance_gripper_widths = (
+                    rollout_data.guidance_gripper_widths[env_idx]
+                    if rollout_data.guidance_gripper_widths
+                    else []
+                )
                 guidance_points_2d = (
                     rollout_data.guidance_points_2d[env_idx]
                     if rollout_data.guidance_points_2d
+                    else []
+                )
+                grasp_annotations_2d = (
+                    rollout_data.grasp_annotations_2d[env_idx]
+                    if rollout_data.grasp_annotations_2d
                     else []
                 )
                 camera_infos = (
@@ -1048,7 +1272,10 @@ def calculate_success_rate(
                         parts_poses=parts_poses[trim_start_steps : n_steps + 1],
                         skills=skills[trim_start_steps : n_steps + 1],
                         guidance_points=guidance_points[trim_start_steps : n_steps + 1],
+                        guidance_poses=guidance_poses[trim_start_steps : n_steps + 1],
+                        guidance_gripper_widths=guidance_gripper_widths[trim_start_steps : n_steps + 1],
                         guidance_points_2d=guidance_points_2d[trim_start_steps : n_steps + 1],
+                        grasp_annotations_2d=grasp_annotations_2d[trim_start_steps : n_steps + 1],
                         camera_infos=camera_infos[trim_start_steps : n_steps + 1],
                         actions=actions[trim_start_steps:n_steps],
                         rewards=rewards[trim_start_steps:n_steps],
@@ -1128,7 +1355,10 @@ def do_rollout_evaluation(
     best_success_rate: float,
     epoch_idx: int,
     guidance_point_on_image: bool = False,
+    grasp_annotation_on_image: bool = False,
+    grasp_part_annotate: bool = False,
     guidance_point_colored: bool = False,
+    grasp_annotation_colored: bool = False,
 ) -> float:
     rollout_task = config.rollout.get("task", config.task)
     rollout_randomness = config.rollout.get("randomness", config.randomness)
@@ -1162,7 +1392,10 @@ def do_rollout_evaluation(
         provide_skill_input=provide_skill_input,
         collect_skill_stats=True,
         guidance_point_on_image=guidance_point_on_image,
+        grasp_annotation_on_image=grasp_annotation_on_image,
+        grasp_part_annotate=grasp_part_annotate,
         guidance_point_colored=guidance_point_colored,
+        grasp_annotation_colored=grasp_annotation_colored,
         model_guidance_point_colored=model_guidance_point_colored,
     )
     success_rate = rollout_stats.success_rate

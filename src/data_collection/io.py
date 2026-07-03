@@ -47,7 +47,10 @@ def save_raw_rollout(
     depth_image2: np.ndarray,
     skills: List[str],
     guidance_points: List[np.ndarray],
+    guidance_poses: List[np.ndarray],
+    guidance_gripper_widths: List[float],
     guidance_points_2d: List[dict],
+    grasp_annotations_2d: List[dict],
     camera_infos: List[dict],
     actions: np.ndarray,
     rewards: np.ndarray,
@@ -73,12 +76,18 @@ def save_raw_rollout(
         skills = [None] * len(robot_states)
     if guidance_points is None:
         guidance_points = [None] * len(robot_states)
+    if guidance_poses is None:
+        guidance_poses = [None] * len(robot_states)
+    if guidance_gripper_widths is None:
+        guidance_gripper_widths = [None] * len(robot_states)
     if guidance_points_2d is None:
         guidance_points_2d = [None] * len(robot_states)
+    if grasp_annotations_2d is None:
+        grasp_annotations_2d = [None] * len(robot_states)
     if camera_infos is None:
         camera_infos = [None] * len(robot_states)
 
-    for robot_state, image1, image2, depth1, depth2, parts_pose, pc, skill, guidance_point, guidance_point_2d in zip(
+    for robot_state, image1, image2, depth1, depth2, parts_pose, pc, skill, guidance_point, guidance_pose, guidance_gripper_width, guidance_point_2d, grasp_annotation_2d in zip(
         robot_states,
         imgs1,
         imgs2,
@@ -88,7 +97,10 @@ def save_raw_rollout(
         pcs,
         skills,
         guidance_points,
+        guidance_poses,
+        guidance_gripper_widths,
         guidance_points_2d,
+        grasp_annotations_2d,
     ):
         observations.append(
             {
@@ -101,7 +113,10 @@ def save_raw_rollout(
                 "point_cloud": pc,
                 "skill": skill,
                 "guidance_point": guidance_point,
+                "guidance_pose": guidance_pose,
+                "guidance_gripper_width": guidance_gripper_width,
                 "guidance_point_2d": guidance_point_2d,
+                "grasp_annotation_2d": grasp_annotation_2d,
             }
         )
 
