@@ -45,6 +45,66 @@ def model_uses_guidance_point_colored(cfg: DictConfig) -> bool:
     return False if colored_flag is None else colored_flag
 
 
+def model_uses_grasp(cfg: DictConfig) -> bool:
+    grasp_flag = _config_data_flag(cfg, "annotate_grasp")
+    return False if grasp_flag is None else grasp_flag
+
+
+def model_uses_grasp_colored(cfg: DictConfig) -> bool:
+    colored_flag = _config_data_flag(cfg, "annotate_grasp_colored")
+    return False if colored_flag is None else colored_flag
+
+
+def model_uses_grasp_part(cfg: DictConfig) -> bool:
+    grasp_part_flag = _config_data_flag(cfg, "annotate_grasp_part")
+    return False if grasp_part_flag is None else grasp_part_flag
+
+
+def validate_annotation_config(cfg: DictConfig):
+    observation_type = cfg.get("observation_type", None)
+    uses_guidance_point = model_uses_guidance_point(cfg)
+    uses_guidance_point_colored = model_uses_guidance_point_colored(cfg)
+    uses_grasp = model_uses_grasp(cfg)
+    uses_grasp_colored = model_uses_grasp_colored(cfg)
+    uses_grasp_part = model_uses_grasp_part(cfg)
+
+    if uses_grasp and uses_grasp_part:
+        raise ValueError(
+            "data.annotate_grasp and data.annotate_grasp_part cannot both be true."
+        )
+    if uses_grasp_colored and not (uses_grasp or uses_grasp_part):
+        raise ValueError(
+            "data.annotate_grasp_colored=true requires data.annotate_grasp=true "
+            "or data.annotate_grasp_part=true."
+        )
+    if uses_guidance_point_colored and not (uses_guidance_point or uses_grasp_part):
+        raise ValueError(
+            "data.annotate_guidance_point_colored=true requires "
+            "data.annotate_guidance_point=true or data.annotate_grasp_part=true."
+        )
+    if uses_grasp_part and uses_guidance_point_colored != uses_grasp_colored:
+        raise ValueError(
+            "data.annotate_grasp_part=true requires "
+            "data.annotate_guidance_point_colored and "
+            "data.annotate_grasp_colored to match."
+        )
+
+    visual_annotation_enabled = any(
+        (
+            uses_guidance_point,
+            uses_guidance_point_colored,
+            uses_grasp,
+            uses_grasp_colored,
+            uses_grasp_part,
+        )
+    )
+    if visual_annotation_enabled and observation_type not in {"image", "rgbd", None}:
+        raise ValueError(
+            "Guidance/grasp annotation configs are only supported for image/rgbd "
+            f"observations, got observation_type={observation_type}."
+        )
+
+
 def model_requires_skill_input(cfg: DictConfig) -> bool:
     skill_flag = _config_data_flag(cfg, "annotate_skill_one_hot")
     if skill_flag is not None:

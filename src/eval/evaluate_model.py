@@ -22,7 +22,15 @@ from gymnasium import Env
 import torch  # needs to be after isaac gym imports
 from omegaconf import DictConfig, OmegaConf
 from src.behavior.base import Actor  # noqa
-from src.behavior.base import model_requires_skill_input, model_uses_guidance_point, model_uses_guidance_point_colored
+from src.behavior.base import (
+    model_requires_skill_input,
+    model_uses_grasp,
+    model_uses_grasp_colored,
+    model_uses_grasp_part,
+    model_uses_guidance_point,
+    model_uses_guidance_point_colored,
+    validate_annotation_config,
+)
 from src.behavior.diffusion import DiffusionPolicy  # noqa
 from src.eval.rollout import calculate_success_rate
 from src.behavior import get_actor
@@ -150,6 +158,18 @@ def validate_args(args: argparse.Namespace):
     ), (
         "--grasp-part-annotate cannot be combined with "
         "--guidance-point-on-image or --grasp-annotation-on-image"
+    )
+    assert not args.guidance_point_colored or (
+        args.guidance_point_on_image or args.grasp_part_annotate
+    ), (
+        "--guidance-point-colored requires --guidance-point-on-image "
+        "or --grasp-part-annotate"
+    )
+    assert not args.grasp_annotation_colored or (
+        args.grasp_annotation_on_image or args.grasp_part_annotate
+    ), (
+        "--grasp-annotation-colored requires --grasp-annotation-on-image "
+        "or --grasp-part-annotate"
     )
     assert not args.enable_annotation_verify or args.annotate_skill, (
         "--enable-annotation-verify requires --annotate-skill"
@@ -798,6 +818,7 @@ if __name__ == "__main__":
 
                 cfg = OmegaConf.create(run.config)
                 assert cfg.control.control_mode == args.action_type
+                validate_annotation_config(cfg)
 
                 print(OmegaConf.to_yaml(cfg))
 
@@ -818,12 +839,23 @@ if __name__ == "__main__":
                 requires_skill_input = model_requires_skill_input(cfg)
                 uses_guidance_point = model_uses_guidance_point(cfg)
                 uses_guidance_point_colored = model_uses_guidance_point_colored(cfg)
+                uses_grasp = model_uses_grasp(cfg)
+                uses_grasp_colored = model_uses_grasp_colored(cfg)
+                uses_grasp_part = model_uses_grasp_part(cfg)
                 actor_name = cfg.actor_name if "actor_name" in cfg else cfg.actor.name
                 print(
                     "Skill input requirement: "
                     f"{requires_skill_input} "
                     f"(observation_type={cfg.observation_type}, "
                     f"actor={actor_name}, skill_dim={cfg.get('skill_dim', None)})"
+                )
+                print(
+                    "Annotation config: "
+                    f"guidance_point={uses_guidance_point} "
+                    f"guidance_point_colored={uses_guidance_point_colored} "
+                    f"grasp={uses_grasp} "
+                    f"grasp_colored={uses_grasp_colored} "
+                    f"grasp_part={uses_grasp_part}"
                 )
                 if args.action_horizon is not None:
                     cfg.actor.action_horizon = args.action_horizon

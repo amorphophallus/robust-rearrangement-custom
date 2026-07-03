@@ -1,19 +1,31 @@
 # 批量 Eval 实验操作手册
 
-## 1. 实验名称与超参对照表
+## 1. 实验名称、数据集 Suffix 与 Eval 超参对照表
 
 **每个实验的差异参数**：
 
-| # | 实验 | RUN_ID | ANNOTATE_SKILL | GP_ON_IMAGE | SKILL_ON_IMAGE | GP_COLORED |
-|---|------|--------|:---:|:---:|:---:|:---:|
-| 1 | rgbd+only skill | | true | false | true | false |
-| 2 | rgbd |  | true | false | true | false |
-| 3 | rgbd+colored GP |  | true | true | true | true |
-| 4 | rgbd+GP |  | true | true | true | false |
-| 5 | rgbd+GP+skill |  | true | true | true | false |
-| 6 | rgb |  | true | false | true | false |
+| # | 实验 | 数据集 suffix | RUN_ID | ANNOTATE_SKILL | GP_ON_IMAGE | GRASP_ON_IMAGE | GRASP_PART | GP_COLORED | GRASP_COLORED | SKILL_ON_IMAGE |
+|---|------|---------------|--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| 1 | rgbd | `rgbd` |  | true | false | false | false | false | false | true |
+| 2 | rgbd+GP | `rgbd-skill-point` |  | true | true | false | false | false | false | true |
+| 3 | rgbd+colored GP | `rgbd-skill-point-colored` |  | true | true | false | false | true | false | true |
+| 4 | rgbd+only skill | `rgbd-only-skill` |  | true | false | false | false | false | false | true |
+| 5 | rgbd+GP+skill | `rgbd-skill-point` |  | true | true | false | false | false | false | true |
+| 6 | rgb | `rgbd` |  | true | false | false | false | false | false | true |
+| 7 | rgbd+grasp-part | `rgbd-skill-grasp-part` |  | true | false | false | true | false | false | true |
+| 8 | rgbd+colored grasp-part | `rgbd-skill-grasp-part-colored` |  | true | false | false | true | true | true | true |
 
 RUN_ID 的对应要求用户输入。
+
+**rollout / 数据集 suffix 规则**：
+- `rgbd`：无 skill 元信息，无图像 annotation。
+- `rgbd-only-skill`：有 skill 元信息，不画 point / grasp。
+- `rgbd-skill-point`：有 skill 元信息，图像画 point。
+- `rgbd-skill-point-colored`：有 skill 元信息，图像画 colored point。
+- `rgbd-skill-grasp`：有 skill 元信息，图像画 grasp。
+- `rgbd-skill-grasp-colored`：有 skill 元信息，图像画 colored grasp。
+- `rgbd-skill-grasp-part`：`pick/place` 画 grasp，其余 skill 画 point。
+- `rgbd-skill-grasp-part-colored`：同上，但 point / grasp 都走 colored 模式。
 
 ## 2. auto_eval.sh 参数说明
 
@@ -24,8 +36,11 @@ RUN_ID 的对应要求用户输入。
 RUN_ID="xxx"                  # wandb run_name，决定下载哪个 checkpoint
 EVAL_ANNOTATE_SKILL=true/false       # 启用 skill 标注 (需 image obs)
 EVAL_GUIDANCE_POINT_ON_IMAGE=true/false  # guidance point 可视化
+EVAL_GRASP_ANNOTATION_ON_IMAGE=true/false  # 始终绘制 grasp rectangle
+EVAL_GRASP_PART_ANNOTATE=true/false  # pick/place 画 grasp，其余画 point
 EVAL_SKILL_ON_IMAGE=true/false       # skill 文字覆盖在 rollout 视频上
 EVAL_GUIDANCE_POINT_COLORED=true/false   # 按 skill 着色 guidance point
+EVAL_GRASP_ANNOTATION_COLORED=true/false # 按 skill 分组着色 grasp rectangle
 
 # 跳过下载直接用本地 checkpoint
 OVERWRITE_WT_PATH="/path/to/local.pt"   # 设置后自动跳过 download 步骤
@@ -42,6 +57,11 @@ EVAL flag 组合规则：
 - `SKILL_ON_IMAGE=true` → 需要 `ANNOTATE_SKILL=true`，在视频画面上叠加 skill 文字
 - `GUIDANCE_POINT_ON_IMAGE=true` → 在视频上画 guidance point 圆点
 - `GUIDANCE_POINT_COLORED=true` → guidance point 按 skill 颜色编码（pick=黄, place=红）
+- `GRASP_ANNOTATION_ON_IMAGE=true` → 在视频上画 grasp rectangle
+- `GRASP_ANNOTATION_COLORED=true` → grasp rectangle 按 skill 分组着色
+- `GRASP_PART_ANNOTATE=true` → `pick/place` 画 grasp，其他 skill 画 point
+- `GRASP_PART_ANNOTATE=true` 时，不能再同时开启 `GUIDANCE_POINT_ON_IMAGE` 或 `GRASP_ANNOTATION_ON_IMAGE`
+- `GRASP_PART_ANNOTATE=true` 且使用 colored 模式时，`GUIDANCE_POINT_COLORED` 与 `GRASP_ANNOTATION_COLORED` 必须同时开或同时关
 
 **注意**：
 - `--observation-space state` 时不支持 skill annotation（env 无 camera 属性）
@@ -75,6 +95,9 @@ sd = torch.load('/path/to/actor_chkpt_last.pt', map_location='cpu', weights_only
 cfg = sd.get('config', {}).get('data', {})
 print(f'GP={cfg.get(\"annotate_guidance_point\")}')
 print(f'colored={cfg.get(\"annotate_guidance_point_colored\")}')
+print(f'grasp={cfg.get(\"annotate_grasp\")}')
+print(f'grasp_colored={cfg.get(\"annotate_grasp_colored\")}')
+print(f'grasp_part={cfg.get(\"annotate_grasp_part\")}')
 print(f'skill={cfg.get(\"annotate_skill_one_hot\")}')
 print(f'suffix={cfg.get(\"suffix\")}')
 print(f'experiment={sd.get(\"config\",{}).get(\"experiment_module\",\"?\")}')
@@ -82,7 +105,7 @@ print(f'experiment={sd.get(\"config\",{}).get(\"experiment_module\",\"?\")}')
 ```
 
 **对照实验参数表**（§1），确认:
-- `annotate_guidance_point` / `annotate_skill_one_hot` / `annotate_guidance_point_colored` 与预期一致
+- `annotate_guidance_point` / `annotate_skill_one_hot` / `annotate_guidance_point_colored` / `annotate_grasp` / `annotate_grasp_colored` / `annotate_grasp_part` 与预期一致
 - `suffix` 与预期数据后缀一致
 - `experiment_module` 与预期模型架构一致
 
@@ -133,7 +156,13 @@ Claude Code 会自动：
 清理策略（每实验每 task 保留 10 个 pkl）：
 ```bash
 BASE="$HOME/projects/robust-rearrangement-custom/data/raw/diffik/sim"
-for suffix in rgbd-only-skill rgbd rgbd-skill-colored rgbd-skill; do
+for suffix in \
+    rgbd \
+    rgbd-only-skill \
+    rgbd-skill-point \
+    rgbd-skill-point-colored \
+    rgbd-skill-grasp-part \
+    rgbd-skill-grasp-part-colored; do
     for task in one_leg round_table lamp; do
         dir="$BASE/$task/rollout/low/$suffix"
         [ -d "$dir" ] || continue

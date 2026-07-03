@@ -2,7 +2,7 @@
 
 ## 1. 实验名称与超参对照表
 
-**共同固定参数** (所有 6 个实验):
+**共同固定参数** (所有 8 个实验):
 
 ```
 data.demo_source=rollout
@@ -25,30 +25,33 @@ data.ddp_shard_enabled=true
 
 **各实验差异参数**:
 
-| # | 实验 | GP | One-hot Skill | Colored GP | experiment | vision_encoder | 数据后缀 | 数据来源 |
-|---|------|:---:|:---:|:---:|------------|----------------|---------|---------|
-| 1 | rgbd | false | false | false | rgbd/dit | (none) | rgbd | 228/data, 230/data, 236/home, 243/home |
-| 2 | rgbd+GP | true | false | false | rgbd/dit | (none) | rgbd-skill | 251/data, 243/home |
-| 3 | rgbd+colored GP | true | false | true | rgbd/dit | (none) | rgbd-skill-colored | 240/data, 251/data, 230/data, 243/data, 236/home |
-| 4 | rgbd+only skill | false | true | false | rgbd/dit | (none) | rgbd-only-skill | 复用 rgbd（见下方说明） |
-| 5 | rgbd+GP+skill | true | true | false | rgbd/dit | (none) | rgbd-skill | 同 #2 |
-| 6 | rgb | false | false | false | image/dit | resnet, pretrained=false | rgbd | 同 #1 |
+| # | 实验 | `data.suffix` | `data.annotate_guidance_point` | `data.annotate_skill_one_hot` | `data.annotate_guidance_point_colored` | `data.annotate_grasp` | `data.annotate_grasp_colored` | `data.annotate_grasp_part` | `experiment` | `vision_encoder` | 数据来源 |
+|---|------|---------------|:---:|:---:|:---:|:---:|:---:|:---:|------------|----------------|---------|
+| 1 | rgbd | `rgbd` | false | false | false | false | false | false | `rgbd/dit` | (none) | 228/data, 230/data, 236/home, 243/home |
+| 2 | rgbd+GP | `rgbd-skill-point` | true | false | false | false | false | false | `rgbd/dit` | (none) | point 数据集 |
+| 3 | rgbd+colored GP | `rgbd-skill-point-colored` | true | false | true | false | false | false | `rgbd/dit` | (none) | colored point 数据集 |
+| 4 | rgbd+only skill | `rgbd-only-skill` | false | true | false | false | false | false | `rgbd/dit` | (none) | only-skill 数据集 |
+| 5 | rgbd+GP+skill | `rgbd-skill-point` | true | true | false | false | false | false | `rgbd/dit` | (none) | 同 #2 |
+| 6 | rgb | `rgbd` | false | false | false | false | false | false | `image/dit` | `resnet, pretrained=false` | 同 #1 |
+| 7 | rgbd+grasp-part | `rgbd-skill-grasp-part` | false | false | false | false | false | true | `rgbd/dit` | (none) | grasp-part 数据集 |
+| 8 | rgbd+colored grasp-part | `rgbd-skill-grasp-part-colored` | false | false | true | false | true | true | `rgbd/dit` | (none) | colored grasp-part 数据集 |
 
 **对应的 auto_train_multi_card.sh 变量设置**:
 
 ```
-Exp1: DATA_ANNOTATE_GUIDANCE_POINT="false" DATA_ANNOTATE_SKILL_ONE_HOT="false" DATA_GUIDANCE_POINT_COLORED="false" +experiment=rgbd/dit
-Exp2: DATA_ANNOTATE_GUIDANCE_POINT="true"  DATA_ANNOTATE_SKILL_ONE_HOT="false" DATA_GUIDANCE_POINT_COLORED="false" +experiment=rgbd/dit
-Exp3: DATA_ANNOTATE_GUIDANCE_POINT="true"  DATA_ANNOTATE_SKILL_ONE_HOT="false" DATA_GUIDANCE_POINT_COLORED="true"  +experiment=rgbd/dit
-Exp4: DATA_ANNOTATE_GUIDANCE_POINT="false" DATA_ANNOTATE_SKILL_ONE_HOT="true"  DATA_GUIDANCE_POINT_COLORED="false" +experiment=rgbd/dit
-Exp5: DATA_ANNOTATE_GUIDANCE_POINT="true"  DATA_ANNOTATE_SKILL_ONE_HOT="true"  DATA_GUIDANCE_POINT_COLORED="false" +experiment=rgbd/dit
-Exp6: DATA_ANNOTATE_GUIDANCE_POINT="false" DATA_ANNOTATE_SKILL_ONE_HOT="false" DATA_GUIDANCE_POINT_COLORED="false" +experiment=image/dit  # vision_encoder=resnet vision_encoder.pretrained=false 取消注释
+Exp1: DATA_ANNOTATE_GUIDANCE_POINT="false" DATA_ANNOTATE_SKILL_ONE_HOT="false" DATA_GUIDANCE_POINT_COLORED="false" DATA_ANNOTATE_GRASP="false" DATA_ANNOTATE_GRASP_COLORED="false" DATA_ANNOTATE_GRASP_PART="false" +experiment=rgbd/dit
+Exp2: DATA_ANNOTATE_GUIDANCE_POINT="true"  DATA_ANNOTATE_SKILL_ONE_HOT="false" DATA_GUIDANCE_POINT_COLORED="false" DATA_ANNOTATE_GRASP="false" DATA_ANNOTATE_GRASP_COLORED="false" DATA_ANNOTATE_GRASP_PART="false" +experiment=rgbd/dit
+Exp3: DATA_ANNOTATE_GUIDANCE_POINT="true"  DATA_ANNOTATE_SKILL_ONE_HOT="false" DATA_GUIDANCE_POINT_COLORED="true"  DATA_ANNOTATE_GRASP="false" DATA_ANNOTATE_GRASP_COLORED="false" DATA_ANNOTATE_GRASP_PART="false" +experiment=rgbd/dit
+Exp4: DATA_ANNOTATE_GUIDANCE_POINT="false" DATA_ANNOTATE_SKILL_ONE_HOT="true"  DATA_GUIDANCE_POINT_COLORED="false" DATA_ANNOTATE_GRASP="false" DATA_ANNOTATE_GRASP_COLORED="false" DATA_ANNOTATE_GRASP_PART="false" +experiment=rgbd/dit
+Exp5: DATA_ANNOTATE_GUIDANCE_POINT="true"  DATA_ANNOTATE_SKILL_ONE_HOT="true"  DATA_GUIDANCE_POINT_COLORED="false" DATA_ANNOTATE_GRASP="false" DATA_ANNOTATE_GRASP_COLORED="false" DATA_ANNOTATE_GRASP_PART="false" +experiment=rgbd/dit
+Exp6: DATA_ANNOTATE_GUIDANCE_POINT="false" DATA_ANNOTATE_SKILL_ONE_HOT="false" DATA_GUIDANCE_POINT_COLORED="false" DATA_ANNOTATE_GRASP="false" DATA_ANNOTATE_GRASP_COLORED="false" DATA_ANNOTATE_GRASP_PART="false" +experiment=image/dit
+Exp7: DATA_ANNOTATE_GUIDANCE_POINT="false" DATA_ANNOTATE_SKILL_ONE_HOT="false" DATA_GUIDANCE_POINT_COLORED="false" DATA_ANNOTATE_GRASP="false" DATA_ANNOTATE_GRASP_COLORED="false" DATA_ANNOTATE_GRASP_PART="true"  +experiment=rgbd/dit
+Exp8: DATA_ANNOTATE_GUIDANCE_POINT="false" DATA_ANNOTATE_SKILL_ONE_HOT="false" DATA_GUIDANCE_POINT_COLORED="true"  DATA_ANNOTATE_GRASP="false" DATA_ANNOTATE_GRASP_COLORED="true"  DATA_ANNOTATE_GRASP_PART="true"  +experiment=rgbd/dit
 ```
 
-> **Exp4 数据说明**: 当前脚本在 `GP=false` + `skill=true` 时进入 elif 分支，`DATA_SUFFIX="rgbd-only-skill"`，fallback 为空。
-> 需修改 elif 分支添加 `DATA_SUFFIX_FALLBACK="rgbd"`，使 Python 层在找不到 rgbd-only-skill 数据时自动回退到 rgbd（skill one-hot 由 dataloader 运行时标注）。
-
-> **Exp6 注意事项**: 需要取消注释 `vision_encoder=resnet` 和 `vision_encoder.pretrained=false`，并把 `+experiment=rgbd/dit` 改为 `+experiment=image/dit`。
+> `data.suffix` 描述的是数据集/图像 annotation 形态，不等于模型输入开关。
+> 例如 Exp2 与 Exp5 读取同一个 `rgbd-skill-point` 数据集，但通过 `data.annotate_skill_one_hot` 区分 checkpoint 配置。
+> Exp6 注意事项：需要取消注释 `vision_encoder=resnet` 和 `vision_encoder.pretrained=false`，并把 `+experiment=rgbd/dit` 改为 `+experiment=image/dit`。
 
 ---
 
@@ -62,11 +65,11 @@ Exp6: DATA_ANNOTATE_GUIDANCE_POINT="false" DATA_ANNOTATE_SKILL_ONE_HOT="false" D
 | 236 | `zju_4090_236` | SATA SSD RAID `/` | 4,900 | 167G | `~/robust-rearrangement-custom/data/` | (无 lmdb 找到) | 空间紧张 |
 | 238 | `zju_4090_238` | SATA SSD `/` | 4,300 | 315G | `~/robust-rearrangement-custom/data/` | **rgbd** 466G (5 shards) | 已有 rgbd 数据可直接用于 Exp1/4/6 |
 | 240 | `zju_4090_240` | SATA SSD `/` | 3,700 | 233G | `/data/hy/robust-rearrangement-custom/data/` | (无 lmdb 找到) | |
-| 243 | `zju_4090_243` | NVMe SSD `/` | 4,400 | **15G** | `~/robust-rearrangement-custom/data/` | (NVMe 几乎满) | NVMe 不可用; /data HDD 有 rgbd-skill 全量 (~640G) 仅作 SCP 源 |
+| 243 | `zju_4090_243` | NVMe SSD `/` | 4,400 | **15G** | `~/robust-rearrangement-custom/data/` | (NVMe 几乎满) | NVMe 不可用; /data HDD 有 `rgbd-skill-point*` 全量 (~640G) 仅作 SCP 源 |
 
 > **重要变化 (2026-06-08 实测)**: 与 5 月 benchmark 时期相比，多台服务器磁盘使用率大幅上升。
 > 243 的 NVMe 仅剩 15G，无法训练。232 的 NVMe (595G) 是当前最优选择。
-> 数据集实际大小: 单个 lmdb shard ≈100-120G，rgbd 完整数据集 ≈466G (5 shards)，rgbd-skill ≈640G (6 shards)。
+> 数据集实际大小: 单个 lmdb shard ≈100-120G，rgbd 完整数据集 ≈466G (5 shards)，point/grasp-part 系列通常与 `rgbd-skill-point*` 同量级。
 
 > **⚠️ HDD 禁令**: 训练数据**绝对禁止**放在 HDD 上。即使系统盘是 SSD，同时读写 HDD 也会导致同服务器上所有 SSD 训练卡顿（IO 竞争拖慢 page cache）。
 > - 232 `/data` (HDD sda1)、243 `/data` (HDD sda1) 只能用于数据备份，不能用于训练
@@ -96,40 +99,42 @@ Exp6: DATA_ANNOTATE_GUIDANCE_POINT="false" DATA_ANNOTATE_SKILL_ONE_HOT="false" D
 |--------|-----|--------|-------|------|
 | 228 | NVMe `/data` | rgbd-only-skill | rgbd-only-skill-1 | 123G |
 | 230 | NVMe `/data` | rgbd-only-skill | rgbd-only-skill-1 | 123G |
-| 230 | NVMe `/data` | rgbd-skill-colored | rgbd-skill-colored-1 | 125G |
+| 230 | NVMe `/data` | rgbd-skill-point-colored | rgbd-skill-point-colored-1 | 125G |
 | 236 | SSD `/home` | rgbd-only-skill | rgbd-only-skill-1 | 123G |
-| 236 | SSD `/home` | rgbd-skill-colored | rgbd-skill-colored-1 | 125G |
-| 240 | SSD `/data` | rgbd-skill-colored | rgbd-skill-colored-1 | 125G |
+| 236 | SSD `/home` | rgbd-skill-point-colored | rgbd-skill-point-colored-1 | 125G |
+| 240 | SSD `/data` | rgbd-skill-point-colored | rgbd-skill-point-colored-1 | 125G |
 | 243 | NVMe `/home` (15G!) | rgbd-only-skill | rgbd-only-skill-1 | 123G |
-| 243 | NVMe `/home` (15G!) | rgbd-skill | rgbd-skill-1 | 125G |
-| 243 | HDD `/data` | rgbd-skill-colored | rgbd-skill-colored-1 | 125G |
+| 243 | NVMe `/home` (15G!) | rgbd-skill-point | rgbd-skill-point-1 | 125G |
+| 243 | HDD `/data` | rgbd-skill-point-colored | rgbd-skill-point-colored-1 | 125G |
 
 **旧格式 (`round_table/`)** — 需移/连到多任务路径:
 
 | 服务器 | 盘 | 数据集 | shard | 大小 |
 |--------|-----|--------|-------|------|
 | 238 | SSD `/home` | rgbd | rgbd-1~5 | 466G (5 shards) |
-| 243 | HDD `/data` | rgbd-skill | rgbd-skill, rgbd-skill-1~5 | 640G (6 shards) |
+| 243 | HDD `/data` | rgbd-skill-point | rgbd-skill-point, rgbd-skill-point-1~5 | 640G (6 shards) |
 | 243 | HDD `/data` | rgbd-only-skill | rgbd-only-skill-1 | 118G |
-| 232 | HDD `/data` | rgbd-skill | rgbd-skill | 116G |
+| 232 | HDD `/data` | rgbd-skill-point | rgbd-skill-point | 116G |
 
 ### 3.3 三个不可删除的备份数据集
 
 | 数据集 | 位置 |
 |--------|------|
 | rgbd | **未找到多任务格式** — 238 有 `round_table/rgbd-*` (466G)，需移路径 |
-| rgbd+GP | 243 HDD `/data` `round_table/rgbd-skill*` (640G) |
-| rgbd+colored GP | 240 `/data` `lamp-one_leg-round_table/rgbd-skill-colored-1` (125G) |
+| rgbd+GP | 243 HDD `/data` `round_table/rgbd-skill-point*` (640G) |
+| rgbd+colored GP | 240 `/data` `lamp-one_leg-round_table/rgbd-skill-point-colored-1` (125G) |
 
 ### 3.4 各实验数据准备方案
 
 | # | 实验 | 数据后缀 | 已有数据 (快速盘+正确格式) | 方案 |
 |---|------|---------|--------------------------|------|
 | 1 | rgbd | rgbd | **无** (仅 238 有旧格式) | 从 238 SCP rgbd-* 到目标服务器，建 symlink 或改名到 `lamp-one_leg-round_table/` 下 |
-| 2 | rgbd+GP | rgbd-skill | 243 NVMe 有 1 shard (125G) 但盘满 | 从 243 HDD SCP 到 232 NVMe; 需移路径 |
-| 3 | rgbd+colored GP | rgbd-skill-colored | 236 SSD 125G, 240 SSD 125G, 230 NVMe 125G | **可直接用** 236 或 240 |
+| 2 | rgbd+GP | rgbd-skill-point | 243 NVMe 有 1 shard (125G) 但盘满 | 从 243 HDD SCP 到 232 NVMe; 需移路径 |
+| 3 | rgbd+colored GP | rgbd-skill-point-colored | 236 SSD 125G, 240 SSD 125G, 230 NVMe 125G | **可直接用** 236 或 240 |
 | 4 | rgbd+only skill | rgbd-only-skill | 228 NVMe 123G, 230 NVMe 123G, 236 SSD 123G | **可直接用** 228/236; 或 fallback 到 rgbd |
-| 5 | rgbd+GP+skill | rgbd-skill | 同 #2 | 同 #2 |
+| 5 | rgbd+GP+skill | rgbd-skill-point | 同 #2 | 同 #2 |
+| 7 | rgbd+grasp-part | rgbd-skill-grasp-part | 暂无历史快照 | 用新数据收集流程生成 |
+| 8 | rgbd+colored grasp-part | rgbd-skill-grasp-part-colored | 暂无历史快照 | 用新数据收集流程生成 |
 | 6 | rgb | rgbd | 同 #1 | 同 #1 |
 
 ### 3.5 数据传输流程
@@ -143,8 +148,8 @@ ssh <target_host> "df -h <data_path>"
 
 # 3. 如果空间不足，清理非受保护数据
 # 注意: 绝对不能删除:
-#   240 /data: rgbd-skill-colored*.lmdb
-#   251 /data: rgbd-skill*.lmdb
+#   240 /data: rgbd-skill-point-colored*.lmdb
+#   251 /data: rgbd-skill-point*.lmdb
 #   228 /data: rgbd*.lmdb
 # 其他都可以清理
 
@@ -177,7 +182,7 @@ ssh <target_host> "ls -d \$(eval echo <DATA_DIR_PROCESSED>)/processed/diffik/sim
 验证失败常见原因:
 - lmdb 放错目录层级
 - `DATA_DIR_PROCESSED` 设置成了 lmdb 的父目录而非 `data/` 目录
-- lmdb 目录名称不匹配 suffix（如 `rgbd-skill.lmdb` vs `rgbd-skill-colored.lmdb`）
+- lmdb 目录名称不匹配 suffix（如 `rgbd-skill-point.lmdb` vs `rgbd-skill-point-colored.lmdb`）
 
 ---
 
@@ -187,15 +192,18 @@ ssh <target_host> "ls -d \$(eval echo <DATA_DIR_PROCESSED>)/processed/diffik/sim
 
 ### 4.1 需修改的参数 (行号)
 
-| 行号 | 参数 | 说明 |
-|------|------|------|
-| 32 | `DATA_ANNOTATE_GUIDANCE_POINT` | true/false |
-| 33 | `DATA_ANNOTATE_SKILL_ONE_HOT` | true/false |
-| 34 | `DATA_GUIDANCE_POINT_COLORED` | true/false |
-| 55 | `+experiment=rgbd/dit` | rgbd/dit 或 image/dit |
-| 56-57 | `vision_encoder=resnet` 等 | Exp6 需取消注释 |
-| 90 | `SSH_NAME` | 目标服务器编号 (不含 zju_4090_ 前缀) |
-| 94 | `DATA_DIR_PROCESSED` | `~/robust-rearrangement-custom/data/` (236/238/232/243 home) 或 `/data/hy/robust-rearrangement-custom/data/` (240 local) |
+| 参数 | 说明 |
+|------|------|
+| `DATA_ANNOTATE_GUIDANCE_POINT` | 模型是否额外输入 guidance point |
+| `DATA_ANNOTATE_SKILL_ONE_HOT` | 模型是否额外输入 skill one-hot |
+| `DATA_GUIDANCE_POINT_COLORED` | point annotation 是否 colored；在 `grasp-part-colored` 中也要一起开启 |
+| `DATA_ANNOTATE_GRASP` | 数据集是否为 grasp 全量 annotation 模式 |
+| `DATA_ANNOTATE_GRASP_COLORED` | grasp annotation 是否 colored |
+| `DATA_ANNOTATE_GRASP_PART` | 数据集是否为 grasp-part 模式 (`pick/place`=grasp, 其他=point) |
+| `+experiment=...` | `rgbd/dit` 或 `image/dit` |
+| `vision_encoder=resnet` 等 | Exp6 需取消注释 |
+| `SSH_NAME` | 目标服务器编号 (不含 `zju_4090_` 前缀) |
+| `DATA_DIR_PROCESSED` | 训练数据根目录 |
 
 ### 4.2 修改前检查清单
 
@@ -217,9 +225,11 @@ LOCKFILE=/tmp/auto_train.lock
 exec 9>$LOCKFILE
 flock 9 || exit 1
 
-# 2. 修改 auto_train_multi_card.sh 参数（所有 5 个关键变量一次性修改）
+# 2. 修改 auto_train_multi_card.sh 参数（所有关键变量一次性修改）
 #    DATA_ANNOTATE_GUIDANCE_POINT, DATA_ANNOTATE_SKILL_ONE_HOT,
-#    DATA_GUIDANCE_POINT_COLORED, +experiment, SSH_NAME, GPU_ID, WANDB_CONTINUE_RUN_ID
+#    DATA_GUIDANCE_POINT_COLORED, DATA_ANNOTATE_GRASP,
+#    DATA_ANNOTATE_GRASP_COLORED, DATA_ANNOTATE_GRASP_PART,
+#    +experiment, SSH_NAME, GPU_ID, WANDB_CONTINUE_RUN_ID
 
 # 3. 验证参数正确（grep 所有关键变量，打印到 stdout 确认）
 grep -E '^(DATA_ANNOTATE|DATA_GUIDANCE|WANDB_CONTINUE|SSH_NAME|GPU_ID)' auto_train_multi_card.sh
@@ -246,9 +256,12 @@ flock -u 9
 
 | 检查项 | config key | 正则 |
 |--------|-----------|------|
-| GP 开关 | `annotate_guidance_point` | `annotate_guidance_point: (true\|false)` |
+| GP 输入开关 | `annotate_guidance_point` | `annotate_guidance_point: (true\|false)` |
 | Skill One-hot 开关 | `annotate_skill_one_hot` | `annotate_skill_one_hot: (true\|false)` |
-| Colored GP 开关 | `annotate_guidance_point_colored` | `annotate_guidance_point_colored: (true\|false)` |
+| Colored Point 开关 | `annotate_guidance_point_colored` | `annotate_guidance_point_colored: (true\|false)` |
+| Grasp 开关 | `annotate_grasp` | `annotate_grasp: (true\|false)` |
+| Colored Grasp 开关 | `annotate_grasp_colored` | `annotate_grasp_colored: (true\|false)` |
+| Grasp-part 开关 | `annotate_grasp_part` | `annotate_grasp_part: (true\|false)` |
 | 数据后缀 | `suffix` | `suffix: <expected>` |
 | Experiment | `experiment` | 隐含在 vision_encoder 加载信息中 |
 
@@ -256,7 +269,7 @@ flock -u 9
 ```bash
 # 从 tmux 输出中提取 config 关键字段
 ssh <host> "tmux capture-pane -pt <session>:train -S -200" 2>/dev/null | \
-  grep -E 'annotate_guidance_point:|annotate_skill_one_hot:|annotate_guidance_point_colored:|suffix:'
+  grep -E 'annotate_guidance_point:|annotate_skill_one_hot:|annotate_guidance_point_colored:|annotate_grasp:|annotate_grasp_colored:|annotate_grasp_part:|suffix:'
 
 # 示例正确输出 (Exp4 rgbd+only skill):
 #   annotate_guidance_point: false
@@ -469,7 +482,7 @@ Exp5 (rgbd+GP+skill):   同 #2
 Exp6 (rgb):             同 #1
 ```
 
-> 232 NVMe (595G) 建议留给 rgbd-skill 数据集 (Exp2/5)，rgbd 数据集优先用 238 (本地已有)。
+> 232 NVMe (595G) 建议留给 `rgbd-skill-point*` / `rgbd-skill-grasp-part*` 数据集，rgbd 数据集优先用 238 (本地已有)。
 
 ### 8.2 并行策略
 
@@ -483,7 +496,7 @@ Exp6 (rgb):             同 #1
 - 如果必须传输，首选带宽大的源-目标对
 - 一次传输整个 lmdb 目录（含所有 shard）
 - 传输完成后**立即更新 Notion 数据准备表**，供后续实验复用
-- **数据集有任何传输或删除操作，必须登记到 Notion 数据准备表**。格式: `服务器 /路径 (状态)`，例如 `240 /home SSD (rgbd-skill 125G)`
+- **数据集有任何传输或删除操作，必须登记到 Notion 数据准备表**。格式: `服务器 /路径 (状态)`，例如 `240 /home SSD (rgbd-skill-point 125G)`
 - 这是必做步骤，避免后续实验找不到数据
 
 ---
@@ -645,5 +658,5 @@ ssh <target> "ls /local/path/data.lmdb/data.mdb && du -sh /local/path/data.lmdb"
 
 **数据备份源 (见 §3.3)**:
 - rgbd: 228 /data (NVMe)
-- rgbd+GP (rgbd-skill): 251 /data (HDD) → 慢，优先找 SSD 副本
-- rgbd+colored GP (rgbd-skill-colored): 251 /data (HDD) → 慢，236/240 有 SSD 副本
+- rgbd+GP (`rgbd-skill-point`): 251 /data (HDD) → 慢，优先找 SSD 副本
+- rgbd+colored GP (`rgbd-skill-point-colored`): 251 /data (HDD) → 慢，236/240 有 SSD 副本

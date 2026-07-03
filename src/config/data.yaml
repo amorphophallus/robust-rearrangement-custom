@@ -13,6 +13,9 @@ data:
   # 引导信息
   annotate_guidance_point: false
   annotate_guidance_point_colored: false
+  annotate_grasp: false
+  annotate_grasp_colored: false
+  annotate_grasp_part: false
   annotate_skill_one_hot: false
   environment: ${environment}
   task: ${task}
