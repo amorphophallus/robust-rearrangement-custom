@@ -1,6 +1,6 @@
 # Low → Med Randomness Generalization Evaluation
 
-**Date**: 2026-06-26
+**Date**: 2026-06-26 (updated 2026-07-07/08: added morning-glitter-1 & eternal-cosmos-2 med evals)
 **Purpose**: Test position generalization — models trained on low randomness, evaluated on med randomness
 **Eval settings**: N_ENVS=3, N_ROLLOUTS=12, observation-space=image (BC) / state (RPPO), randomness=med
 
@@ -8,7 +8,7 @@
 
 ## Experiment Schedule
 
-### Phase 1: Multi-task BC (6 models × 3 tasks = 18 eval runs)
+### Phase 1: Multi-task BC (8 models × 3 tasks = 24 eval runs)
 
 | # | Condition | RUN_ID | EVAL flags | Tasks |
 |---|---------|--------|-----------|-------|
@@ -18,6 +18,8 @@
 | 4 | rgbd+only skill | good-serenity-16 | SKILL=true | one_leg, round_table, lamp |
 | 5 | rgbd | clear-water-12 | *(none)* | one_leg, round_table, lamp |
 | 6 | rgb | true-firefly-8 | *(none)* | one_leg, round_table, lamp |
+| 7 | rgbd+grasp-part | morning-glitter-1 | GRASP_PART=true | one_leg, round_table, lamp |
+| 8 | rgbd+grasp-part-colored | eternal-cosmos-2 | GRASP_PART=true, GP_COLORED=true, GRASP_COLORED=true | one_leg, round_table, lamp |
 
 > ⚠️ icy-vortex-9 (0610, labeled "rgbd+skill") skipped — actual config is GP=True, skill=False (same as autumn-dust-13).
 > `good-serenity-16` was appended on 2026-07-04. Its checkpoint config is `rgbd-only-skill` (`annotate_skill_one_hot=True`, `annotate_guidance_point=False`).
@@ -47,6 +49,8 @@
 
 **Eval completed: 2026-06-27**. All models trained on low randomness, evaluated on med randomness, 12 rollouts per task.
 > Additional med eval appended on 2026-07-04: `good-serenity-16` (checkpoint config is `rgbd-only-skill`).
+> Additional med eval appended on 2026-07-07: `morning-glitter-1` (checkpoint config is `rgbd-skill-grasp-part`, `annotate_grasp_part=True`, `annotate_skill_one_hot=False`, `annotate_guidance_point=False`).
+> Additional med eval appended on 2026-07-08: `eternal-cosmos-2` (checkpoint config is `rgbd-skill-grasp-part-colored`, `annotate_grasp_part=True`, `annotate_guidance_point_colored=True`, `annotate_grasp_colored=True`, `annotate_skill_one_hot=False`).
 
 | Type | Condition | RUN_ID | one_leg | round_table | lamp | **Overall** |
 |------|---------|--------|:---:|:---:|:---:|:---:|
@@ -56,6 +60,8 @@
 | mt-bc | rgbd+only skill | good-serenity-16 | 8.33% (1/12) | 0.00% (0/12) | 0.00% (0/12) | **2.78% (1/36)** |
 | mt-bc | rgbd | clear-water-12 | 0.00% (0/12) | 0.00% (0/12) | 0.00% (0/12) | **0.00% (0/36)** |
 | mt-bc | rgb | true-firefly-8 | 0.00% (0/12) | 0.00% (0/12) | 0.00% (0/12) | **0.00% (0/36)** |
+| mt-bc | rgbd+grasp-part | morning-glitter-1 | 25.00% (3/12) | 0.00% (0/12) | 0.00% (0/12) | **8.33% (3/36)** |
+| mt-bc | rgbd+grasp-part-colored | eternal-cosmos-2 | 16.67% (2/12) | 0.00% (0/12) | 8.33% (1/12) | **8.33% (3/36)** |
 | rppo | one_leg | — | 25.00% (3/12) | — | — | **25.00% (3/12)** |
 | rppo | round_table | — | — | 16.67% (2/12) | — | **16.67% (2/12)** |
 | rppo | lamp | — | — | — | 8.33% (1/12) | **8.33% (1/12)** |
@@ -87,6 +93,8 @@ Data cross-validated from stdout logs and `logs/evaluate_model/one_leg/<checkpoi
 | rgbd+only skill | good-serenity-16 | 91.67% (11/12) | 45.45% (5/11) | 60.00% (3/5) | 66.67% (2/3) | 50.00% (1/2) | 100.00% (1/1) | 8.33% (1/12) |
 | rgbd | clear-water-12 | 33.33% (4/12) | 50.00% (2/4) | 0.00% (0/2) | — | — | — | 0.00% (0/12) |
 | rgb | true-firefly-8 | 8.33% (1/12) | 0.00% (0/1) | — | — | — | — | 0.00% (0/12) |
+| rgbd+grasp-part | morning-glitter-1 | 75.00% (9/12) | 33.33% (3/9) | 100.00% (3/3) | 100.00% (3/3) | 100.00% (3/3) | 100.00% (3/3) | 25.00% (3/12) |
+| rgbd+grasp-part-colored | eternal-cosmos-2 | 83.33% (10/12) | 70.00% (7/10) | 57.14% (4/7) | 50.00% (2/4) | 100.00% (2/2) | 100.00% (2/2) | 16.67% (2/12) |
 
 > `—` = no rollout reached this skill. Data source: `skill_state_counts` / `skill_completion_counts` in `logs/evaluate_model/one_leg/<checkpoint_name>/*.json`, cross-validated against stdout `Skill success rates`.
 
@@ -100,6 +108,8 @@ Data cross-validated from stdout logs and `logs/evaluate_model/one_leg/<checkpoi
 | rgbd+only skill | good-serenity-16 | 75.00% (9/12) | 33.33% (3/9) | 33.33% (1/3) | 100.00% (1/1) | 100.00% (1/1) | 100.00% (1/1) | 100.00% (1/1) | 0.00% (0/1) | — | 8.33% (1/12) | 0.00% (0/1) |
 | rgbd | clear-water-12 | 83.33% (10/12) | 30.00% (3/10) | 100.00% (3/3) | 100.00% (3/3) | 100.00% (2/2) | 33.33% (1/3) | 0.00% (0/1) | — | — | 25.00% (3/12) | 0.00% (0/3) |
 | rgb | true-firefly-8 | 58.33% (7/12) | 28.57% (2/7) | 50.00% (1/2) | 100.00% (1/1) | 0.00% (0/1) | — | — | — | — | 0.00% (0/12) | — |
+| rgbd+grasp-part | morning-glitter-1 | 91.67% (11/12) | 27.27% (3/11) | 0.00% (0/3) | — | — | — | — | — | — | 0.00% (0/12) | — |
+| rgbd+grasp-part-colored | eternal-cosmos-2 | 100.00% (12/12) | 33.33% (4/12) | 0.00% (0/4) | — | — | — | — | — | — | 0.00% (0/12) | — |
 
 #### MT-BC: lamp skill success rates (cascading)
 
@@ -111,6 +121,8 @@ Data cross-validated from stdout logs and `logs/evaluate_model/one_leg/<checkpoi
 | rgbd+only skill | good-serenity-16 | 50.00% (6/12) | 33.33% (2/6) | 0.00% (0/2) | — | — | — | — | 0.00% (0/12) | — |
 | rgbd | clear-water-12 | 16.67% (2/12) | 0.00% (0/2) | — | — | — | — | — | 0.00% (0/12) | — |
 | rgb | true-firefly-8 | 8.33% (1/12) | 0.00% (0/1) | — | — | — | — | — | 0.00% (0/12) | — |
+| rgbd+grasp-part | morning-glitter-1 | 41.67% (5/12) | 60.00% (3/5) | 0.00% (0/3) | — | — | — | — | 0.00% (0/12) | — |
+| rgbd+grasp-part-colored | eternal-cosmos-2 | 58.33% (7/12) | 57.14% (4/7) | 50.00% (2/4) | 100.00% (2/2) | 100.00% (2/2) | 0.00% (0/1) | — | 16.67% (2/12) | 0.00% (0/1) |
 
 > **RPPO**: State-based eval does not support `--annotate-skill`. JSON logs have empty `skill_success_rates` / `assembly_step_success_rates`. No step-level data available.
 
@@ -146,22 +158,28 @@ Data cross-validated from stdout logs and `logs/evaluate_model/round_table/*.jso
 
 ### Multi-task BC (one_leg+round_table+lamp, 3×100 traj, low, DiT)
 
-| Condition | RUN_ID | Project | Local file | suffix | GP→obs | skill→obs | colored→obs | epochs |
-|---------|--------|--------|---------|--------|:---:|:---:|:---:|:---:|
-| rgbd+gp | autumn-dust-13 | 0610 | `...0610_autumn-dust-13_latest_3000.pt` | rgbd-skill | True | False | False | 3000 |
-| rgbd+only skill | iconic-surf-2 | 0526 | `...0526_iconic-surf-2_last_.pt` | rgbd-only-skill | False | True | False | 3000 |
-| ~~rgbd+skill~~ | ~~icy-vortex-9~~ | 0610 | `...0610_icy-vortex-9_latest_3000.pt` | rgbd-skill | **True** ❌ | **False** ❌ | False | 3000 |
-| rgbd+gp+skill | fresh-tree-11 | 0610 | `...0610_fresh-tree-11_latest_3000.pt` | rgbd-skill | True | True | False | 3000 |
-| rgbd+colored gp | absurd-voice-2 | 0610 | `...0610_absurd-voice-2_latest_3000.pt` | rgbd-skill-colored | True | False | True | 3000 |
-| rgbd | clear-water-12 | 0610 | `...0610_clear-water-12_latest_3000.pt` | rgbd | False | False | False | 3000 |
-| rgb | true-firefly-8 | 0610 | `...0610_true-firefly-8_latest_3000.pt` | rgbd | False | False | False | 3000 |
-| rgbd+only skill | good-serenity-16 | 0610 | `...0610_good-serenity-16_latest_3000.pt` | rgbd-only-skill | False | True | False | 3000 |
+| Condition | RUN_ID | Project | Local file | suffix | GP→obs | skill→obs | grasp-part→obs | gp-colored→obs | grasp-colored→obs | epochs |
+|---------|--------|--------|---------|--------|:---:|:---:|:---:|:---:|:---:|:---:|
+| rgbd+gp | autumn-dust-13 | 0610 | `...0610_autumn-dust-13_latest_3000.pt` | rgbd-skill | True | False | False | False | False | 3000 |
+| rgbd+only skill | iconic-surf-2 | 0526 | `...0526_iconic-surf-2_last_.pt` | rgbd-only-skill | False | True | False | False | False | 3000 |
+| ~~rgbd+skill~~ | ~~icy-vortex-9~~ | 0610 | `...0610_icy-vortex-9_latest_3000.pt` | rgbd-skill | **True** ❌ | **False** ❌ | False | False | False | 3000 |
+| rgbd+gp+skill | fresh-tree-11 | 0610 | `...0610_fresh-tree-11_latest_3000.pt` | rgbd-skill | True | True | False | False | False | 3000 |
+| rgbd+colored gp | absurd-voice-2 | 0610 | `...0610_absurd-voice-2_latest_3000.pt` | rgbd-skill-colored | True | False | False | True | False | 3000 |
+| rgbd | clear-water-12 | 0610 | `...0610_clear-water-12_latest_3000.pt` | rgbd | False | False | False | False | False | 3000 |
+| rgb | true-firefly-8 | 0610 | `...0610_true-firefly-8_latest_3000.pt` | rgbd | False | False | False | False | False | 3000 |
+| rgbd+only skill | good-serenity-16 | 0610 | `...0610_good-serenity-16_latest_3000.pt` | rgbd-only-skill | False | True | False | False | False | 3000 |
+| rgbd+grasp-part | morning-glitter-1 | grasp-annot | `...grasp-annotation_morning-glitter-1_last_.pt` | rgbd-skill-grasp-part | False | False | True | False | False | 3000 |
+| rgbd+grasp-part-colored | eternal-cosmos-2 | grasp-annot | `...grasp-annotation_eternal-cosmos-2_last_.pt` | rgbd-skill-grasp-part-colored | False | False | True | True | True | 3000 |
 
 > **icy-vortex-9**: Config shows GP=True, skill=False — identical to autumn-dust-13 (rgbd+gp). Notion labeled "rgbd+skill" but actual training used GP without skill. **Skipped from eval.**
 >
 > **good-serenity-16**: Project label says `rgbd+skill`, but checkpoint config shows `suffix=rgbd-only-skill` with `annotate_skill_one_hot=True` and `annotate_guidance_point=False`.
 >
 > **iconic-surf-2**: Historical 0526 skill-only checkpoint kept here only for config comparison. The actual multi-task med-rand eval row in this report uses `good-serenity-16`.
+>
+> **morning-glitter-1**: `annotate_grasp_part=True`, `annotate_guidance_point_colored=False`, `annotate_grasp_colored=False`, `annotate_skill_one_hot=False` — consistent with eval GRASP_PART flag.
+>
+> **eternal-cosmos-2**: `annotate_grasp_part=True`, `annotate_guidance_point_colored=True`, `annotate_grasp_colored=True`, `annotate_skill_one_hot=False` — colored variant with both `*_colored` flags set. Correctly reflected in eval annotations (`--guidance-point-colored --grasp-annotation-colored`).
 
 ### Single-task BC (round_table, 200 traj, low, DiT)
 
@@ -212,6 +230,8 @@ Paths below are relative to `/home/huyue/projects/robust-rearrangement-custom/lo
 | rgbd+only skill | good-serenity-16 | `one_leg/multi-task-rgbd-skill-low-0610_good-serenity-16_latest_3000/2026-07-04T15-13-43.json` | `round_table/multi-task-rgbd-skill-low-0610_good-serenity-16_latest_3000/2026-07-04T15-23-15.json` | `lamp/multi-task-rgbd-skill-low-0610_good-serenity-16_latest_3000/2026-07-04T15-32-21.json` | `one_leg+round_table+lamp/multi-task-rgbd-skill-low-0610_good-serenity-16_latest_3000/2026-07-04T15-32-23.json` |
 | rgbd | clear-water-12 | `one_leg/multi-task-rgbd-skill-low-0610_clear-water-12_latest_3000/2026-06-27T01-24-38.json` | `round_table/multi-task-rgbd-skill-low-0610_clear-water-12_latest_3000/2026-06-27T01-33-39.json` | `lamp/multi-task-rgbd-skill-low-0610_clear-water-12_latest_3000/2026-06-27T01-42-01.json` | `one_leg+round_table+lamp/multi-task-rgbd-skill-low-0610_clear-water-12_latest_3000/2026-06-27T01-42-02.json` |
 | rgb | true-firefly-8 | `one_leg/multi-task-rgbd-skill-low-0610_true-firefly-8_latest_3000/2026-06-27T01-50-03.json` | `round_table/multi-task-rgbd-skill-low-0610_true-firefly-8_latest_3000/2026-06-27T01-58-22.json` | `lamp/multi-task-rgbd-skill-low-0610_true-firefly-8_latest_3000/2026-06-27T02-06-32.json` | `one_leg+round_table+lamp/multi-task-rgbd-skill-low-0610_true-firefly-8_latest_3000/2026-06-27T02-06-33.json` |
+| rgbd+grasp-part | morning-glitter-1 | `one_leg/multi-task-rgbd-skill-low-grasp-annotation_morning-glitter-1_last/2026-07-07T20-28-09.json` | `round_table/multi-task-rgbd-skill-low-grasp-annotation_morning-glitter-1_last/2026-07-07T20-37-52.json` | `lamp/multi-task-rgbd-skill-low-grasp-annotation_morning-glitter-1_last/2026-07-07T20-47-08.json` | `one_leg+round_table+lamp/multi-task-rgbd-skill-low-grasp-annotation_morning-glitter-1_last/2026-07-07T20-47-09.json` |
+| rgbd+grasp-part-colored | eternal-cosmos-2 | `one_leg/multi-task-rgbd-skill-low-grasp-annotation_eternal-cosmos-2_last/2026-07-08T04-24-58.json` | `round_table/multi-task-rgbd-skill-low-grasp-annotation_eternal-cosmos-2_last/2026-07-08T04-34-02.json` | `lamp/multi-task-rgbd-skill-low-grasp-annotation_eternal-cosmos-2_last/2026-07-08T04-43-34.json` | `one_leg+round_table+lamp/multi-task-rgbd-skill-low-grasp-annotation_eternal-cosmos-2_last/2026-07-08T04-43-36.json` |
 
 ### ST-BC med eval
 

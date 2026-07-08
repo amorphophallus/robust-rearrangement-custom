@@ -4,7 +4,8 @@
 **任务**: `one_leg + round_table + lamp` (多任务)
 **模型**: DiT (diffusion), 3×100 trajectories
 **Project**: `multi-task-rgbd-skill-low-0610`
-**Eval Settings**: `N_ENVS=3, N_ROLLOUTS=36`, image-based
+**Eval Settings**: `N_ENVS=3, N_ROLLOUTS=36`, image-based<br/>
+**上次更新**: 2026-07-08 (补入 `morning-glitter-1` / `eternal-cosmos-2`，并按 checkpoint config 统一核对 eval annotations)
 
 ---
 
@@ -20,6 +21,8 @@
 | 4c | rgbd+GP | icy-vortex-9 | 86.11% (31/36) | **55.56% (20/36)** | 30.56% (11/36) | 57.41% (62/108) |
 | 5 | rgbd+GP+skill | fresh-tree-11 | 83.33% (30/36) | 50.00% (18/36) | **55.56% (20/36)** | **62.96% (68/108)** |
 | 6 | rgb | true-firefly-8 | 0.00% (0/36) | 16.67% (6/36) | 0.00% (0/36) | 5.56% (6/108) |
+| 7 | rgbd+grasp-part | morning-glitter-1 | **86.11% (31/36)** | 38.89% (14/36) | 41.67% (15/36) | 55.56% (60/108) |
+| 8 | rgbd+grasp-part-colored | eternal-cosmos-2 | 80.56% (29/36) | **44.44% (16/36)** | 33.33% (12/36) | 52.78% (57/108) |
 
 
 结论：
@@ -52,7 +55,6 @@
 | rgb | 36.11% (13/36) | 16.67% (6/36) (true-firefly-8) | -19.44 |
 | rgbd+only skill | 52.78% (19/36) | 47.22% (17/36) (good-serenity-16) | -5.56 |
 | rgbd+colored GP | 50.00% (18/36) | 27.78% (10/36) (absurd-voice-2) | -22.22 |
-
 结论：
 
 
@@ -70,9 +72,6 @@
 | 4c | rgbd+GP | icy-vortex-9 | 45.37% (49/108) | 57.41% (62/108) | +12.04 |
 | 5 | rgbd+GP+skill | fresh-tree-11 | 52.78% (57/108) | 62.96% (68/108) | +10.18 |
 | 6 | rgb | true-firefly-8 | 10.19% (11/108) | 5.56% (6/108) | -4.63 |
-
-
-
 结论：
 1. **GP+skill 和 only skill 在 3000 epoch 显著优于 2000 epoch**（+10~12%），说明 skill-based 方法需要更长的训练。
 2. **纯 GP 和 rgb/rgbd 在 epoch 间差异不大**（±5% 以内），2000 epoch 基本收敛。
@@ -93,13 +92,14 @@ wandb summary 中最后一次 eval 记录的 test loss 和 test action mse error
 | 4c | icy-vortex-9 | GP | 57.41% (3000) | 0.0920 | 0.0266 |
 | 5 | fresh-tree-11 | GP+skill | 62.96% (3000) | 0.1009 | 0.0322 |
 | 6 | true-firefly-8 | rgb | 5.56% (3000) | 0.2205 | 0.0390 |
+| 7 | morning-glitter-1 | rgbd+grasp-part | 55.56% (3000) | 0.0848 | 0.0270 |
+| 8 | eternal-cosmos-2 | rgbd+grasp-part-colored | 52.78% (3000) | 0.1643 | 0.0562 |
 
 ![SR vs Metrics](./sr_vs_metrics.png)
 
-
 ## 3. 分步成功率分析
 
-下表覆盖总览中的 6 个条件组，共 8 条采纳 run 行。数据统一来自 low-rand、3000 epoch、与训练配置一致的 eval JSON；每个单元格均为 `completion_count / state_count`，百分比与 stdout 对齐。
+下表覆盖总览中的 8 个条件组，共 10 条采纳 run 行。数据统一来自 low-rand、3000 epoch、与训练配置一致的 eval JSON；每个单元格均为 `completion_count / state_count`，百分比与 stdout 对齐。
 
 ### 3.1 one_leg skill success rates (cascading)
 
@@ -113,6 +113,8 @@ wandb summary 中最后一次 eval 记录的 test loss 和 test action mse error
 | rgbd+GP | icy-vortex-9 | 100.00% (36/36) | 97.22% (35/36) | 100.00% (35/35) | 97.14% (34/35) | 100.00% (34/34) | 91.18% (31/34) | 86.11% (31/36) |
 | rgbd+GP+skill | fresh-tree-11 | 100.00% (36/36) | 97.22% (35/36) | 100.00% (34/34) | 94.12% (32/34) | 100.00% (32/32) | 90.62% (29/32) | 83.33% (30/36) |
 | rgb | true-firefly-8 | 22.22% (8/36) | 0.00% (0/8) | — | — | — | — | 0.00% (0/36) |
+| rgbd+grasp-part | morning-glitter-1 | 100.00% (36/36) | 94.44% (34/36) | 100.00% (34/34) | 94.12% (32/34) | 96.88% (31/32) | 100.00% (31/31) | 86.11% (31/36) |
+| rgbd+grasp-part-colored | eternal-cosmos-2 | 100.00% (36/36) | 94.44% (34/36) | 97.06% (33/34) | 87.88% (29/33) | 100.00% (29/29) | 100.00% (29/29) | 80.56% (29/36) |
 
 ### 3.2 round_table skill success rates (cascading)
 
@@ -126,6 +128,8 @@ wandb summary 中最后一次 eval 记录的 test loss 和 test action mse error
 | rgbd+GP | icy-vortex-9 | 100.00% (36/36) | 91.67% (33/36) | 90.91% (30/33) | 100.00% (30/30) | 90.00% (27/30) | 92.59% (25/27) | 96.00% (24/25) | 100.00% (24/24) | 83.33% (20/24) | 75.00% (27/36) | 74.07% (20/27) |
 | rgbd+GP+skill | fresh-tree-11 | 100.00% (36/36) | 91.67% (33/36) | 96.97% (32/33) | 100.00% (32/32) | 75.00% (24/32) | 87.50% (21/24) | 100.00% (21/21) | 100.00% (21/21) | 85.71% (18/21) | 66.67% (24/36) | 75.00% (18/24) |
 | rgb | true-firefly-8 | 97.22% (35/36) | 77.14% (27/35) | 81.48% (22/27) | 100.00% (22/22) | 86.36% (19/22) | 68.42% (13/19) | 92.31% (12/13) | 100.00% (12/12) | 50.00% (6/12) | 52.78% (19/36) | 31.58% (6/19) |
+| rgbd+grasp-part | morning-glitter-1 | 100.00% (36/36) | 83.33% (30/36) | 90.00% (27/30) | 100.00% (27/27) | 81.48% (22/27) | 86.36% (19/22) | 94.74% (18/19) | 100.00% (18/18) | 77.78% (14/18) | 61.11% (22/36) | 63.64% (14/22) |
+| rgbd+grasp-part-colored | eternal-cosmos-2 | 100.00% (36/36) | 91.67% (33/36) | 72.73% (24/33) | 100.00% (24/24) | 83.33% (20/24) | 100.00% (20/20) | 90.00% (18/20) | 100.00% (18/18) | 88.89% (16/18) | 55.56% (20/36) | 80.00% (16/20) |
 
 ### 3.3 lamp skill success rates (cascading)
 
@@ -139,6 +143,8 @@ wandb summary 中最后一次 eval 记录的 test loss 和 test action mse error
 | rgbd+GP | icy-vortex-9 | 100.00% (36/36) | 100.00% (36/36) | 52.78% (19/36) | 100.00% (19/19) | 57.89% (11/19) | 100.00% (7/7) | 30.56% (11/36) | 100.00% (7/7) |
 | rgbd+GP+skill | fresh-tree-11 | 100.00% (36/36) | 100.00% (36/36) | 75.00% (27/36) | 100.00% (27/27) | 74.07% (20/27) | 100.00% (17/17) | 55.56% (20/36) | 100.00% (17/17) |
 | rgb | true-firefly-8 | 25.00% (9/36) | 22.22% (2/9) | 0.00% (0/2) | — | — | — | 0.00% (0/36) | — |
+| rgbd+grasp-part | morning-glitter-1 | 100.00% (36/36) | 94.44% (34/36) | 64.71% (22/34) | 100.00% (22/22) | 68.18% (15/22) | 100.00% (15/15) | 41.67% (15/36) | 100.00% (9/9) |
+| rgbd+grasp-part-colored | eternal-cosmos-2 | 100.00% (36/36) | 94.44% (34/36) | 44.12% (15/34) | 100.00% (15/15) | 80.00% (12/15) | 100.00% (12/12) | 33.33% (12/36) | 100.00% (7/7) |
 
 
 
@@ -147,36 +153,40 @@ wandb summary 中最后一次 eval 记录的 test loss 和 test action mse error
 
 统一条件：`N_ENVS=3, N_ROLLOUTS=36`, image-based, checkpoint=latest
 
+`eval annotations` 列记录的是评测时根据 checkpoint 内 training config 还原到 policy 输入的 annotation 条件；未列出的 annotation flag 一律视为 `False`。
+
 ### A.1 3000 epoch eval
 
-| # | RUN_ID | 训练配置 | eval GP colored | one_leg | round_table | lamp | Overall |
+| # | RUN_ID | 训练配置 | eval annotations | one_leg | round_table | lamp | Overall |
 |---|--------|---------|-----------------|---------|-------------|------|---------|
-| 1 | icy-vortex-9 | rgbd+GP | N/A | 86.11% (31/36) | 55.56% (20/36) | 30.56% (11/36) | 57.41% (62/108) |
-| 2 | clear-water-12 | rgbd | N/A | 0.00% (0/36) | 41.67% (15/36) | 0.00% (0/36) | 13.89% (15/108) |
-| 3 | absurd-voice-2 | colored GP | ❌ false (错) | 94.44% (34/36) | 33.33% (12/36) | 33.33% (12/36) | 53.70% (58/108) |
-| 3 | absurd-voice-2 | colored GP | ✅ true (对) | **91.67% (33/36)** | 27.78% (10/36) | 38.89% (14/36) | 52.78% (57/108) |
-| 4a | rare-monkey-4 | GP | ❌ true (错) | 83.33% (30/36) | 41.67% (15/36) | 33.33% (12/36) | 52.78% (57/108) |
-| 4a | rare-monkey-4 | GP | ✅ false (对) | 83.33% (30/36) | 33.33% (12/36) | 27.78% (10/36) | 48.15% (52/108) |
-| 4b | autumn-dust-13 | GP | ✅ false | 77.78% (28/36) | 36.11% (13/36) | 41.67% (15/36) | 51.85% (56/108) |
-| 5 | fresh-tree-11 | GP+skill | N/A | 83.33% (30/36) | 50.00% (18/36) | **55.56% (20/36)** | **62.96% (68/108)** |
-| 6 | true-firefly-8 | rgb | N/A | 0.00% (0/36) | 16.67% (6/36) | 0.00% (0/36) | 5.56% (6/108) |
-| 7 | good-serenity-16 | rgbd-only-skill | N/A | 77.78% (28/36) | 47.22% (17/36) | 33.33% (12/36) | 52.78% (57/108) |
+| 1 | icy-vortex-9 | rgbd+GP | `GP=true` | 86.11% (31/36) | 55.56% (20/36) | 30.56% (11/36) | 57.41% (62/108) |
+| 2 | clear-water-12 | rgbd | `none` | 0.00% (0/36) | 41.67% (15/36) | 0.00% (0/36) | 13.89% (15/108) |
+| 3 | absurd-voice-2 | colored GP | `GP=true, GP-colored=false` ❌ | 94.44% (34/36) | 33.33% (12/36) | 33.33% (12/36) | 53.70% (58/108) |
+| 3 | absurd-voice-2 | colored GP | `GP=true, GP-colored=true` ✅ | **91.67% (33/36)** | 27.78% (10/36) | 38.89% (14/36) | 52.78% (57/108) |
+| 4a | rare-monkey-4 | GP | `GP=true, GP-colored=true` ❌ | 83.33% (30/36) | 41.67% (15/36) | 33.33% (12/36) | 52.78% (57/108) |
+| 4a | rare-monkey-4 | GP | `GP=true` ✅ | 83.33% (30/36) | 33.33% (12/36) | 27.78% (10/36) | 48.15% (52/108) |
+| 4b | autumn-dust-13 | GP | `GP=true` ✅ | 77.78% (28/36) | 36.11% (13/36) | 41.67% (15/36) | 51.85% (56/108) |
+| 5 | fresh-tree-11 | GP+skill | `GP=true, SKILL=true` | 83.33% (30/36) | 50.00% (18/36) | **55.56% (20/36)** | **62.96% (68/108)** |
+| 6 | true-firefly-8 | rgb | `none` | 0.00% (0/36) | 16.67% (6/36) | 0.00% (0/36) | 5.56% (6/108) |
+| 7 | good-serenity-16 | rgbd-only-skill | `SKILL=true` | 77.78% (28/36) | 47.22% (17/36) | 33.33% (12/36) | 52.78% (57/108) |
+| 8 | morning-glitter-1 | rgbd+grasp-part | `GRASP_PART=true` | 86.11% (31/36) | 38.89% (14/36) | 41.67% (15/36) | 55.56% (60/108) |
+| 9 | eternal-cosmos-2 | rgbd+grasp-part-colored | `GRASP_PART=true, GP-colored=true, grasp-colored=true` | 80.56% (29/36) | 44.44% (16/36) | 33.33% (12/36) | 52.78% (57/108) |
 
 ### A.2 2000 epoch eval
 
-| # | RUN_ID | 训练配置 | eval GP colored | one_leg | round_table | lamp | Overall |
+| # | RUN_ID | 训练配置 | eval annotations | one_leg | round_table | lamp | Overall |
 |---|--------|---------|-----------------|---------|-------------|------|---------|
-| 1 | icy-vortex-9 | rgbd+GP | N/A | 80.56% (29/36) | 36.11% (13/36) | 19.44% (7/36) | 45.37% (49/108) |
-| 2 | clear-water-12 | rgbd | N/A | 0.00% (0/36) | 44.44% (16/36) | 0.00% (0/36) | 14.81% (16/108) |
-| 3 | absurd-voice-2 | colored GP | ❌ false (错) | 83.33% (30/36) | 38.89% (14/36) | 27.78% (10/36) | 50.00% (54/108) |
-| 3 | absurd-voice-2 | colored GP | ✅ true (对) | 86.11% (31/36) | 33.33% (12/36) | 36.11% (13/36) | 51.85% (56/108) |
-| 4a | rare-monkey-4 | GP | ❌ true (错) | 80.56% (29/36) | 47.22% (17/36) | 33.33% (12/36) | 53.70% (58/108) |
-| 4a | rare-monkey-4 | GP | ✅ false (对) | 88.89% (32/36) | 38.89% (14/36) | 33.33% (12/36) | 53.70% (58/108) |
-| 4b | autumn-dust-13 | GP | ✅ false | 91.67% (33/36) | 30.56% (11/36) | 44.44% (16/36) | 55.56% (60/108) |
-| 5 | fresh-tree-11 | GP+skill | N/A | 86.11% (31/36) | 33.33% (12/36) | 38.89% (14/36) | 52.78% (57/108) |
-| 6 | true-firefly-8 | rgb | N/A | 0.00% (0/36) | 30.56% (11/36) | 0.00% (0/36) | 10.19% (11/108) |
+| 1 | icy-vortex-9 | rgbd+GP | `GP=true` | 80.56% (29/36) | 36.11% (13/36) | 19.44% (7/36) | 45.37% (49/108) |
+| 2 | clear-water-12 | rgbd | `none` | 0.00% (0/36) | 44.44% (16/36) | 0.00% (0/36) | 14.81% (16/108) |
+| 3 | absurd-voice-2 | colored GP | `GP=true, GP-colored=false` ❌ | 83.33% (30/36) | 38.89% (14/36) | 27.78% (10/36) | 50.00% (54/108) |
+| 3 | absurd-voice-2 | colored GP | `GP=true, GP-colored=true` ✅ | 86.11% (31/36) | 33.33% (12/36) | 36.11% (13/36) | 51.85% (56/108) |
+| 4a | rare-monkey-4 | GP | `GP=true, GP-colored=true` ❌ | 80.56% (29/36) | 47.22% (17/36) | 33.33% (12/36) | 53.70% (58/108) |
+| 4a | rare-monkey-4 | GP | `GP=true` ✅ | 88.89% (32/36) | 38.89% (14/36) | 33.33% (12/36) | 53.70% (58/108) |
+| 4b | autumn-dust-13 | GP | `GP=true` ✅ | 91.67% (33/36) | 30.56% (11/36) | 44.44% (16/36) | 55.56% (60/108) |
+| 5 | fresh-tree-11 | GP+skill | `GP=true, SKILL=true` | 86.11% (31/36) | 33.33% (12/36) | 38.89% (14/36) | 52.78% (57/108) |
+| 6 | true-firefly-8 | rgb | `none` | 0.00% (0/36) | 30.56% (11/36) | 0.00% (0/36) | 10.19% (11/108) |
 
-> eval GP colored 标记：✅ = 与训练配置一致，❌ = 与训练配置不一致
+> `eval annotations` 中的 ✅ = 与 checkpoint 训练配置一致，❌ = 与 checkpoint 训练配置不一致。
 
 ### A.3 wandb test metrics
 
@@ -192,6 +202,8 @@ wandb summary 最后一次 eval 记录的值（不一定是 3000 epoch 末尾；
 | fresh-tree-11 | 0.1009 | 0.0322 | 0.00013 | 0.00882 | 0.2687 |
 | true-firefly-8 | 0.2205 | 0.0390 | 0.00018 | 0.02559 | 0.2363 |
 | good-serenity-16 | 0.0808 | 0.0275 | 0.00012 | 0.00705 | 0.2041 |
+| morning-glitter-1 | 0.0848 | 0.0270 | 0.00019 | 0.00837 | 0.2192 |
+| eternal-cosmos-2 | 0.1643 | 0.0562 | 0.00032 | 0.01224 | 0.4881 |
 
 ### A.4 查证路径
 
@@ -211,10 +223,12 @@ wandb summary 最后一次 eval 记录的值（不一定是 3000 epoch 末尾；
 | icy-vortex-9 | rgbd+GP | `one_leg/multi-task-rgbd-skill-low-0610_icy-vortex-9_latest_3000/2026-06-15T12-28-16.json` | `round_table/multi-task-rgbd-skill-low-0610_icy-vortex-9_latest_3000/2026-06-15T12-54-02.json` | `lamp/multi-task-rgbd-skill-low-0610_icy-vortex-9_latest_3000/2026-06-15T13-22-21.json` | `one_leg+round_table+lamp/multi-task-rgbd-skill-low-0610_icy-vortex-9_latest_3000/2026-06-15T13-22-22.json` |
 | fresh-tree-11 | rgbd+GP+skill | `one_leg/multi-task-rgbd-skill-low-0610_fresh-tree-11_latest_3000/2026-06-15T16-58-11.json` | `round_table/multi-task-rgbd-skill-low-0610_fresh-tree-11_latest_3000/2026-06-15T17-23-17.json` | `lamp/multi-task-rgbd-skill-low-0610_fresh-tree-11_latest_3000/2026-06-15T17-44-20.json` | `one_leg+round_table+lamp/multi-task-rgbd-skill-low-0610_fresh-tree-11_latest_3000/2026-06-15T17-44-21.json` |
 | true-firefly-8 | rgb | `one_leg/multi-task-rgbd-skill-low-0610_true-firefly-8_latest_3000/2026-06-15T18-06-01.json` | `round_table/multi-task-rgbd-skill-low-0610_true-firefly-8_latest_3000/2026-06-15T18-31-57.json` | `lamp/multi-task-rgbd-skill-low-0610_true-firefly-8_latest_3000/2026-06-15T18-54-11.json` | `one_leg+round_table+lamp/multi-task-rgbd-skill-low-0610_true-firefly-8_latest_3000/2026-06-15T18-54-13.json` |
+| morning-glitter-1 | rgbd+grasp-part | `one_leg/multi-task-rgbd-skill-low-grasp-annotation_morning-glitter-1_last/2026-07-07T19-21-11.json` | `round_table/multi-task-rgbd-skill-low-grasp-annotation_morning-glitter-1_last/2026-07-07T19-51-10.json` | `lamp/multi-task-rgbd-skill-low-grasp-annotation_morning-glitter-1_last/2026-07-07T20-18-00.json` | `one_leg+round_table+lamp/multi-task-rgbd-skill-low-grasp-annotation_morning-glitter-1_last/2026-07-07T20-18-02.json` |
+| eternal-cosmos-2 | rgbd+grasp-part-colored | `one_leg/multi-task-rgbd-skill-low-grasp-annotation_eternal-cosmos-2_last/2026-07-08T03-20-08.json` | `round_table/multi-task-rgbd-skill-low-grasp-annotation_eternal-cosmos-2_last/2026-07-08T03-49-43.json` | `lamp/multi-task-rgbd-skill-low-grasp-annotation_eternal-cosmos-2_last/2026-07-08T04-15-38.json` | `one_leg+round_table+lamp/multi-task-rgbd-skill-low-grasp-annotation_eternal-cosmos-2_last/2026-07-08T04-15-42.json` |
 
 #### A.4.2 2000 epoch 与 wrong-flag 复核路径
 
-`good-serenity-16` 当前没有 low-rand / 2000 epoch 的对应 eval JSON，因此 §2.2 保持 `—`。
+`good-serenity-16`、`morning-glitter-1`、`eternal-cosmos-2` 当前都没有 low-rand / 2000 epoch 的对应 eval JSON，因此 §2.2 保持 `—`。
 
 | RUN_ID | epoch / flag | one_leg JSON | round_table JSON | lamp JSON |
 |--------|--------------|--------------|------------------|-----------|
