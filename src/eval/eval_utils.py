@@ -5,7 +5,7 @@ from src.behavior.base import Actor
 import torch
 import wandb
 
-from typing import Union
+from typing import Any, Dict, Tuple, Union
 from wandb.sdk.wandb_run import Run
 
 from ipdb import set_trace as bp  # noqa
@@ -103,11 +103,28 @@ def load_eval_config(
     return run.config
 
 
+def resolve_model_path(run: Run, wt_type: str = "best") -> Union[str, None]:
+    _, model_path = get_model_from_api_or_cached(f"{run.project}/{run.id}", wt_type)
+    return model_path
+
+
+def load_checkpoint_payload(
+    run: Run,
+    wt_type: str = "best",
+    map_location: str = "cpu",
+) -> Tuple[Union[Dict[str, Any], DictConfig], Union[str, None]]:
+    model_path = resolve_model_path(run, wt_type=wt_type)
+    if model_path is None:
+        return {}, None
+
+    checkpoint = torch.load(model_path, map_location=map_location)
+    return checkpoint, model_path
+
+
 def load_model_weights(
     run: Run, actor: Actor, wt_type: str = "best", device: str = "cuda"
 ):
-
-    _, model_path = get_model_from_api_or_cached(f"{run.project}/{run.id}", wt_type)
+    model_path = resolve_model_path(run, wt_type=wt_type)
 
     if model_path is None:
         return None

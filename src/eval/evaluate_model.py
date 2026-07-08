@@ -37,7 +37,7 @@ from src.behavior import get_actor
 from src.common.tasks import task2idx, task_timeout
 from src.common.files import trajectory_save_dir
 from src.gym import get_rl_env
-from src.eval.eval_utils import load_model_weights
+from src.eval.eval_utils import load_checkpoint_payload
 from src.eval.perturb_util import PERTURB_MODES, PerturbRunner
 
 from typing import Any, Dict, List, Optional
@@ -395,6 +395,87 @@ def _resolve_checkpoint_name(args: argparse.Namespace) -> str:
     return f"actor_chkpt_{wt_name}"
 
 
+def _resolve_checkpoint_name_from_path(
+    args: argparse.Namespace,
+    checkpoint_path: Optional[str],
+) -> str:
+    if checkpoint_path:
+        return Path(checkpoint_path).stem
+    return _resolve_checkpoint_name(args)
+
+
+def _config_to_plain_dict(cfg: DictConfig) -> Dict[str, Any]:
+    container = OmegaConf.to_container(cfg, resolve=True)
+    return container if isinstance(container, dict) else {"config": container}
+
+
+def _extract_model_state_dict(checkpoint_payload: Any) -> Any:
+    if isinstance(checkpoint_payload, dict):
+        if "model_state_dict" in checkpoint_payload:
+            return checkpoint_payload["model_state_dict"]
+        if "state_dict" in checkpoint_payload:
+            return checkpoint_payload["state_dict"]
+    return checkpoint_payload
+
+
+def _resolve_eval_annotation_settings(
+    cfg: DictConfig,
+    args: argparse.Namespace,
+) -> Dict[str, Any]:
+    uses_guidance_point = model_uses_guidance_point(cfg)
+    uses_guidance_point_colored = model_uses_guidance_point_colored(cfg)
+    uses_grasp = model_uses_grasp(cfg)
+    uses_grasp_colored = model_uses_grasp_colored(cfg)
+    uses_grasp_part = model_uses_grasp_part(cfg)
+
+    return {
+        "annotate_skill": bool(args.annotate_skill),
+        "skill_on_image": bool(args.skill_on_image),
+        "policy_annotate_guidance_point": uses_guidance_point,
+        "policy_annotate_grasp": uses_grasp,
+        "policy_grasp_part_annotate": uses_grasp_part,
+        "policy_guidance_point_colored": uses_guidance_point_colored,
+        "policy_grasp_annotation_colored": uses_grasp_colored,
+        "guidance_point_on_image": uses_guidance_point,
+        "grasp_annotation_on_image": uses_grasp,
+        "grasp_part_annotate": uses_grasp_part,
+        "guidance_point_colored": uses_guidance_point_colored,
+        "grasp_annotation_colored": uses_grasp_colored,
+        "requested_guidance_point_on_image": bool(args.guidance_point_on_image),
+        "requested_grasp_annotation_on_image": bool(args.grasp_annotation_on_image),
+        "requested_grasp_part_annotate": bool(args.grasp_part_annotate),
+        "requested_guidance_point_colored": bool(args.guidance_point_colored),
+        "requested_grasp_annotation_colored": bool(args.grasp_annotation_colored),
+    }
+
+
+def _print_eval_annotation_resolution(resolved: Dict[str, Any]) -> None:
+    print(
+        "Resolved eval annotations from checkpoint config: "
+        f"guidance_point_on_image={resolved['guidance_point_on_image']} "
+        f"grasp_annotation_on_image={resolved['grasp_annotation_on_image']} "
+        f"grasp_part_annotate={resolved['grasp_part_annotate']} "
+        f"guidance_point_colored={resolved['guidance_point_colored']} "
+        f"grasp_annotation_colored={resolved['grasp_annotation_colored']}"
+    )
+    mismatches = []
+    for key in (
+        "guidance_point_on_image",
+        "grasp_annotation_on_image",
+        "grasp_part_annotate",
+        "guidance_point_colored",
+        "grasp_annotation_colored",
+    ):
+        requested = resolved[f"requested_{key}"]
+        actual = resolved[key]
+        if requested != actual:
+            mismatches.append(f"{key}: cli={requested} -> checkpoint={actual}")
+    if mismatches:
+        print("Checkpoint config overrides CLI annotation flags:")
+        for line in mismatches:
+            print(f"  - {line}")
+
+
 def _write_eval_stats_log(
     *,
     log_dir: Path,
@@ -722,9 +803,22 @@ if __name__ == "__main__":
             "Success rate (all tasks): "
             f"{format_success_rate(total_success_all_tasks, total_rollouts_all_tasks)}"
         )
+        first_task_summary = per_task_summaries.get(tasks[0], {}) if tasks else {}
         multitask_payload = {
             "task_group": task_group,
-            "checkpoint_name": _resolve_checkpoint_name(args),
+            "checkpoint_name": first_task_summary.get(
+                "checkpoint_name", _resolve_checkpoint_name(args)
+            ),
+            "checkpoint_path": first_task_summary.get("checkpoint_path"),
+            "training_config": first_task_summary.get("training_config"),
+            "eval_annotation_config": first_task_summary.get(
+                "eval_annotation_config"
+            ),
+            "eval_randomness": args.randomness,
+            "n_envs": args.n_envs,
+            "observation_space": args.observation_space,
+            "action_type": args.action_type,
+            "eval_command": sys.argv,
             "n_success": total_success_all_tasks,
             "n_rollouts": total_rollouts_all_tasks,
             "success_rate": (
@@ -737,7 +831,7 @@ if __name__ == "__main__":
         _write_eval_stats_log(
             log_dir=eval_logs_dir,
             task_name=task_group or "multitask",
-            checkpoint_name=_resolve_checkpoint_name(args),
+            checkpoint_name=multitask_payload["checkpoint_name"],
             payload=multitask_payload,
         )
         sys.exit(0)
@@ -760,6 +854,10 @@ if __name__ == "__main__":
     summary_skill_completion_counts: Dict[str, int] = {}
     summary_step_counts: Dict[str, int] = {}
     summary_step_completion_counts: Dict[str, int] = {}
+    summary_checkpoint_name: Optional[str] = None
+    summary_checkpoint_path: Optional[str] = None
+    summary_training_config: Optional[Dict[str, Any]] = None
+    summary_eval_annotation_config: Optional[Dict[str, Any]] = None
 
     # Start the evaluation loop
     print(f"Starting evaluation loop in continuous mode: {args.continuous_mode}")
@@ -816,7 +914,33 @@ if __name__ == "__main__":
                     f"Evaluating run: {run.name} at test_epoch_loss: {test_epoch_loss}"
                 )
 
-                cfg = OmegaConf.create(run.config)
+                checkpoint_path = args.wt_path
+                checkpoint_payload: Any
+                if args.wt_path:
+                    checkpoint_payload = run.checkpoint
+                else:
+                    checkpoint_payload, checkpoint_path = load_checkpoint_payload(
+                        run=run,
+                        wt_type=args.wt_type,
+                        map_location=device,
+                    )
+                    if checkpoint_path is None:
+                        print(
+                            f"Skipping run: {run.name} as no weights for wt_type: {args.wt_type} were found"
+                        )
+                        if args.wandb:
+                            run.config["currently_evaluating"] = False
+                            run.update()
+                        continue
+
+                checkpoint_cfg = (
+                    checkpoint_payload.get("config")
+                    if isinstance(checkpoint_payload, dict)
+                    else None
+                )
+                cfg = OmegaConf.create(
+                    checkpoint_cfg if checkpoint_cfg is not None else run.config
+                )
                 assert cfg.control.control_mode == args.action_type
                 validate_annotation_config(cfg)
 
@@ -842,6 +966,7 @@ if __name__ == "__main__":
                 uses_grasp = model_uses_grasp(cfg)
                 uses_grasp_colored = model_uses_grasp_colored(cfg)
                 uses_grasp_part = model_uses_grasp_part(cfg)
+                resolved_eval_annotations = _resolve_eval_annotation_settings(cfg, args)
                 actor_name = cfg.actor_name if "actor_name" in cfg else cfg.actor.name
                 print(
                     "Skill input requirement: "
@@ -857,6 +982,7 @@ if __name__ == "__main__":
                     f"grasp_colored={uses_grasp_colored} "
                     f"grasp_part={uses_grasp_part}"
                 )
+                _print_eval_annotation_resolution(resolved_eval_annotations)
                 if args.action_horizon is not None:
                     cfg.actor.action_horizon = args.action_horizon
                     print(f"Overriding action_horizon to {args.action_horizon}")
@@ -866,26 +992,22 @@ if __name__ == "__main__":
                 if isinstance(actor, DiffusionPolicy):
                     actor.inference_steps = 4
 
-                if args.wt_path:
-                    if cfg.actor.name != "dp3":
-                        actor.load_state_dict(run.checkpoint["model_state_dict"])
-                    actor.eval()
-                    actor.to(device)
-                else:
-                    actor = load_model_weights(run=run, actor=actor, wt_type=args.wt_type)
+                checkpoint_name = _resolve_checkpoint_name_from_path(
+                    args, checkpoint_path
+                )
+                model_state_dict = _extract_model_state_dict(checkpoint_payload)
+                if cfg.actor.name != "dp3":
+                    actor.load_state_dict(model_state_dict)
+                actor.eval()
+                actor.to(device)
 
-                if actor is None:
-                    print(
-                        f"Skipping run: {run.name} as no weights for wt_type: {args.wt_type} was not found"
-                    )
-                    if args.wandb:
-                        run.config["currently_evaluating"] = False
-                        run.update()
-                    continue
+                summary_checkpoint_name = checkpoint_name
+                summary_checkpoint_path = checkpoint_path
+                summary_training_config = _config_to_plain_dict(cfg)
+                summary_eval_annotation_config = resolved_eval_annotations
 
                 total_success = 0
                 total_rollouts = 0
-                checkpoint_name = _resolve_checkpoint_name(args)
 
                 for task in tasks:
                     task_rollout_after_success = rollout_after_success_by_task[task]
@@ -933,19 +1055,22 @@ if __name__ == "__main__":
                         suffix = f"pc/{args.pc_points}/{args.pc_downsample_mode}"
                     image_mode = "rgbd" if args.save_depth_image else "rgb"
                     image_annotation_tokens = []
-                    if args.grasp_part_annotate:
+                    if resolved_eval_annotations["grasp_part_annotate"]:
                         part_token = "grasp-part"
-                        if args.grasp_annotation_colored or args.guidance_point_colored:
+                        if (
+                            resolved_eval_annotations["grasp_annotation_colored"]
+                            or resolved_eval_annotations["guidance_point_colored"]
+                        ):
                             part_token += "-colored"
                         image_annotation_tokens.append(part_token)
-                    if args.grasp_annotation_on_image:
+                    if resolved_eval_annotations["grasp_annotation_on_image"]:
                         grasp_token = "grasp"
-                        if args.grasp_annotation_colored:
+                        if resolved_eval_annotations["grasp_annotation_colored"]:
                             grasp_token += "-colored"
                         image_annotation_tokens.append(grasp_token)
-                    if args.guidance_point_on_image:
+                    if resolved_eval_annotations["guidance_point_on_image"]:
                         point_token = "point"
-                        if args.guidance_point_colored:
+                        if resolved_eval_annotations["guidance_point_colored"]:
                             point_token += "-colored"
                         image_annotation_tokens.append(point_token)
 
@@ -1131,18 +1256,20 @@ if __name__ == "__main__":
                         full_length_rollout=args.full_length_rollout,
                         record_first_state_only=args.record_for_coverage,
                         pc_generator=pc_generator,
-                        annotate_skill=args.annotate_skill,
+                        annotate_skill=resolved_eval_annotations["annotate_skill"],
                         enable_annotation_verify=args.enable_annotation_verify,
-                        annotate_guidance_point=uses_guidance_point,
-                        guidance_point_on_image=args.guidance_point_on_image,
-                        grasp_annotation_on_image=args.grasp_annotation_on_image,
-                        grasp_part_annotate=args.grasp_part_annotate,
-                        guidance_point_colored=args.guidance_point_colored,
-                        grasp_annotation_colored=args.grasp_annotation_colored,
-                        model_guidance_point_colored=uses_guidance_point_colored,
-                        skill_on_image=args.skill_on_image,
+                        annotate_guidance_point=resolved_eval_annotations["policy_annotate_guidance_point"],
+                        annotate_grasp=resolved_eval_annotations["policy_annotate_grasp"],
+                        guidance_point_on_image=resolved_eval_annotations["guidance_point_on_image"],
+                        grasp_annotation_on_image=resolved_eval_annotations["grasp_annotation_on_image"],
+                        grasp_part_annotate=resolved_eval_annotations["grasp_part_annotate"],
+                        guidance_point_colored=resolved_eval_annotations["guidance_point_colored"],
+                        grasp_annotation_colored=resolved_eval_annotations["grasp_annotation_colored"],
+                        model_guidance_point_colored=resolved_eval_annotations["policy_guidance_point_colored"],
+                        model_grasp_annotation_colored=resolved_eval_annotations["policy_grasp_annotation_colored"],
+                        skill_on_image=resolved_eval_annotations["skill_on_image"],
                         provide_skill_input=requires_skill_input,
-                        collect_skill_stats=args.annotate_skill,
+                        collect_skill_stats=resolved_eval_annotations["annotate_skill"],
                         output_only_pickle=args.output_only_pickle,
                         perturb_runner=perturb_runner,
                         init_states=task_init_states,
@@ -1169,6 +1296,14 @@ if __name__ == "__main__":
                         "task": task,
                         "task_group": task_group,
                         "checkpoint_name": checkpoint_name,
+                        "checkpoint_path": checkpoint_path,
+                        "training_config": summary_training_config,
+                        "eval_annotation_config": summary_eval_annotation_config,
+                        "eval_randomness": args.randomness,
+                        "n_envs": args.n_envs,
+                        "observation_space": args.observation_space,
+                        "action_type": args.action_type,
+                        "eval_command": sys.argv,
                         "n_success": rollout_stats.n_success,
                         "n_rollouts": rollout_stats.n_rollouts,
                         "success_rate": success_rate,
@@ -1324,6 +1459,15 @@ if __name__ == "__main__":
                 json.dump(
                     {
                         "task": primary_task if len(tasks) == 1 else task_group,
+                        "checkpoint_name": summary_checkpoint_name,
+                        "checkpoint_path": summary_checkpoint_path,
+                        "training_config": summary_training_config,
+                        "eval_annotation_config": summary_eval_annotation_config,
+                        "eval_randomness": args.randomness,
+                        "n_envs": args.n_envs,
+                        "observation_space": args.observation_space,
+                        "action_type": args.action_type,
+                        "eval_command": sys.argv,
                         "n_success": summary_total_success,
                         "n_rollouts": summary_total_rollouts,
                         "success_rate": (
