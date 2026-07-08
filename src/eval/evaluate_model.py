@@ -39,6 +39,10 @@ from src.common.files import trajectory_save_dir
 from src.gym import get_rl_env
 from src.eval.eval_utils import load_checkpoint_payload
 from src.eval.perturb_util import PERTURB_MODES, PerturbRunner
+from src.eval.progress_schema import (
+    get_task_progress_labels,
+    normalize_progress_counts,
+)
 
 from typing import Any, Dict, List, Optional
 from ipdb import set_trace as bp  # noqa
@@ -316,6 +320,23 @@ def _print_skill_progress_stats(
     step_counts: Dict[str, int],
     step_completion_counts: Dict[str, int],
 ):
+    state_counts = normalize_progress_counts(
+        state_counts,
+        get_task_progress_labels(task, "skill_states"),
+    )
+    skill_completion_counts = normalize_progress_counts(
+        skill_completion_counts,
+        state_counts.keys(),
+    )
+    step_counts = normalize_progress_counts(
+        step_counts,
+        get_task_progress_labels(task, "assembly_steps"),
+    )
+    step_completion_counts = normalize_progress_counts(
+        step_completion_counts,
+        step_counts.keys(),
+    )
+
     if not state_counts:
         print(f"Skill-state statistics ({task}): unavailable")
         return
@@ -327,10 +348,10 @@ def _print_skill_progress_stats(
     print(f"Skill success rates ({task}):")
     for state_label, reached in state_counts.items():
         completed = skill_completion_counts.get(state_label, 0)
-        print(
-            f"  {state_label}: "
-            f"{completed / reached:.2%} ({completed}/{reached})"
-        )
+        if reached <= 0:
+            print(f"  {state_label}: — (0/0)")
+            continue
+        print(f"  {state_label}: {completed / reached:.2%} ({completed}/{reached})")
 
     if not step_counts:
         print(f"Assembly step success rates ({task}): unavailable")
@@ -339,18 +360,36 @@ def _print_skill_progress_stats(
     print(f"Assembly step success rates ({task}):")
     for step_label, reached in step_counts.items():
         completed = step_completion_counts.get(step_label, 0)
-        print(
-            f"  {step_label}: "
-            f"{completed / reached:.2%} ({completed}/{reached})"
-        )
+        if reached <= 0:
+            print(f"  {step_label}: — (0/0)")
+            continue
+        print(f"  {step_label}: {completed / reached:.2%} ({completed}/{reached})")
 
 
 def _build_progress_summary(
+    task: str,
     state_counts: Dict[str, int],
     skill_completion_counts: Dict[str, int],
     step_counts: Dict[str, int],
     step_completion_counts: Dict[str, int],
 ) -> Dict[str, Dict[str, Any]]:
+    state_counts = normalize_progress_counts(
+        state_counts,
+        get_task_progress_labels(task, "skill_states"),
+    )
+    skill_completion_counts = normalize_progress_counts(
+        skill_completion_counts,
+        state_counts.keys(),
+    )
+    step_counts = normalize_progress_counts(
+        step_counts,
+        get_task_progress_labels(task, "assembly_steps"),
+    )
+    step_completion_counts = normalize_progress_counts(
+        step_completion_counts,
+        step_counts.keys(),
+    )
+
     return {
         "skill_state_counts": dict(state_counts),
         "skill_completion_counts": dict(skill_completion_counts),
@@ -1313,6 +1352,7 @@ if __name__ == "__main__":
                         "rollout_path_hint": str(rollout_path_hint),
                         "perturb_mode": args.perturb_mode,
                         **_build_progress_summary(
+                            task=task,
                             state_counts=rollout_stats.state_counts,
                             skill_completion_counts=rollout_stats.skill_completion_counts,
                             step_counts=rollout_stats.step_counts,
@@ -1362,6 +1402,7 @@ if __name__ == "__main__":
                             raise ValueError(f"Invalid how_update: {how_update}")
 
                         progress_summary = _build_progress_summary(
+                            task=task,
                             state_counts=state_counts,
                             skill_completion_counts=skill_completion_counts,
                             step_counts=step_counts,
@@ -1451,6 +1492,7 @@ if __name__ == "__main__":
 
             with open(args.task_summary_out, "w") as f:
                 progress_summary = _build_progress_summary(
+                    task=primary_task if len(tasks) == 1 else task_group,
                     state_counts=summary_state_counts,
                     skill_completion_counts=summary_skill_completion_counts,
                     step_counts=summary_step_counts,

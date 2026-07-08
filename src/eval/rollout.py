@@ -47,6 +47,10 @@ from src.eval.skill_annotation_util import (
     reset_skill_annotator,
 )
 from src.eval.perturb_util import PerturbContext, PerturbRunner
+from src.eval.progress_schema import (
+    get_task_progress_labels,
+    normalize_progress_counts,
+)
 
 
 RolloutStats = collections.namedtuple(
@@ -1383,6 +1387,23 @@ def calculate_success_rate(
     pbar.close()
     if perturb_runner is not None and perturb_runner.enabled:
         print(f"Perturbation stats: {perturb_runner.stats.summary()}")
+
+    state_counts = normalize_progress_counts(
+        state_counts,
+        get_task_progress_labels(getattr(env, "furniture_name", None), "skill_states"),
+    )
+    skill_completion_counts = normalize_progress_counts(
+        skill_completion_counts,
+        state_counts.keys(),
+    )
+    step_counts = normalize_progress_counts(
+        step_counts,
+        get_task_progress_labels(getattr(env, "furniture_name", None), "assembly_steps"),
+    )
+    step_completion_counts = normalize_progress_counts(
+        step_completion_counts,
+        step_counts.keys(),
+    )
 
     skill_success_rates = _compute_success_rates(state_counts, skill_completion_counts)
     step_success_rates = _compute_success_rates(step_counts, step_completion_counts)
