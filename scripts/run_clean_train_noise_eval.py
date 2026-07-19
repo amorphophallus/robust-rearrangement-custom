@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -21,6 +22,7 @@ class ConditionConfig:
     checkpoint: Path
     flags: tuple[str, ...]
     apply_to: str
+    data_suffix: str
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,7 @@ CONDITIONS = [
         checkpoint=CHECKPOINT_ROOT / "multi-task-rgbd-skill-low-0610_icy-vortex-9_latest_3000.pt",
         flags=("--annotate-skill", "--guidance-point-on-image"),
         apply_to="point",
+        data_suffix="rgbd-point",
     ),
     ConditionConfig(
         condition_id="colored_gp",
@@ -60,6 +63,7 @@ CONDITIONS = [
             "--guidance-point-colored",
         ),
         apply_to="point",
+        data_suffix="rgbd-point-colored",
     ),
     ConditionConfig(
         condition_id="gp_skill",
@@ -68,6 +72,7 @@ CONDITIONS = [
         checkpoint=CHECKPOINT_ROOT / "multi-task-rgbd-skill-low-0610_fresh-tree-11_latest_3000.pt",
         flags=("--annotate-skill", "--guidance-point-on-image"),
         apply_to="point",
+        data_suffix="rgbd-point",
     ),
     ConditionConfig(
         condition_id="grasp_part",
@@ -76,6 +81,7 @@ CONDITIONS = [
         checkpoint=CHECKPOINT_ROOT / "multi-task-rgbd-skill-low-grasp-annotation_morning-glitter-1_last_.pt",
         flags=("--annotate-skill", "--grasp-part-annotate"),
         apply_to="all",
+        data_suffix="rgbd-grasp-part",
     ),
     ConditionConfig(
         condition_id="grasp_part_colored",
@@ -89,6 +95,7 @@ CONDITIONS = [
             "--grasp-annotation-colored",
         ),
         apply_to="all",
+        data_suffix="rgbd-grasp-part-colored",
     ),
 ]
 
@@ -198,6 +205,47 @@ def _rollout_suffix_model_name(condition: ConditionConfig, noise: NoiseLevel) ->
         f"{_safe_path_part(condition.condition_id)}"
         f"/{_safe_path_part(noise.noise_id)}_{_safe_path_part(noise.noise_label)}"
     )
+
+
+def _rollout_group_dirs(
+    *,
+    task_group: str,
+    randomness: str,
+    condition: ConditionConfig,
+    noise: NoiseLevel,
+) -> list[Path]:
+    suffix = _rollout_suffix_model_name(condition, noise)
+    return [
+        REPO_ROOT
+        / "data"
+        / "raw"
+        / "diffik"
+        / "sim"
+        / task
+        / "rollout"
+        / randomness
+        / condition.data_suffix
+        / task_group
+        / suffix
+        for task in task_group.split("+")
+    ]
+
+
+def _clean_rollout_group(
+    *,
+    task_group: str,
+    randomness: str,
+    condition: ConditionConfig,
+    noise: NoiseLevel,
+) -> None:
+    for rollout_dir in _rollout_group_dirs(
+        task_group=task_group,
+        randomness=randomness,
+        condition=condition,
+        noise=noise,
+    ):
+        if rollout_dir.exists():
+            shutil.rmtree(rollout_dir)
 
 
 def _build_command(
@@ -351,6 +399,12 @@ def main() -> None:
                 _append_manifest(args.manifest, row)
                 continue
 
+            _clean_rollout_group(
+                task_group=args.task_group,
+                randomness=args.randomness,
+                condition=condition,
+                noise=noise,
+            )
             group_log.parent.mkdir(parents=True, exist_ok=True)
             with group_log.open("w") as log_file:
                 completed = subprocess.run(
