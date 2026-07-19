@@ -17,6 +17,14 @@ data:
   annotate_grasp_colored: false
   annotate_grasp_part: false
   annotate_skill_one_hot: false
+  # Metadata for datasets generated with noisy visual guidance annotations.
+  # These values are recorded in the training config; the dataset suffix selects
+  # the actual clean/noisy LMDB.
+  annotation_noise_pos_std_m: 0.0
+  annotation_noise_ori_std_deg: 0.0
+  annotation_noise_seed: 0
+  annotation_noise_mode: gaussian_clip_2sigma
+  annotation_noise_apply_to: all
   environment: ${environment}
   task: ${task}
   demo_source: ${demo_source}
