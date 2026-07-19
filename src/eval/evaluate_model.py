@@ -39,6 +39,7 @@ from src.common.files import trajectory_save_dir
 from src.gym import get_rl_env
 from src.eval.eval_utils import load_checkpoint_payload
 from src.eval.perturb_util import PERTURB_MODES, PerturbRunner
+from src.eval.annotation_noise import make_annotation_noise_config
 from src.eval.progress_schema import (
     get_task_progress_labels,
     normalize_progress_counts,
@@ -366,6 +367,31 @@ def _print_skill_progress_stats(
         print(f"  {step_label}: {completed / reached:.2%} ({completed}/{reached})")
 
 
+def _print_tracking_error_stats(
+    task: str,
+    tracking_error: Optional[Dict[str, Any]],
+):
+    overall_count = int((tracking_error or {}).get("overall", {}).get("count", 0))
+    by_skill = (tracking_error or {}).get("by_skill", {})
+    if overall_count <= 0 or not by_skill:
+        print(f"Tracking error ({task}): unavailable")
+        return
+
+    print(f"Tracking error ({task}):")
+    for state_label, stats in by_skill.items():
+        count = int(stats.get("count", 0))
+        if count <= 0:
+            print(f"  {state_label}: — (n=0)")
+            continue
+        print(
+            f"  {state_label}: "
+            f"pos={stats.get('mean_pos_m', 0.0):.4f}m, "
+            f"ori={stats.get('mean_ori_deg', 0.0):.2f}deg, "
+            f"total={stats.get('mean_total', 0.0):.2f}, "
+            f"n={count}"
+        )
+
+
 def _build_progress_summary(
     task: str,
     state_counts: Dict[str, int],
@@ -686,8 +712,29 @@ if __name__ == "__main__":
     parser.add_argument("--guidance-point-colored", action="store_true")
     parser.add_argument("--grasp-annotation-colored", action="store_true")
     parser.add_argument("--skill-on-image", action="store_true")
+    parser.add_argument("--annotation-noise-pos-std-m", type=float, default=0.0)
+    parser.add_argument("--annotation-noise-ori-std-deg", type=float, default=0.0)
+    parser.add_argument("--annotation-noise-seed", type=int, default=0)
+    parser.add_argument(
+        "--annotation-noise-mode",
+        type=str,
+        choices=["gaussian_clip_2sigma", "uniform"],
+        default="gaussian_clip_2sigma",
+    )
+    parser.add_argument(
+        "--annotation-noise-apply-to",
+        type=str,
+        choices=["point", "grasp", "all"],
+        default="all",
+    )
 
     parser.add_argument("--save-rollouts-suffix", type=str, default="")
+    parser.add_argument(
+        "--max-saved-rollouts",
+        type=int,
+        default=0,
+        help="If > 0, save at most this many rollout trajectories per task.",
+    )
     parser.add_argument(
         "--rollout-suffix-model-name",
         type=str,
@@ -736,6 +783,14 @@ if __name__ == "__main__":
 
     # Validate the arguments
     validate_args(args)
+    annotation_noise_config = make_annotation_noise_config(
+        pos_std_m=args.annotation_noise_pos_std_m,
+        ori_std_deg=args.annotation_noise_ori_std_deg,
+        seed=args.annotation_noise_seed,
+        mode=args.annotation_noise_mode,
+        apply_to=args.annotation_noise_apply_to,
+    )
+    print(f"Annotation noise config: {annotation_noise_config.to_dict()}")
 
     # Make the device
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
@@ -853,6 +908,7 @@ if __name__ == "__main__":
             "eval_annotation_config": first_task_summary.get(
                 "eval_annotation_config"
             ),
+            "annotation_noise_config": annotation_noise_config.to_dict(),
             "eval_randomness": args.randomness,
             "n_envs": args.n_envs,
             "observation_space": args.observation_space,
@@ -893,6 +949,7 @@ if __name__ == "__main__":
     summary_skill_completion_counts: Dict[str, int] = {}
     summary_step_counts: Dict[str, int] = {}
     summary_step_completion_counts: Dict[str, int] = {}
+    summary_tracking_error: Optional[Dict[str, Any]] = None
     summary_checkpoint_name: Optional[str] = None
     summary_checkpoint_path: Optional[str] = None
     summary_training_config: Optional[Dict[str, Any]] = None
@@ -1309,9 +1366,15 @@ if __name__ == "__main__":
                         skill_on_image=resolved_eval_annotations["skill_on_image"],
                         provide_skill_input=requires_skill_input,
                         collect_skill_stats=resolved_eval_annotations["annotate_skill"],
+                        annotation_noise_config=annotation_noise_config,
                         output_only_pickle=args.output_only_pickle,
                         perturb_runner=perturb_runner,
                         init_states=task_init_states,
+                        max_saved_rollouts=(
+                            args.max_saved_rollouts
+                            if args.max_saved_rollouts > 0
+                            else None
+                        ),
                     )
 
                     if args.store_video_wandb:
@@ -1329,6 +1392,10 @@ if __name__ == "__main__":
                         step_counts=rollout_stats.step_counts,
                         step_completion_counts=rollout_stats.step_completion_counts,
                     )
+                    _print_tracking_error_stats(
+                        task,
+                        rollout_stats.tracking_error,
+                    )
                     task_payload = {
                         "run_name": run.name,
                         "run_id": getattr(run, "id", None),
@@ -1338,6 +1405,7 @@ if __name__ == "__main__":
                         "checkpoint_path": checkpoint_path,
                         "training_config": summary_training_config,
                         "eval_annotation_config": summary_eval_annotation_config,
+                        "annotation_noise_config": annotation_noise_config.to_dict(),
                         "eval_randomness": args.randomness,
                         "n_envs": args.n_envs,
                         "observation_space": args.observation_space,
@@ -1351,6 +1419,7 @@ if __name__ == "__main__":
                         "total_reward": rollout_stats.total_reward,
                         "rollout_path_hint": str(rollout_path_hint),
                         "perturb_mode": args.perturb_mode,
+                        "tracking_error": rollout_stats.tracking_error,
                         **_build_progress_summary(
                             task=task,
                             state_counts=rollout_stats.state_counts,
@@ -1465,6 +1534,8 @@ if __name__ == "__main__":
                         summary_step_completion_counts,
                         rollout_stats.step_completion_counts,
                     )
+                    if len(tasks) == 1:
+                        summary_tracking_error = rollout_stats.tracking_error
 
                 if total_rollouts > 0:
                     print(
@@ -1505,6 +1576,7 @@ if __name__ == "__main__":
                         "checkpoint_path": summary_checkpoint_path,
                         "training_config": summary_training_config,
                         "eval_annotation_config": summary_eval_annotation_config,
+                        "annotation_noise_config": annotation_noise_config.to_dict(),
                         "eval_randomness": args.randomness,
                         "n_envs": args.n_envs,
                         "observation_space": args.observation_space,
@@ -1517,6 +1589,7 @@ if __name__ == "__main__":
                             if summary_total_rollouts > 0
                             else None
                         ),
+                        "tracking_error": summary_tracking_error,
                         **progress_summary,
                     },
                     f,

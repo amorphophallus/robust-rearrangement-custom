@@ -10,7 +10,9 @@ class Observation(TypedDict):
     parts_poses: np.ndarray
     skill: Optional[str]
     guidance_point: Optional[np.ndarray]
+    guidance_point_clean: Optional[np.ndarray]
     guidance_pose: Optional[np.ndarray]
+    guidance_pose_clean: Optional[np.ndarray]
     guidance_gripper_width: Optional[float]
     guidance_point_2d: Dict[str, Optional[np.ndarray]]
     grasp_annotation_2d: Dict[str, Optional[dict]]

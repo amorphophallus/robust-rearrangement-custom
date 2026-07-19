@@ -15,6 +15,12 @@ from furniture_bench.furniture.parts.table_top import TableTop
 from furniture_bench.furniture.parts.round_table_top import RoundTableTop
 from furniture_bench.utils.pose import rot_mat
 
+from src.eval.annotation_noise import (
+    AnnotationNoiseConfig,
+    AnnotationNoisePhaseState,
+    apply_annotation_noise,
+)
+
 
 VALID_SKILLS = {"pick", "place", "insert", "screw", "push"}
 GUIDANCE_POINT_COLOR_MAP = {
@@ -450,6 +456,7 @@ def _make_env_local_annotation_inputs(env, env_idx: int, annotation_inputs):
 @dataclass
 class SkillAnnotator:
     furniture_name: str
+    noise_seed_offset: int = 0
     previous_skill: Optional[str] = None
     previous_guidance_point_robot: Optional[np.ndarray] = None
     previous_guidance_pose_robot: Optional[np.ndarray] = None
@@ -457,6 +464,7 @@ class SkillAnnotator:
     previous_skill_state: Optional[str] = None
     previous_assembly_step: Optional[str] = None
     verifier: Optional[object] = None  # SkillAnnotationVerifier or None
+    noise_state: Optional[AnnotationNoisePhaseState] = None
 
     def __post_init__(self):
         self.furniture = furniture_factory(self.furniture_name)
@@ -475,6 +483,7 @@ class SkillAnnotator:
         self.previous_guidance_gripper_width = None
         self.previous_skill_state = None
         self.previous_assembly_step = None
+        self.noise_state = None
         if self.verifier is not None:
             self.verifier.reset()
 
@@ -649,6 +658,7 @@ class SkillAnnotator:
         env_idx: int = 0,
         annotate_wrist_camera: bool = False,
         resize_images: bool = True,
+        annotation_noise_config: Optional[AnnotationNoiseConfig] = None,
     ):
         if self.furniture_name not in {"one_leg", "round_table", "lamp"}:
             return {
@@ -656,11 +666,14 @@ class SkillAnnotator:
                 "skill_state": None,
                 "assembly_step": None,
                 "guidance_point": None,
+                "guidance_point_clean": None,
                 "guidance_pose": None,
+                "guidance_pose_clean": None,
                 "guidance_gripper_width": None,
                 "guidance_point_2d": {},
                 "grasp_annotation_2d": {},
                 "camera_info": {},
+                "annotation_noise": {"enabled": False},
             }
 
         annotation_inputs = _make_env_local_annotation_inputs(
@@ -683,13 +696,16 @@ class SkillAnnotator:
                 "skill_state": self.previous_skill_state,
                 "assembly_step": self.previous_assembly_step,
                 "guidance_point": self.previous_guidance_point_robot,
+                "guidance_point_clean": self.previous_guidance_point_robot,
                 "guidance_pose": self.previous_guidance_pose_robot,
+                "guidance_pose_clean": self.previous_guidance_pose_robot,
                 "guidance_gripper_width": self.previous_guidance_gripper_width,
                 "guidance_point_2d": {},
                 "grasp_annotation_2d": {},
                 "camera_info": camera_info,
                 "verify": None,
                 "debug": {},
+                "annotation_noise": {"enabled": False},
             }
 
         part1_idx, part2_idx = self.furniture.should_be_assembled[self.assemble_idx]
@@ -787,6 +803,9 @@ class SkillAnnotator:
                 guidance_pose = guidance_pose.copy()
                 guidance_pose[:3, 3] += _to_numpy(annotation_inputs["base_pos"]).astype(np.float32)
 
+        guidance_point_clean = None if guidance_point is None else guidance_point.copy()
+        guidance_pose_clean = None if guidance_pose is None else guidance_pose.copy()
+
         # --- consistency verification (delegated) ---
         verify_result = None
         if self.verifier is not None and guidance_point is not None:
@@ -801,6 +820,28 @@ class SkillAnnotator:
                 rb_states=annotation_inputs["rb_states"],
                 env_offset=annotation_inputs["env_offset"],
             )
+
+        phase_key = (
+            debug_info.get("phase"),
+            assembly_step,
+            skill_state_label,
+            skill,
+            debug_info.get("active_part"),
+            debug_info.get("assemble_idx"),
+        )
+        if self.noise_state is None or self.noise_state.env_idx != env_idx:
+            self.noise_state = AnnotationNoisePhaseState(
+                env_idx=env_idx,
+                seed_offset=self.noise_seed_offset,
+            )
+        guidance_point, guidance_pose, noise_info = apply_annotation_noise(
+            guidance_point=guidance_point,
+            guidance_pose=guidance_pose,
+            skill=skill,
+            phase_key=phase_key,
+            state=self.noise_state,
+            config=annotation_noise_config,
+        )
 
         guidance_point_2d = {}
         grasp_annotation_2d = {}
@@ -827,13 +868,16 @@ class SkillAnnotator:
             "skill_state": skill_state_label,
             "assembly_step": assembly_step,
             "guidance_point": guidance_point,
+            "guidance_point_clean": guidance_point_clean,
             "guidance_pose": guidance_pose,
+            "guidance_pose_clean": guidance_pose_clean,
             "guidance_gripper_width": guidance_gripper_width,
             "guidance_point_2d": guidance_point_2d,
             "grasp_annotation_2d": grasp_annotation_2d,
             "camera_info": camera_info,
             "debug": debug_info,
             "verify": verify_result,
+            "annotation_noise": noise_info,
         }
 
 
@@ -844,8 +888,13 @@ def torch_inv(mat):
 def reset_skill_annotator(env, env_idx: Optional[int] = None):
     furniture_name = getattr(env, "furniture_name", "")
     num_envs = max(int(getattr(env, "num_envs", 1)), 1)
+    seed_offset = int(getattr(env, "_skill_annotator_reset_count", 0))
+    env._skill_annotator_reset_count = seed_offset + 1
     if env_idx is None:
-        env._skill_annotators = [SkillAnnotator(furniture_name) for _ in range(num_envs)]
+        env._skill_annotators = [
+            SkillAnnotator(furniture_name, noise_seed_offset=seed_offset)
+            for _ in range(num_envs)
+        ]
         env._skill_annotator = env._skill_annotators[0]
         return
 
@@ -854,7 +903,10 @@ def reset_skill_annotator(env, env_idx: Optional[int] = None):
         reset_skill_annotator(env)
         annotators = env._skill_annotators
 
-    annotators[env_idx] = SkillAnnotator(furniture_name)
+    annotators[env_idx] = SkillAnnotator(
+        furniture_name,
+        noise_seed_offset=seed_offset,
+    )
     env._skill_annotator = annotators[0]
 
 
@@ -886,6 +938,7 @@ def get_annotation_bundle_for_env(
     resize_images: bool = True,
     enable_verify: bool = False,
     verify_tolerance_m: float = 0.020,
+    annotation_noise_config: Optional[AnnotationNoiseConfig] = None,
 ):
     if getattr(env, "furniture_name", None) not in {"one_leg", "round_table", "lamp"}:
         return {
@@ -893,13 +946,16 @@ def get_annotation_bundle_for_env(
             "skill_state": None,
             "assembly_step": None,
             "guidance_point": None,
+            "guidance_point_clean": None,
             "guidance_pose": None,
+            "guidance_pose_clean": None,
             "guidance_gripper_width": None,
             "guidance_point_2d": {},
             "grasp_annotation_2d": {},
             "camera_info": {},
             "debug": {},
             "verify": None,
+            "annotation_noise": {"enabled": False},
         }
 
     annotator = _get_or_create_skill_annotator(env, env_idx)
@@ -927,6 +983,7 @@ def get_annotation_bundle_for_env(
         env_idx=env_idx,
         annotate_wrist_camera=annotate_wrist_camera,
         resize_images=resize_images,
+        annotation_noise_config=annotation_noise_config,
     )
 
 
@@ -937,6 +994,7 @@ def get_annotation_bundle_all_envs(
     resize_images: bool = True,
     enable_verify: bool = False,
     verify_tolerance_m: float = 0.020,
+    annotation_noise_config: Optional[AnnotationNoiseConfig] = None,
 ):
     num_envs = max(int(getattr(env, "num_envs", 1)), 1)
     bundles = []
@@ -953,6 +1011,7 @@ def get_annotation_bundle_all_envs(
                 resize_images=resize_images,
                 enable_verify=enable_verify,
                 verify_tolerance_m=verify_tolerance_m,
+                annotation_noise_config=annotation_noise_config,
             )
         )
     return bundles
@@ -965,6 +1024,7 @@ def get_annotation_bundle(
     resize_images: bool = True,
     enable_verify: bool = False,
     verify_tolerance_m: float = 0.020,
+    annotation_noise_config: Optional[AnnotationNoiseConfig] = None,
 ):
     return get_annotation_bundle_for_env(
         env,
@@ -974,6 +1034,7 @@ def get_annotation_bundle(
         resize_images=resize_images,
         enable_verify=enable_verify,
         verify_tolerance_m=verify_tolerance_m,
+        annotation_noise_config=annotation_noise_config,
     )
 
 
@@ -1036,12 +1097,6 @@ def draw_guidance_point_on_image(
 
     uv = _to_numpy(guidance_point_2d).astype(np.int32)
     annotated = image.copy()
-    # small dot setting
-    point_radius = 2
-    point_alpha = 0.5
-    # big dot setting
-    # point_radius = 6
-    # point_alpha = 1.0
     if use_skill_color and skill and skill in GUIDANCE_POINT_COLOR_MAP:
         point_color = GUIDANCE_POINT_COLOR_MAP[skill]
     else:
@@ -1052,12 +1107,12 @@ def draw_guidance_point_on_image(
         cv2.circle(
             overlay,
             center,
-            point_radius,
+            2,
             point_color,
             thickness=-1,
             lineType=cv2.LINE_AA,
         )
-        return cv2.addWeighted(overlay, point_alpha, frame, 1.0 - point_alpha, 0.0)
+        return cv2.addWeighted(overlay, 0.5, frame, 0.5, 0.0)
 
     if annotated.ndim == 4:
         if annotated.shape[0] != 1:

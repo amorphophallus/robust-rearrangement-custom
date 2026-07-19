@@ -46,8 +46,14 @@ from src.eval.skill_annotation_util import (
     get_annotation_bundle_all_envs,
     reset_skill_annotator,
 )
+from src.eval.annotation_noise import AnnotationNoiseConfig
 from src.eval.perturb_util import PerturbContext, PerturbRunner
 from src.eval.progress_schema import (
+    accumulate_episode_skill_stats,
+    accumulate_tracking_error_records,
+    build_tracking_error_summary,
+    compute_episode_tracking_errors,
+    compute_success_rates,
     get_task_progress_labels,
     normalize_progress_counts,
 )
@@ -69,6 +75,7 @@ RolloutStats = collections.namedtuple(
         "step_counts",
         "step_completion_counts",
         "step_success_rates",
+        "tracking_error",
     ],
 )
 
@@ -88,13 +95,45 @@ RolloutSaveValues = collections.namedtuple(
         "skill_states",
         "assembly_steps",
         "guidance_points",
+        "guidance_points_clean",
         "guidance_poses",
+        "guidance_poses_clean",
         "guidance_gripper_widths",
         "guidance_points_2d",
         "grasp_annotations_2d",
         "camera_infos",
     ],
 )
+
+
+def _add_sim_local_ee_pose_to_robot_state(env: Env, robot_state):
+    if not isinstance(robot_state, dict):
+        return robot_state
+    if not all(hasattr(env, attr) for attr in ("rb_states", "ee_idxs", "base_idxs")):
+        return robot_state
+
+    device = env.rb_states.device
+    ee_idxs = torch.as_tensor(env.ee_idxs, device=device, dtype=torch.long)
+    base_idxs = torch.as_tensor(env.base_idxs, device=device, dtype=torch.long)
+    ee_pos_global = env.rb_states[ee_idxs, :3].clone()
+    ee_quat = env.rb_states[ee_idxs, 3:7].clone()
+    base_pos_global = env.rb_states[base_idxs, :3].clone()
+
+    if hasattr(env, "franka_from_origin_mat"):
+        franka_origin = torch.as_tensor(
+            np.asarray(env.franka_from_origin_mat, dtype=np.float32)[:3, 3],
+            device=device,
+            dtype=ee_pos_global.dtype,
+        )
+        env_offset = base_pos_global - franka_origin
+        ee_pos_sim = ee_pos_global - env_offset
+    else:
+        ee_pos_sim = ee_pos_global
+
+    robot_state = dict(robot_state)
+    robot_state["ee_pos_sim"] = ee_pos_sim
+    robot_state["ee_quat_sim"] = ee_quat
+    return robot_state
 
 
 def resize_image(obs, key):
@@ -413,67 +452,6 @@ def _transpose_step_env_annotations(values, num_envs: int):
     return [[values[step_idx][env_idx] for step_idx in range(len(values))] for env_idx in range(num_envs)]
 
 
-def _normalize_annotation_label(label):
-    if label is None:
-        return None
-    if isinstance(label, bytes):
-        label = label.decode("utf-8")
-    return str(label)
-
-
-def _ordered_unique_non_null(labels):
-    ordered_labels = []
-    seen = set()
-    for label in labels:
-        normalized_label = _normalize_annotation_label(label)
-        if normalized_label is None or normalized_label in seen:
-            continue
-        seen.add(normalized_label)
-        ordered_labels.append(normalized_label)
-    return ordered_labels
-
-
-def _increment_ordered_counter(counter: dict[str, int], label: str):
-    counter[label] = counter.get(label, 0) + 1
-
-
-def _accumulate_episode_skill_stats(
-    state_labels,
-    step_labels,
-    success: bool,
-    state_counts: dict[str, int],
-    skill_completion_counts: dict[str, int],
-    step_counts: dict[str, int],
-    step_completion_counts: dict[str, int],
-):
-    ordered_states = _ordered_unique_non_null(state_labels)
-    for state_label in ordered_states:
-        _increment_ordered_counter(state_counts, state_label)
-    for state_label in ordered_states[:-1]:
-        _increment_ordered_counter(skill_completion_counts, state_label)
-    if success and ordered_states:
-        _increment_ordered_counter(skill_completion_counts, ordered_states[-1])
-
-    ordered_steps = _ordered_unique_non_null(step_labels)
-    for step_label in ordered_steps:
-        _increment_ordered_counter(step_counts, step_label)
-    for step_label in ordered_steps[:-1]:
-        _increment_ordered_counter(step_completion_counts, step_label)
-    if success and ordered_steps:
-        _increment_ordered_counter(step_completion_counts, ordered_steps[-1])
-
-
-def _compute_success_rates(
-    reached_counts: dict[str, int],
-    completion_counts: dict[str, int],
-) -> dict[str, float]:
-    success_rates = {}
-    for label, reached in reached_counts.items():
-        completed = completion_counts.get(label, 0)
-        success_rates[label] = completed / reached if reached > 0 else 0.0
-    return success_rates
-
-
 def _build_rollout_progress_summary(rollout_stats: RolloutStats) -> dict:
     return {
         "n_success": int(rollout_stats.n_success),
@@ -488,6 +466,7 @@ def _build_rollout_progress_summary(rollout_stats: RolloutStats) -> dict:
         "assembly_step_counts": dict(rollout_stats.step_counts),
         "assembly_step_completion_counts": dict(rollout_stats.step_completion_counts),
         "assembly_step_success_rates": dict(rollout_stats.step_success_rates),
+        "tracking_error": rollout_stats.tracking_error,
     }
 
 
@@ -618,6 +597,7 @@ def rollout(
     provide_skill_input: bool = False,
     collect_skill_stats: bool = False,
     enable_annotation_verify: bool = False,
+    annotation_noise_config: Optional[AnnotationNoiseConfig] = None,
     rollout_after_success: int = 0,
     full_length_rollout: bool = False,
     perturb_runner: Optional[PerturbRunner] = None,
@@ -660,6 +640,7 @@ def rollout(
             annotate_wrist_camera=annotate_wrist_camera,
             resize_images=resize_video,
             enable_verify=enable_annotation_verify,
+            annotation_noise_config=annotation_noise_config,
         )
         if collect_skill_annotations
         else [{} for _ in range(env.num_envs)]
@@ -668,7 +649,13 @@ def rollout(
     initial_skill_states = [bundle.get("skill_state") for bundle in initial_annotations]
     initial_assembly_steps = [bundle.get("assembly_step") for bundle in initial_annotations]
     initial_guidance_points = [bundle.get("guidance_point") for bundle in initial_annotations]
+    initial_guidance_points_clean = [
+        bundle.get("guidance_point_clean") for bundle in initial_annotations
+    ]
     initial_guidance_poses = [bundle.get("guidance_pose") for bundle in initial_annotations]
+    initial_guidance_poses_clean = [
+        bundle.get("guidance_pose_clean") for bundle in initial_annotations
+    ]
     initial_guidance_gripper_widths = [
         bundle.get("guidance_gripper_width") for bundle in initial_annotations
     ]
@@ -729,17 +716,22 @@ def rollout(
         )
 
     # save initial visualization and rewards
+    video_obs["robot_state"] = _add_sim_local_ee_pose_to_robot_state(
+        env, video_obs["robot_state"]
+    )
     robot_states = [TensorDict(video_obs["robot_state"], batch_size=env.num_envs)]
     imgs1 = [] if "color_image1" not in video_obs else [video_obs["color_image1"].cpu()]
     imgs2 = [] if "color_image2" not in video_obs else [video_obs["color_image2"].cpu()]
-    depth_image1 = [] if "depth_image1" not in video_obs else [video_obs["depth_image1"]]
-    depth_image2 = [] if "depth_image2" not in video_obs else [video_obs["depth_image2"]]
+    depth_image1 = [] if video_obs.get("depth_image1") is None else [video_obs["depth_image1"]]
+    depth_image2 = [] if video_obs.get("depth_image2") is None else [video_obs["depth_image2"]]
     parts_poses = [video_obs["parts_poses"].cpu()]
     skills = [initial_skills]
     skill_states = [initial_skill_states]
     assembly_steps = [initial_assembly_steps]
     guidance_points = [initial_guidance_points]
+    guidance_points_clean = [initial_guidance_points_clean]
     guidance_poses = [initial_guidance_poses]
+    guidance_poses_clean = [initial_guidance_poses_clean]
     guidance_gripper_widths = [initial_guidance_gripper_widths]
     guidance_points_2d = [initial_guidance_points_2d]
     grasp_annotations_2d = [initial_grasp_annotations_2d]
@@ -856,6 +848,7 @@ def rollout(
                 annotate_wrist_camera=annotate_wrist_camera,
                 resize_images=resize_video,
                 enable_verify=enable_annotation_verify,
+                annotation_noise_config=annotation_noise_config,
             )
             if collect_skill_annotations
             else [{} for _ in range(env.num_envs)]
@@ -864,7 +857,13 @@ def rollout(
         current_skill_states = [bundle.get("skill_state") for bundle in current_annotations]
         current_assembly_steps = [bundle.get("assembly_step") for bundle in current_annotations]
         current_guidance_points = [bundle.get("guidance_point") for bundle in current_annotations]
+        current_guidance_points_clean = [
+            bundle.get("guidance_point_clean") for bundle in current_annotations
+        ]
         current_guidance_poses = [bundle.get("guidance_pose") for bundle in current_annotations]
+        current_guidance_poses_clean = [
+            bundle.get("guidance_pose_clean") for bundle in current_annotations
+        ]
         current_guidance_gripper_widths = [
             bundle.get("guidance_gripper_width") for bundle in current_annotations
         ]
@@ -935,22 +934,28 @@ def rollout(
         active_skill_states = current_skill_states
 
         # Store the results for visualization and logging
-        if save_rollouts:
+        if save_rollouts or collect_skill_stats:
+            video_obs["robot_state"] = _add_sim_local_ee_pose_to_robot_state(
+                env, video_obs["robot_state"]
+            )
             robot_states.append(
                 TensorDict(video_obs["robot_state"], batch_size=env.num_envs)
             )
+        if save_rollouts:
             if "color_image1" in video_obs:
                 imgs1.append(video_obs["color_image1"].cpu())
             if "color_image2" in video_obs:
                 imgs2.append(video_obs["color_image2"].cpu())
-            if "depth_image1" in video_obs:
+            if video_obs.get("depth_image1") is not None:
                 depth_image1.append(video_obs["depth_image1"])
-            if "depth_image2" in video_obs:
+            if video_obs.get("depth_image2") is not None:
                 depth_image2.append(video_obs["depth_image2"])
             actions.append(action_pred.cpu())
             parts_poses.append(video_obs["parts_poses"].cpu())
             guidance_points.append(current_guidance_points)
+            guidance_points_clean.append(current_guidance_points_clean)
             guidance_poses.append(current_guidance_poses)
+            guidance_poses_clean.append(current_guidance_poses_clean)
             guidance_gripper_widths.append(current_guidance_gripper_widths)
             guidance_points_2d.append(current_guidance_points_2d)
             grasp_annotations_2d.append(current_grasp_annotations_2d)
@@ -1010,7 +1015,13 @@ def rollout(
     skill_states_per_env = _transpose_step_env_annotations(skill_states, env.num_envs)
     assembly_steps_per_env = _transpose_step_env_annotations(assembly_steps, env.num_envs)
     guidance_points_per_env = _transpose_step_env_annotations(guidance_points, env.num_envs)
+    guidance_points_clean_per_env = _transpose_step_env_annotations(
+        guidance_points_clean, env.num_envs
+    )
     guidance_poses_per_env = _transpose_step_env_annotations(guidance_poses, env.num_envs)
+    guidance_poses_clean_per_env = _transpose_step_env_annotations(
+        guidance_poses_clean, env.num_envs
+    )
     guidance_gripper_widths_per_env = _transpose_step_env_annotations(
         guidance_gripper_widths, env.num_envs
     )
@@ -1040,7 +1051,9 @@ def rollout(
         skill_states_per_env,
         assembly_steps_per_env,
         guidance_points_per_env,
+        guidance_points_clean_per_env,
         guidance_poses_per_env,
+        guidance_poses_clean_per_env,
         guidance_gripper_widths_per_env,
         guidance_points_2d_per_env,
         grasp_annotations_2d_per_env,
@@ -1083,11 +1096,13 @@ def calculate_success_rate(
     provide_skill_input: bool = False,
     collect_skill_stats: bool = False,
     enable_annotation_verify: bool = False,
+    annotation_noise_config: Optional[AnnotationNoiseConfig] = None,
     full_length_rollout: bool = False,
     output_only_pickle: bool = False,
     perturb_runner: Optional[PerturbRunner] = None,
     target_successes: Optional[int] = None,
     init_states: Optional[List[dict]] = None,
+    max_saved_rollouts: Optional[int] = None,
 ) -> RolloutStats:
 
     use_target_mode = target_successes is not None and target_successes > 0
@@ -1120,6 +1135,8 @@ def calculate_success_rate(
     skill_completion_counts: dict[str, int] = {}
     step_counts: dict[str, int] = {}
     step_completion_counts: dict[str, int] = {}
+    tracking_error_records: dict[str, list[dict[str, float]]] = {}
+    saved_rollouts_count = 0
 
     save_rollouts = rollout_save_dir is not None or save_rollouts_to_wandb
 
@@ -1149,6 +1166,10 @@ def calculate_success_rate(
             ]
 
         # Perform a rollout with the current model
+        save_rollouts_this_round = save_rollouts and (
+            max_saved_rollouts is None or saved_rollouts_count < max_saved_rollouts
+        )
+
         rollout_data: RolloutSaveValues = rollout(
             env,
             actor,
@@ -1156,7 +1177,7 @@ def calculate_success_rate(
             pbar=pbar,
             resize_video=resize_video,
             n_parts_assemble=n_parts_assemble,
-            save_rollouts=save_rollouts,
+            save_rollouts=save_rollouts_this_round,
             pc_generator=pc_generator,
             annotate_skill=annotate_skill,
             annotate_guidance_point=annotate_guidance_point,
@@ -1173,6 +1194,7 @@ def calculate_success_rate(
             provide_skill_input=provide_skill_input,
             collect_skill_stats=collect_skill_stats,
             enable_annotation_verify=enable_annotation_verify,
+            annotation_noise_config=annotation_noise_config,
             rollout_after_success=rollout_after_success,
             full_length_rollout=full_length_rollout,
             perturb_runner=perturb_runner,
@@ -1185,7 +1207,12 @@ def calculate_success_rate(
         n_total_rollouts += env.num_envs
 
         for env_idx in range(env.num_envs):
-            _accumulate_episode_skill_stats(
+            robot_states_for_tracking = []
+            if collect_skill_stats and rollout_data.robot_states is not None:
+                robot_states_for_tracking = tensordict_to_list_of_dicts(
+                    rollout_data.robot_states[env_idx]
+                )
+            accumulate_episode_skill_stats(
                 state_labels=(
                     rollout_data.skill_states[env_idx] if rollout_data.skill_states else []
                 ),
@@ -1200,9 +1227,28 @@ def calculate_success_rate(
                 step_counts=step_counts,
                 step_completion_counts=step_completion_counts,
             )
+            if collect_skill_stats and robot_states_for_tracking:
+                skill_states_for_tracking = (
+                    rollout_data.skill_states[env_idx]
+                    if rollout_data.skill_states
+                    else []
+                )
+                guidance_poses_for_tracking = (
+                    rollout_data.guidance_poses[env_idx]
+                    if rollout_data.guidance_poses
+                    else []
+                )
+                accumulate_tracking_error_records(
+                    tracking_error_records,
+                    compute_episode_tracking_errors(
+                        robot_states_for_tracking,
+                        skill_states_for_tracking,
+                        guidance_poses_for_tracking,
+                    ),
+                )
 
         # Save the results from the rollout immediately
-        if save_rollouts:
+        if save_rollouts_this_round:
             have_img_obs = rollout_data.imgs1 is not None and len(rollout_data.imgs1) > 0
             have_depth_obs = rollout_data.depth_image1 is not None and len(rollout_data.depth_image1) > 0
 
@@ -1217,9 +1263,19 @@ def calculate_success_rate(
                     if rollout_data.guidance_points
                     else []
                 )
+                guidance_points_clean = (
+                    rollout_data.guidance_points_clean[env_idx]
+                    if rollout_data.guidance_points_clean
+                    else []
+                )
                 guidance_poses = (
                     rollout_data.guidance_poses[env_idx]
                     if rollout_data.guidance_poses
+                    else []
+                )
+                guidance_poses_clean = (
+                    rollout_data.guidance_poses_clean[env_idx]
+                    if rollout_data.guidance_poses_clean
                     else []
                 )
                 guidance_gripper_widths = (
@@ -1321,7 +1377,15 @@ def calculate_success_rate(
                         ]
                     )
 
-                if rollout_save_dir is not None and (save_failures or success):
+                should_save_rollout = (
+                    rollout_save_dir is not None
+                    and (save_failures or success)
+                    and (
+                        max_saved_rollouts is None
+                        or saved_rollouts_count < max_saved_rollouts
+                    )
+                )
+                if should_save_rollout:
                     # Trim point clouds to match n_steps
                     pcs_trimmed = None
                     if pcs_for_rollout is not None:
@@ -1335,7 +1399,9 @@ def calculate_success_rate(
                         parts_poses=parts_poses[trim_start_steps : n_steps + 1],
                         skills=skills[trim_start_steps : n_steps + 1],
                         guidance_points=guidance_points[trim_start_steps : n_steps + 1],
+                        guidance_points_clean=guidance_points_clean[trim_start_steps : n_steps + 1],
                         guidance_poses=guidance_poses[trim_start_steps : n_steps + 1],
+                        guidance_poses_clean=guidance_poses_clean[trim_start_steps : n_steps + 1],
                         guidance_gripper_widths=guidance_gripper_widths[trim_start_steps : n_steps + 1],
                         guidance_points_2d=guidance_points_2d[trim_start_steps : n_steps + 1],
                         grasp_annotations_2d=grasp_annotations_2d[trim_start_steps : n_steps + 1],
@@ -1353,6 +1419,7 @@ def calculate_success_rate(
                         skill_on_image=skill_on_image,
                         output_only_pickle=output_only_pickle,
                     )
+                    saved_rollouts_count += 1
 
         if break_on_n_success and n_success >= stop_after_n_success:
             print(
@@ -1405,8 +1472,15 @@ def calculate_success_rate(
         step_counts.keys(),
     )
 
-    skill_success_rates = _compute_success_rates(state_counts, skill_completion_counts)
-    step_success_rates = _compute_success_rates(step_counts, step_completion_counts)
+    skill_success_rates = compute_success_rates(state_counts, skill_completion_counts)
+    step_success_rates = compute_success_rates(step_counts, step_completion_counts)
+    expected_skill_labels = get_task_progress_labels(
+        getattr(env, "furniture_name", None), "skill_states"
+    )
+    tracking_error = build_tracking_error_summary(
+        tracking_error_records,
+        expected_labels=expected_skill_labels,
+    )
 
     final_total = n_total_rollouts if use_target_mode else n_rollouts
     return RolloutStats(
@@ -1423,6 +1497,7 @@ def calculate_success_rate(
         step_counts=step_counts,
         step_completion_counts=step_completion_counts,
         step_success_rates=step_success_rates,
+        tracking_error=tracking_error,
     )
 
 
