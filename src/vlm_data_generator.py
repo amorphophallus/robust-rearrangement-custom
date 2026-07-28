@@ -63,7 +63,15 @@ BASE_SYSTEM_PROMPT = (
     "extra explanation. target_point_2d is a front-camera image pixel coordinate "
     "[u, v], where u increases from left to right and v increases from top to bottom. "
     "target_point_3d and state_info.base.ee_pos_sim are expressed in the same "
-    "sim_local coordinate frame."
+    "sim_local coordinate frame. The target point is the position component of the "
+    "target end-effector pose for the current skill. Skill semantics: for push, the "
+    "target point is the goal location where the object or part should be pushed; "
+    "for pick, the target point is the grasp "
+    "point on the object to be picked; for place, the target point is the desired "
+    "release or placement point for the held object; for insert, the target point "
+    "is the insertion target at the socket, opening, or mating location where the "
+    "held part should be inserted; for screw, the target point is the grasp point "
+    "on the object or part that should be rotated and tightened."
 )
 
 TASK_SYSTEM_PROMPTS = {
@@ -365,25 +373,134 @@ def _task_from_pickle(path: Path, data: dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _message_content(record: dict[str, Any]) -> tuple[str, str, str]:
+    system_text = ""
+    user_text = ""
+    assistant_text = ""
+    for message in record.get("messages", []):
+        role = message.get("role")
+        if role == "system" and not system_text:
+            system_text = message.get("content", "")
+        elif role == "user" and not user_text:
+            user_text = message.get("content", "")
+        elif role == "assistant" and not assistant_text:
+            assistant_text = message.get("content", "")
+    return system_text, user_text, assistant_text
+
+
+def _state_info_for_prompt(state_info: Any, mode: str) -> Any:
+    if mode == "placeholder":
+        return STATE_INFO_PLACEHOLDER
+    if not isinstance(state_info, dict):
+        return None
+    if mode == "base":
+        return {"base": state_info.get("base")}
+    if mode == "base-extra":
+        return {
+            "base": state_info.get("base"),
+            "extra": state_info.get("extra"),
+        }
+    raise ValueError(f"Unsupported state info mode: {mode}")
+
+
+def _replace_state_info_placeholder(user_text: str, state_info: Any, mode: str) -> str:
+    if mode == "placeholder":
+        return user_text
+    prompt_state = _state_info_for_prompt(state_info, mode)
+    prompt_state_text = json.dumps(
+        prompt_state,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return user_text.replace(STATE_INFO_PLACEHOLDER, prompt_state_text)
+
+
+def _llamafactory_item_from_record(
+    record: dict[str, Any],
+    *,
+    state_mode: str,
+    system_prompt_override: Optional[str] = None,
+) -> dict[str, Any]:
+    system_text, user_text, assistant_text = _message_content(record)
+    task = record.get("metadata", {}).get("task")
+    if system_prompt_override is not None:
+        system_text = _system_prompt_for_task(task, system_prompt_override)
+    elif not system_text:
+        system_text = _system_prompt_for_task(task, None)
+    return {
+        "id": record["id"],
+        "images": record["image"],
+        "state_info": record.get("state_info"),
+        "system": system_text,
+        "conversations": [
+            {
+                "from": "human",
+                "value": _replace_state_info_placeholder(
+                    user_text,
+                    record.get("state_info"),
+                    state_mode,
+                ),
+            },
+            {"from": "gpt", "value": assistant_text},
+        ],
+        "metadata": record["metadata"],
+    }
+
+
+def _llamafactory_item_from_sharegpt(
+    item: dict[str, Any],
+    *,
+    state_mode: str,
+    system_prompt_override: Optional[str] = None,
+) -> dict[str, Any]:
+    task = item.get("metadata", {}).get("task")
+    conversations = item.get("conversations", [])
+    converted_conversations = []
+    for turn in conversations:
+        converted_turn = dict(turn)
+        if converted_turn.get("from") == "human":
+            converted_turn["value"] = _replace_state_info_placeholder(
+                str(converted_turn.get("value", "")),
+                item.get("state_info"),
+                state_mode,
+            )
+        converted_conversations.append(converted_turn)
+
+    output = {
+        "id": item.get("id"),
+        "images": item.get("images", item.get("image", [])),
+        "state_info": item.get("state_info"),
+        "system": _system_prompt_for_task(task, system_prompt_override),
+        "conversations": converted_conversations,
+        "metadata": item.get("metadata", {}),
+    }
+    return output
+
+
+def _write_json(path: Path, payload: Any, *, pretty: bool = False) -> None:
+    with path.open("w") as f:
+        json.dump(
+            payload,
+            f,
+            indent=2 if pretty else None,
+            ensure_ascii=False,
+            separators=None if pretty else (",", ":"),
+        )
+
+
 def _write_records(
     *,
     output_dir: Path,
     records: list[dict[str, Any]],
     formats: str,
+    llamafactory_state_mode: str,
 ) -> dict[str, str]:
-    def user_assistant_content(record: dict[str, Any]) -> tuple[str, str]:
-        user_text = ""
-        assistant_text = ""
-        for message in record.get("messages", []):
-            role = message.get("role")
-            if role == "user" and not user_text:
-                user_text = message.get("content", "")
-            elif role == "assistant" and not assistant_text:
-                assistant_text = message.get("content", "")
-        return user_text, assistant_text
+    write_messages = formats in ("all", "both", "messages-jsonl")
+    write_sharegpt = formats in ("all", "both", "sharegpt-json")
+    write_llamafactory = formats in ("all", "llamafactory-json")
 
     outputs: dict[str, str] = {}
-    if formats in ("both", "messages-jsonl"):
+    if write_messages:
         messages_path = output_dir / "messages.jsonl"
         with messages_path.open("w") as f:
             for record in records:
@@ -402,11 +519,11 @@ def _write_records(
                 )
         outputs["messages_jsonl"] = str(messages_path)
 
-    if formats in ("both", "sharegpt-json"):
+    if write_sharegpt:
         sharegpt_path = output_dir / "qwen_llava_sharegpt.json"
         sharegpt_records = []
         for record in records:
-            user_text, assistant_text = user_assistant_content(record)
+            _, user_text, assistant_text = _message_content(record)
             sharegpt_records.append(
                 {
                     "id": record["id"],
@@ -419,11 +536,82 @@ def _write_records(
                     "metadata": record["metadata"],
                 }
             )
-        with sharegpt_path.open("w") as f:
-            json.dump(sharegpt_records, f, indent=2, ensure_ascii=False)
+        _write_json(sharegpt_path, sharegpt_records, pretty=True)
         outputs["sharegpt_json"] = str(sharegpt_path)
 
+    if write_llamafactory:
+        suffix = llamafactory_state_mode.replace("-", "_")
+        llamafactory_path = output_dir / f"llamafactory_{suffix}.json"
+        llamafactory_records = [
+            _llamafactory_item_from_record(
+                record,
+                state_mode=llamafactory_state_mode,
+            )
+            for record in records
+        ]
+        _write_json(llamafactory_path, llamafactory_records)
+        outputs["llamafactory_json"] = str(llamafactory_path)
+        dataset_info_path = output_dir / f"llamafactory_{suffix}_dataset_info.json"
+        dataset_info = _llamafactory_dataset_info(
+            llamafactory_path.name,
+            f"rr_vlm_{suffix}",
+        )
+        _write_json(dataset_info_path, dataset_info, pretty=True)
+        outputs["llamafactory_dataset_info"] = str(dataset_info_path)
+
     return outputs
+
+
+def _llamafactory_dataset_info(file_name: str, dataset_name: str) -> dict[str, Any]:
+    return {
+        dataset_name: {
+            "file_name": file_name,
+            "formatting": "sharegpt",
+            "columns": {
+                "messages": "conversations",
+                "images": "images",
+                "system": "system",
+            },
+        }
+    }
+
+
+def convert_sharegpt_to_llamafactory(args: argparse.Namespace) -> dict[str, Any]:
+    input_file = Path(args.input_file).expanduser().resolve()
+    output_file = Path(args.output_file).expanduser().resolve()
+    dataset_info_file = (
+        Path(args.dataset_info_file).expanduser().resolve()
+        if args.dataset_info_file
+        else output_file.with_name(output_file.stem + "_dataset_info.json")
+    )
+    payload = json.loads(input_file.read_text())
+    if not isinstance(payload, list):
+        raise ValueError(f"Expected a list in {input_file}.")
+
+    converted = [
+        _llamafactory_item_from_sharegpt(
+            item,
+            state_mode=args.llamafactory_state_mode,
+            system_prompt_override=args.system_prompt,
+        )
+        for item in payload
+    ]
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(output_file, converted)
+
+    dataset_info = _llamafactory_dataset_info(
+        output_file.name,
+        args.dataset_name,
+    )
+    _write_json(dataset_info_file, dataset_info, pretty=True)
+    return {
+        "input_file": str(input_file),
+        "output_file": str(output_file),
+        "dataset_info_file": str(dataset_info_file),
+        "num_samples": len(converted),
+        "llamafactory_state_mode": args.llamafactory_state_mode,
+        "dataset_info": dataset_info,
+    }
 
 
 def _read_existing_messages_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -483,11 +671,54 @@ def _read_existing_sharegpt_json(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def _read_existing_llamafactory_json(path: Path) -> list[dict[str, Any]]:
+    payload = json.loads(path.read_text())
+    if not isinstance(payload, list):
+        raise ValueError(f"Expected a list in {path}.")
+
+    records: list[dict[str, Any]] = []
+    for item in payload:
+        conversations = item.get("conversations", [])
+        user_text = ""
+        assistant_text = ""
+        for turn in conversations:
+            if turn.get("from") == "human" and not user_text:
+                user_text = turn.get("value", "")
+            elif turn.get("from") == "gpt" and not assistant_text:
+                assistant_text = turn.get("value", "")
+        messages = []
+        if item.get("system"):
+            messages.append({"role": "system", "content": item.get("system", "")})
+        messages.extend(
+            [
+                {"role": "user", "content": user_text},
+                {"role": "assistant", "content": assistant_text},
+            ]
+        )
+        records.append(
+            {
+                "id": item["id"],
+                "image": item.get("images", item.get("image", [])),
+                "state_info": item.get("state_info"),
+                "messages": messages,
+                "metadata": item.get("metadata", {}),
+            }
+        )
+    return records
+
+
 def _read_existing_records(output_dir: Path) -> list[dict[str, Any]]:
     messages_path = output_dir / "messages.jsonl"
     if messages_path.exists():
         return _read_existing_messages_jsonl(messages_path)
-    return _read_existing_sharegpt_json(output_dir / "qwen_llava_sharegpt.json")
+    sharegpt_path = output_dir / "qwen_llava_sharegpt.json"
+    if sharegpt_path.exists():
+        return _read_existing_sharegpt_json(sharegpt_path)
+    for llamafactory_path in sorted(output_dir.glob("llamafactory_*.json")):
+        if llamafactory_path.name.endswith("_dataset_info.json"):
+            continue
+        return _read_existing_llamafactory_json(llamafactory_path)
+    return []
 
 
 def _prepare_output_dir(output_dir: Path, output_mode: str) -> list[dict[str, Any]]:
@@ -498,6 +729,8 @@ def _prepare_output_dir(output_dir: Path, output_mode: str) -> list[dict[str, An
         output_dir / "images",
         output_dir / "depth",
     ]
+    generated_paths.extend(output_dir.glob("llamafactory_*.json"))
+    generated_paths.extend(output_dir.glob("llamafactory_*_dataset_info.json"))
     existing_paths = [path for path in generated_paths if path.exists()]
 
     if output_mode == "error" and existing_paths:
@@ -687,7 +920,12 @@ def convert_pickles_to_vlm_sft(args: argparse.Namespace) -> dict[str, Any]:
             break
 
     records = [*existing_records, *new_records]
-    outputs = _write_records(output_dir=output_dir, records=records, formats=args.format)
+    outputs = _write_records(
+        output_dir=output_dir,
+        records=records,
+        formats=args.format,
+        llamafactory_state_mode=args.llamafactory_state_mode,
+    )
     manifest = {
         "name": "VLM data generator",
         "created_at": datetime.now().isoformat(),
@@ -730,6 +968,7 @@ def convert_pickles_to_vlm_sft(args: argparse.Namespace) -> dict[str, Any]:
             "frame_stride": args.frame_stride,
             "max_frames_per_rollout": args.max_frames_per_rollout,
             "allow_legacy_eepose": args.allow_legacy_eepose,
+            "llamafactory_state_mode": args.llamafactory_state_mode,
         },
     }
     manifest_path = output_dir / "manifest.json"
@@ -906,7 +1145,32 @@ def add_convert_args(parser: argparse.ArgumentParser, include_source_args: bool 
         parser.add_argument("--randomness", type=str, default="low")
     parser.add_argument("--suffix", type=str, default="rgbd-only-skill")
     parser.add_argument("--demo-outcome", type=str, default="success", choices=["success", "failure", "partial_success"])
-    parser.add_argument("--format", type=str, default="both", choices=["both", "messages-jsonl", "sharegpt-json"])
+    parser.add_argument(
+        "--format",
+        type=str,
+        default="both",
+        choices=[
+            "both",
+            "all",
+            "messages-jsonl",
+            "sharegpt-json",
+            "llamafactory-json",
+        ],
+        help=(
+            "Output dataset format. 'both' keeps the historical messages.jsonl + "
+            "qwen_llava_sharegpt.json outputs; 'all' also writes LLaMAFactory JSON."
+        ),
+    )
+    parser.add_argument(
+        "--llamafactory-state-mode",
+        type=str,
+        default="base",
+        choices=["placeholder", "base", "base-extra"],
+        help=(
+            "How to fill <state_info> when writing LLaMAFactory JSON. "
+            "'base' is directly trainable with the core proprioceptive state."
+        ),
+    )
     parser.add_argument(
         "--output-mode",
         type=str,
@@ -935,6 +1199,46 @@ def add_convert_args(parser: argparse.ArgumentParser, include_source_args: bool 
     parser.add_argument("--user-prompt", type=str, default=DEFAULT_USER_PROMPT)
 
 
+def add_llamafactory_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--input-file",
+        type=str,
+        default="/data/hy/robust-rearrangement/data/processed/vlm/qwen_llava_sharegpt.json",
+        help="Existing qwen/LLaVA ShareGPT JSON file.",
+    )
+    parser.add_argument(
+        "--output-file",
+        type=str,
+        default="/data/hy/robust-rearrangement/data/processed/vlm/llamafactory_base.json",
+        help="Output LLaMAFactory JSON file.",
+    )
+    parser.add_argument(
+        "--dataset-info-file",
+        type=str,
+        default=None,
+        help="Output dataset_info JSON snippet. Defaults next to --output-file.",
+    )
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        default="rr_vlm_base",
+        help="Dataset key to use in the generated dataset_info JSON snippet.",
+    )
+    parser.add_argument(
+        "--llamafactory-state-mode",
+        type=str,
+        default="base",
+        choices=["placeholder", "base", "base-extra"],
+        help="How to replace <state_info> in the human prompt.",
+    )
+    parser.add_argument(
+        "--system-prompt",
+        type=str,
+        default=None,
+        help="Override built-in task-specific system prompts for all samples.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="VLM data generator",
@@ -954,6 +1258,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_task_count_args(generate)
     add_rollout_args(generate)
     add_convert_args(generate, include_source_args=False)
+
+    llamafactory = subparsers.add_parser(
+        "to-llamafactory",
+        help="Convert qwen/LLaVA ShareGPT JSON to directly trainable LLaMAFactory JSON.",
+    )
+    add_llamafactory_args(llamafactory)
     return parser
 
 
@@ -982,6 +1292,11 @@ def main(argv: Optional[list[str]] = None) -> None:
         args.input_dir = [str(root) for root in roots]
         manifest = convert_pickles_to_vlm_sft(args)
         print(json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=True))
+        return
+
+    if args.command == "to-llamafactory":
+        result = convert_sharegpt_to_llamafactory(args)
+        print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))
         return
 
     raise ValueError(f"Unknown command: {args.command}")

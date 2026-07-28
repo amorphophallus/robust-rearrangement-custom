@@ -146,7 +146,15 @@ VLM 数据集输出目录。
 
 `--output-mode {error,append,overwrite}`
 
-输出目录已有数据时的处理方式。`error` 是默认值，防止误覆盖；`append` 会读取已有 `messages.jsonl` 或 `qwen_llava_sharegpt.json` 后合并新样本；`overwrite` 会删除本工具生成的 `messages.jsonl`、`qwen_llava_sharegpt.json`、`manifest.json`、`images/`、`depth/` 后重建。
+输出目录已有数据时的处理方式。`error` 是默认值，防止误覆盖；`append` 会读取已有 `messages.jsonl` 或 `qwen_llava_sharegpt.json` 后合并新样本；`overwrite` 会删除本工具生成的 `messages.jsonl`、`qwen_llava_sharegpt.json`、`llamafactory_*.json`、`manifest.json`、`images/`、`depth/` 后重建。
+
+`--format {both,all,messages-jsonl,sharegpt-json,llamafactory-json}`
+
+选择输出数据格式。默认 `both` 会输出历史格式 `messages.jsonl` 和 `qwen_llava_sharegpt.json`。`llamafactory-json` 只输出 `llamafactory_<state_mode>.json` 和对应的 `llamafactory_<state_mode>_dataset_info.json`。`all` 会同时输出三种索引格式。
+
+`--llamafactory-state-mode {placeholder,base,base-extra}`
+
+写 LLaMAFactory JSON 时如何处理 user prompt 里的 `<state_info>` 占位符。`base` 会替换为 `{"base": state_info.base}`，这是默认值；`base-extra` 会同时包含 `extra`；`placeholder` 会保留占位符，通常只用于调试。
 
 `--rollout-run-name`
 
@@ -234,6 +242,8 @@ top-leg-pick -> top-leg-push -> leg-top-pick -> leg-top-place -> leg-top-insert 
 <output-dir>/
   messages.jsonl
   qwen_llava_sharegpt.json
+  llamafactory_base.json
+  llamafactory_base_dataset_info.json
   manifest.json
   images/
     <task>/
@@ -400,6 +410,57 @@ Assistant JSON 是 `messages.jsonl` 中 `messages[-1].content` 的内容，也�
   ],
   "metadata": {}
 }
+```
+
+## `llamafactory_base.json` 格式
+
+`--format llamafactory-json` 或 `to-llamafactory` 会导出 LLaMAFactory 直接可用的 ShareGPT 多模态格式。它和 `qwen_llava_sharegpt.json` 的主要区别是：
+
+- 图片字段使用 LLaMAFactory 常用的 `images`。
+- 顶层包含 `system`，保留 task-specific system prompt。
+- user prompt 里的 `<state_info>` 已经按 `--llamafactory-state-mode` 替换，默认只写 `state_info.base`。
+
+```json
+{
+  "id": "sample_id",
+  "images": ["images/..._front.png", "images/..._wrist.png"],
+  "state_info": {"base": {}, "extra": {}},
+  "system": "task-specific system prompt",
+  "conversations": [
+    {"from": "human", "value": "This is the front camera image:\n<image>\n... {\"base\": {...}}\nPlease analyze ..."},
+    {"from": "gpt", "value": "{\"skill\":\"push\", \"target_point_2d\":..., \"target_point_3d\":...}"}
+  ],
+  "metadata": {}
+}
+```
+
+对应的 LLaMAFactory `dataset_info.json` 片段：
+
+```json
+{
+  "rr_vlm_base": {
+    "file_name": "llamafactory_base.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations",
+      "images": "images",
+      "system": "system"
+    }
+  }
+}
+```
+
+把现有 `qwen_llava_sharegpt.json` 转成 LLaMAFactory 格式：
+
+```bash
+cd /data/hy/robust-rearrangement
+
+python -m src.vlm_data_generator to-llamafactory \
+  --input-file /data/hy/robust-rearrangement/data/processed/vlm/qwen_llava_sharegpt.json \
+  --output-file /data/hy/robust-rearrangement/data/processed/vlm/llamafactory_base.json \
+  --dataset-info-file /data/hy/robust-rearrangement/data/processed/vlm/llamafactory_base_dataset_info.json \
+  --dataset-name rr_vlm_base \
+  --llamafactory-state-mode base
 ```
 
 ## 注意事项
