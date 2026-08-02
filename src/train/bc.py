@@ -39,6 +39,11 @@ from src.common.pytorch_util import dict_to_device
 from src.common.skills import SKILL_ORDER
 from src.dataset.dataloader import AsyncDevicePrefetchLoader, build_dataloader
 from src.dataset.dataset import ImageDataset, StateDataset, RGBDDataset
+from src.dataset.source_sampling import (
+    SourceWeightedSampler,
+    normalize_env_sampling_weights,
+    stratified_random_split,
+)
 from src.dataset.storage import resolve_load_into_memory
 from src.eval.eval_utils import get_model_from_api_or_cached
 from src.eval.rollout import do_rollout_evaluation
@@ -679,11 +684,27 @@ def main(cfg: DictConfig):
 
     validate_guidance_point_dataset(cfg, dataset)
 
-    # Split the dataset into train and test (effective, meaning that this is after upsampling)
+    env_sampling_weights = normalize_env_sampling_weights(
+        cfg.data.get("env_sampling_weights", None),
+        dataset.episode_envs,
+    )
+
+    # Split the dataset into train and test (effective, meaning that this is after upsampling).
+    # Weighted sampling needs a source-stratified split so every positive source
+    # is available to both samplers.
     train_size = int(len(dataset) * (1 - cfg.data.test_split))
     test_size = len(dataset) - train_size
     print(f"Splitting dataset into {train_size} train and {test_size} test samples.")
-    train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+    if env_sampling_weights is None:
+        train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+    else:
+        train_dataset, test_dataset = stratified_random_split(
+            dataset,
+            cfg.data.test_split,
+            cfg.seed,
+            env_sampling_weights,
+        )
+        print(f"Using normalized env sampling weights: {env_sampling_weights}")
 
     OmegaConf.set_struct(cfg, False)
     if (job_id := os.environ.get("SLURM_JOB_ID")) is not None:
@@ -727,15 +748,30 @@ def main(cfg: DictConfig):
         actor.load_state_dict(torch.load(model_path))
 
     # Create dataloaders
+    train_sampler = None
+    if env_sampling_weights is not None:
+        train_samples_per_epoch = (
+            len(train_dataset)
+            if cfg.training.steps_per_epoch == -1
+            else cfg.training.steps_per_epoch * cfg.training.batch_size
+        )
+        train_sampler = SourceWeightedSampler(
+            train_dataset,
+            env_sampling_weights,
+            train_samples_per_epoch,
+            seed=cfg.seed,
+        )
+
     trainloader = build_dataloader(
         dataset=train_dataset,
         batch_size=cfg.training.batch_size,
         num_workers=cfg.data.dataloader_workers,
-        shuffle=True,
+        shuffle=train_sampler is None,
         pin_memory=True,
         drop_last=False,
         persistent_workers=cfg.data.get("persistent_workers", False),
         prefetch_factor=cfg.data.get("prefetch_factor", None),
+        sampler=train_sampler,
         steps_per_epoch=cfg.training.steps_per_epoch,
     )
 
@@ -744,15 +780,30 @@ def main(cfg: DictConfig):
         if cfg.training.steps_per_epoch != -1
         else -1
     )
+    test_sampler = None
+    if env_sampling_weights is not None:
+        test_samples_per_epoch = (
+            len(test_dataset)
+            if test_steps_per_epoch == -1
+            else test_steps_per_epoch * cfg.training.batch_size
+        )
+        test_sampler = SourceWeightedSampler(
+            test_dataset,
+            env_sampling_weights,
+            test_samples_per_epoch,
+            seed=cfg.seed + 1_000_000,
+        )
+
     testloader = build_dataloader(
         dataset=test_dataset,
         batch_size=cfg.training.batch_size,
         num_workers=cfg.data.dataloader_workers,
-        shuffle=True,
+        shuffle=test_sampler is None,
         pin_memory=True,
         drop_last=False,
         persistent_workers=cfg.data.get("persistent_workers", False),
         prefetch_factor=cfg.data.get("prefetch_factor", None),
+        sampler=test_sampler,
         steps_per_epoch=test_steps_per_epoch,
     )
 
@@ -957,6 +1008,8 @@ def main(cfg: DictConfig):
         train_losses_log = defaultdict(list)
 
         # batch loop
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch_idx)
         actor.train()
         tepoch = tqdm(trainloader, desc="Training", leave=False, total=len(trainloader))
         for batch in tepoch:

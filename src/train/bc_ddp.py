@@ -54,6 +54,15 @@ from src.dataset.dataloader import (
 )
 from src.dataset.dataset import ImageDataset, RGBDDataset, StateDataset
 from src.dataset.normalizer import LinearNormalizer
+from src.dataset.source_sampling import (
+    SourceWeightedSampler,
+    allocate_rank_source_quotas,
+    balance_items_by_source_and_size,
+    dataset_sample_envs,
+    normalize_env_sampling_weights,
+    stratified_random_split,
+    stratified_split_items,
+)
 from src.dataset.storage import (
     balance_episode_manifest_by_frames,
     build_episode_manifest,
@@ -533,6 +542,25 @@ def broadcast_object(obj, src: int = 0):
     object_list = [obj]
     dist.broadcast_object_list(object_list, src=src)
     return object_list[0]
+
+
+def broadcast_rank0_call(fn, is_main: bool, description: str):
+    outcome = None
+    if is_main:
+        try:
+            outcome = {"value": fn(), "error": None}
+        except Exception as exc:
+            outcome = {
+                "value": None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    outcome = broadcast_object(outcome)
+    if outcome["error"] is not None:
+        raise RuntimeError(
+            f"{description} failed on rank 0: {outcome['error']}"
+        )
+    return outcome["value"]
 
 
 def distributed_mean(value_sum: float, count: int, device: torch.device) -> float:
@@ -1387,6 +1415,7 @@ def main(cfg: DictConfig):
         train_sampler = None
         dataset_stats = None
         train_steps_per_epoch = cfg.training.steps_per_epoch
+        env_sampling_weights = None
 
         if ddp_shard_enabled:
             if cfg.data.get("ddp_split_unit") != "episode":
@@ -1405,43 +1434,64 @@ def main(cfg: DictConfig):
                 raise ValueError(
                     "data.minority_class_power is not supported when data.ddp_shard_enabled=true."
                 )
-            manifest_payload = None
             manifest_start_perf = perf_counter()
-            if main_process:
+
+            def build_manifest_payload():
                 full_episode_refs = build_episode_manifest(
                     data_path,
                     max_episodes=cfg.data.data_subset,
                     max_ep_cnt=cfg.data.get("max_episode_count", None),
                 )
-                train_episode_refs, val_episode_refs = split_episode_manifest(
-                    full_episode_refs,
-                    cfg.data.test_split,
-                    base_seed,
+                env_sampling_weights = normalize_env_sampling_weights(
+                    cfg.data.get("env_sampling_weights", None),
+                    [ref.source for ref in full_episode_refs],
                 )
-                train_shards = balance_episode_manifest_by_frames(
-                    train_episode_refs, world_size
-                )
+                if env_sampling_weights is None:
+                    train_episode_refs, val_episode_refs = split_episode_manifest(
+                        full_episode_refs,
+                        cfg.data.test_split,
+                        base_seed,
+                    )
+                    train_shards = balance_episode_manifest_by_frames(
+                        train_episode_refs, world_size
+                    )
+                else:
+                    train_episode_refs, val_episode_refs = stratified_split_items(
+                        full_episode_refs,
+                        cfg.data.test_split,
+                        base_seed,
+                        env_sampling_weights,
+                    )
+                    train_shards = balance_items_by_source_and_size(
+                        train_episode_refs, world_size
+                    )
                 if any(len(shard) == 0 for shard in train_shards):
                     raise ValueError(
                         "DDP sharding produced an empty training shard. "
                         "Reduce WORLD_SIZE or provide more training episodes."
                     )
 
-                manifest_payload = {
+                return {
                     "full_episode_refs": full_episode_refs,
                     "train_episode_refs": train_episode_refs,
                     "val_episode_refs": val_episode_refs,
                     "train_shards": train_shards,
                     "metadata": summarize_manifest_metadata(data_path, full_episode_refs),
+                    "env_sampling_weights": env_sampling_weights,
                 }
 
-            manifest_payload = broadcast_object(manifest_payload if main_process else None)
+            manifest_payload = broadcast_rank0_call(
+                build_manifest_payload,
+                main_process,
+                "DDP episode manifest construction",
+            )
             manifest_duration = perf_counter() - manifest_start_perf
             full_episode_refs = manifest_payload["full_episode_refs"]
             train_episode_refs = manifest_payload["train_episode_refs"]
             val_episode_refs = manifest_payload["val_episode_refs"]
             train_shard_refs = manifest_payload["train_shards"][rank]
             full_metadata = manifest_payload["metadata"]
+            env_sampling_weights = manifest_payload["env_sampling_weights"]
 
             stats_start_perf = perf_counter()
             global_stats = compute_global_minmax_stats(
@@ -1544,9 +1594,34 @@ def main(cfg: DictConfig):
                 )
             )
 
-            train_sampler = EpochShuffleSampler(
-                train_dataset, shuffle=True, seed=base_seed
-            )
+            if env_sampling_weights is None:
+                train_sampler = EpochShuffleSampler(
+                    train_dataset, shuffle=True, seed=base_seed
+                )
+            else:
+                train_samples_per_rank = (
+                    train_steps_per_epoch * per_rank_batch_size
+                )
+                local_sources = sorted(
+                    {str(source) for source in dataset_sample_envs(train_dataset)}
+                )
+                available_sources_by_rank = [None for _ in range(world_size)]
+                dist.all_gather_object(available_sources_by_rank, local_sources)
+                rank_source_quotas = allocate_rank_source_quotas(
+                    env_sampling_weights,
+                    train_samples_per_rank,
+                    available_sources_by_rank,
+                )
+                train_sampler = SourceWeightedSampler(
+                    train_dataset,
+                    env_sampling_weights,
+                    train_samples_per_rank,
+                    seed=base_seed,
+                    num_replicas=world_size,
+                    rank=rank,
+                    global_schedule=False,
+                    source_quotas=rank_source_quotas[rank],
+                )
             trainloader = build_dataloader(
                 dataset=train_dataset,
                 batch_size=per_rank_batch_size,
@@ -1566,15 +1641,29 @@ def main(cfg: DictConfig):
                     if cfg.training.steps_per_epoch != -1
                     else -1
                 )
+                test_sampler = None
+                if env_sampling_weights is not None:
+                    test_samples_per_epoch = (
+                        len(test_dataset)
+                        if test_steps_per_epoch == -1
+                        else test_steps_per_epoch * per_rank_batch_size
+                    )
+                    test_sampler = SourceWeightedSampler(
+                        test_dataset,
+                        env_sampling_weights,
+                        test_samples_per_epoch,
+                        seed=base_seed + 1_000_000,
+                    )
                 testloader = build_dataloader(
                     dataset=test_dataset,
                     batch_size=per_rank_batch_size,
                     num_workers=cfg.data.dataloader_workers,
-                    shuffle=True,
+                    shuffle=test_sampler is None,
                     pin_memory=True,
                     drop_last=False,
                     persistent_workers=cfg.data.get("persistent_workers", False),
                     prefetch_factor=cfg.data.get("prefetch_factor", None),
+                    sampler=test_sampler,
                     steps_per_epoch=test_steps_per_epoch,
                 )
             else:
@@ -1594,21 +1683,65 @@ def main(cfg: DictConfig):
             dataset = build_dataset_for_observation_type(cfg, data_path)
             validate_guidance_point_dataset(cfg, dataset)
 
+            env_sampling_weights = normalize_env_sampling_weights(
+                cfg.data.get("env_sampling_weights", None),
+                dataset.episode_envs,
+            )
+            if env_sampling_weights is not None and cfg.data.get(
+                "minority_class_power", False
+            ):
+                raise ValueError(
+                    "data.minority_class_power cannot be combined with "
+                    "data.env_sampling_weights in non-sharded DDP because it "
+                    "would produce rank-local sequence pools."
+                )
+
             train_size = int(len(dataset) * (1 - cfg.data.test_split))
             test_size = len(dataset) - train_size
             if main_process:
                 print(
                     f"Splitting dataset into {train_size} train and {test_size} test samples."
                 )
-            train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+            if env_sampling_weights is None:
+                train_dataset, test_dataset = random_split(
+                    dataset, [train_size, test_size]
+                )
+            else:
+                train_dataset, test_dataset = stratified_random_split(
+                    dataset,
+                    cfg.data.test_split,
+                    base_seed,
+                    env_sampling_weights,
+                )
+                if main_process:
+                    print(
+                        "Using normalized env sampling weights: "
+                        f"{env_sampling_weights}"
+                    )
 
-            train_sampler = DistributedSampler(
-                train_dataset,
-                num_replicas=world_size,
-                rank=rank,
-                shuffle=True,
-                drop_last=False,
-            )
+            if env_sampling_weights is None:
+                train_sampler = DistributedSampler(
+                    train_dataset,
+                    num_replicas=world_size,
+                    rank=rank,
+                    shuffle=True,
+                    drop_last=False,
+                )
+            else:
+                train_samples_per_rank = (
+                    int(math.ceil(len(train_dataset) / world_size))
+                    if cfg.training.steps_per_epoch == -1
+                    else cfg.training.steps_per_epoch * per_rank_batch_size
+                )
+                train_sampler = SourceWeightedSampler(
+                    train_dataset,
+                    env_sampling_weights,
+                    train_samples_per_rank,
+                    seed=base_seed,
+                    num_replicas=world_size,
+                    rank=rank,
+                    global_schedule=True,
+                )
             trainloader = build_dataloader(
                 dataset=train_dataset,
                 batch_size=per_rank_batch_size,
@@ -1629,15 +1762,29 @@ def main(cfg: DictConfig):
                     if cfg.training.steps_per_epoch != -1
                     else -1
                 )
+                test_sampler = None
+                if env_sampling_weights is not None:
+                    test_samples_per_epoch = (
+                        len(test_dataset)
+                        if test_steps_per_epoch == -1
+                        else test_steps_per_epoch * per_rank_batch_size
+                    )
+                    test_sampler = SourceWeightedSampler(
+                        test_dataset,
+                        env_sampling_weights,
+                        test_samples_per_epoch,
+                        seed=base_seed + 1_000_000,
+                    )
                 testloader = build_dataloader(
                     dataset=test_dataset,
                     batch_size=per_rank_batch_size,
                     num_workers=cfg.data.dataloader_workers,
-                    shuffle=True,
+                    shuffle=test_sampler is None,
                     pin_memory=True,
                     drop_last=False,
                     persistent_workers=cfg.data.get("persistent_workers", False),
                     prefetch_factor=cfg.data.get("prefetch_factor", None),
+                    sampler=test_sampler,
                     steps_per_epoch=test_steps_per_epoch,
                 )
 
@@ -1656,6 +1803,8 @@ def main(cfg: DictConfig):
                 "global_batch_size": cfg.training.batch_size,
                 "per_rank_batch_size": per_rank_batch_size,
             }
+
+        dataset_stats["env_sampling_weights"] = env_sampling_weights
 
         OmegaConf.set_struct(cfg, False)
         cfg.robot_state_dim = dataset.robot_state_dim

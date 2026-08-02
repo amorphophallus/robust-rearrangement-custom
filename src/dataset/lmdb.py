@@ -62,6 +62,13 @@ def _coerce_scalar(value):
     return value
 
 
+def _coerce_optional_string(value) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(_coerce_scalar(value))
+    return normalized if normalized.strip() else None
+
+
 def _feature_min_max(array: np.ndarray):
     if array.ndim == 1:
         return np.min(array, axis=0), np.max(array, axis=0)
@@ -381,6 +388,7 @@ def build_episode_manifest(
                     task=str(_coerce_scalar(episode_meta["task"])),
                     success=int(_coerce_scalar(episode_meta["success"])),
                     domain=domain,
+                    source=_coerce_optional_string(episode_meta.get("env")),
                 )
             )
 
@@ -393,6 +401,7 @@ def _init_combined_data(first_meta, total_frames: int, total_episodes: int, keys
     combined_data = {
         "episode_ends": np.zeros(total_episodes, dtype=np.int64),
         "task": [],
+        "env": [],
         "success": np.zeros(total_episodes, dtype=np.uint8),
         "domain": np.zeros(total_episodes, dtype=np.uint8),
         "zarr_idx": np.zeros(total_frames, dtype=np.int64),
@@ -506,6 +515,7 @@ def combine_lmdb_episode_subset(
 
         combined_data["episode_ends"][episode_cursor] = frame_cursor + frame_count
         combined_data["task"].append(ref.task)
+        combined_data["env"].append(ref.source)
         combined_data["success"][episode_cursor] = ref.success
         combined_data["domain"][episode_cursor] = domain_idx[ref.domain]
         combined_data["zarr_idx"][frame_cursor : frame_cursor + frame_count] = ref.path_idx
