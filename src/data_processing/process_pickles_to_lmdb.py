@@ -40,6 +40,13 @@ from src.dataset.lmdb import (
     read_lmdb_episode_index,
     read_lmdb_meta,
 )
+from src.dataset.depth_stats import (
+    DEPTH_CAMERA_KEYS,
+    DEPTH_NORMALIZER_STATS_ATTR,
+    empty_depth_moments,
+    finalize_depth_moments,
+    update_depth_moments,
+)
 from src.visualization.render_mp4 import unpickle_data
 
 
@@ -648,6 +655,7 @@ def main():
 
     episode_index = []
     normalizer_stats = {}
+    depth_moments = empty_depth_moments()
     env_counts = defaultdict(int)
     frame_specs = None
     lowdim_specs = None
@@ -742,6 +750,12 @@ def main():
 
                 episode_stats = compute_normalizer_stats_from_dict(lowdim_payload)
                 merge_normalizer_stats(normalizer_stats, episode_stats)
+                for camera_name, depth_key in DEPTH_CAMERA_KEYS.items():
+                    update_depth_moments(
+                        depth_moments,
+                        camera_name,
+                        np.asarray(episode_data[depth_key]),
+                    )
 
                 global_frame_idx = frame_end
                 global_episode_idx += 1
@@ -764,6 +778,18 @@ def main():
             )
 
     serialized_normalizer_stats = serialize_normalizer_stats(normalizer_stats)
+    depth_normalizer_stats = finalize_depth_moments(depth_moments)
+    for camera_name, camera_stats in depth_normalizer_stats.items():
+        if int(camera_stats["count"]) == 0:
+            print(
+                f"[WARNING] No finite non-zero depth pixels found for {camera_name}; "
+                "this LMDB cannot be used for new RGBD training."
+            )
+        elif float(camera_stats["std"]) == 0.0:
+            print(
+                f"[WARNING] Depth standard deviation is zero for {camera_name}; "
+                "this LMDB cannot be used for new RGBD training."
+            )
     attrs = {
         "time_created": time_created,
         "time_finished": datetime.now().astimezone().isoformat(),
@@ -798,6 +824,7 @@ def main():
         "storage_format": "lmdb",
         "normalizer_stats": serialized_normalizer_stats,
         "normalizer_stats_keys": list(NORMALIZER_STATS_KEYS),
+        DEPTH_NORMALIZER_STATS_ATTR: depth_normalizer_stats,
         "env_counts": dict(sorted(env_counts.items())),
     }
     meta = {

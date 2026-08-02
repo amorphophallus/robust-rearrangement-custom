@@ -66,6 +66,7 @@ from src.dataset.source_sampling import (
 from src.dataset.storage import (
     balance_episode_manifest_by_frames,
     build_episode_manifest,
+    compute_global_depth_stats,
     compute_global_minmax_stats,
     resolve_load_into_memory,
     summarize_manifest_metadata,
@@ -1272,6 +1273,7 @@ def build_save_dict(
 ):
     save_dict = {
         "model_state_dict": actor.module.state_dict(),
+        "depth_normalizer_stats": actor.module.get_depth_normalizer_stats(),
         "best_test_loss": best_test_loss,
         "best_success_rate": best_success_rate,
         "best_val_action_mse_error": best_val_action_mse_error,
@@ -1416,6 +1418,7 @@ def main(cfg: DictConfig):
         dataset_stats = None
         train_steps_per_epoch = cfg.training.steps_per_epoch
         env_sampling_weights = None
+        depth_normalizer_stats = None
 
         if ddp_shard_enabled:
             if cfg.data.get("ddp_split_unit") != "episode":
@@ -1492,6 +1495,17 @@ def main(cfg: DictConfig):
             train_shard_refs = manifest_payload["train_shards"][rank]
             full_metadata = manifest_payload["metadata"]
             env_sampling_weights = manifest_payload["env_sampling_weights"]
+
+            if cfg.observation_type == "rgbd":
+                depth_normalizer_stats = broadcast_rank0_call(
+                    lambda: compute_global_depth_stats(
+                        data_path,
+                        episode_refs=full_episode_refs,
+                        progress_desc="LMDB depth stats",
+                    ),
+                    main_process,
+                    "RGBD depth statistics",
+                )
 
             stats_start_perf = perf_counter()
             global_stats = compute_global_minmax_stats(
@@ -1719,6 +1733,21 @@ def main(cfg: DictConfig):
                         f"{env_sampling_weights}"
                     )
 
+            if cfg.observation_type == "rgbd":
+                depth_normalizer_stats = broadcast_rank0_call(
+                    lambda: compute_global_depth_stats(
+                        data_path,
+                        episode_refs=build_episode_manifest(
+                            data_path,
+                            max_episodes=cfg.data.data_subset,
+                            max_ep_cnt=cfg.data.get("max_episode_count", None),
+                        ),
+                        progress_desc="LMDB depth stats",
+                    ),
+                    main_process,
+                    "RGBD depth statistics",
+                )
+
             if env_sampling_weights is None:
                 train_sampler = DistributedSampler(
                     train_dataset,
@@ -1805,6 +1834,7 @@ def main(cfg: DictConfig):
             }
 
         dataset_stats["env_sampling_weights"] = env_sampling_weights
+        dataset_stats["depth_normalizer_stats"] = depth_normalizer_stats
 
         OmegaConf.set_struct(cfg, False)
         cfg.robot_state_dim = dataset.robot_state_dim
@@ -1816,6 +1846,8 @@ def main(cfg: DictConfig):
 
         actor: Actor = get_actor(cfg, device)
         actor.set_normalizer(dataset.normalizer)
+        if depth_normalizer_stats is not None:
+            actor.set_depth_normalizer_stats(depth_normalizer_stats)
         actor.to(device)
 
         OmegaConf.set_struct(cfg, False)
@@ -1835,7 +1867,12 @@ def main(cfg: DictConfig):
         if remote_checkpoint_path is not None:
             if main_process:
                 print(f"Loading checkpoint from {cfg.training.load_checkpoint_run_id}")
-            actor.load_state_dict(load_state_dict_from_path(remote_checkpoint_path))
+            checkpoint_payload = load_state_dict_from_path(remote_checkpoint_path)
+            actor.load_state_dict(
+                checkpoint_payload.get("model_state_dict", checkpoint_payload)
+                if isinstance(checkpoint_payload, dict)
+                else checkpoint_payload
+            )
 
         async_device_prefetch_enabled = bool(
             cfg.data.get("async_device_prefetch", False) and device.type == "cuda"

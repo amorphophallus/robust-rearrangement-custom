@@ -15,6 +15,13 @@ from src.dataset.lmdb import (
     unpack_frame,
     unpack_named_arrays,
 )
+from src.dataset.depth_stats import (
+    DEPTH_CAMERA_KEYS,
+    DEPTH_NORMALIZER_STATS_ATTR,
+    empty_depth_moments,
+    finalize_depth_moments,
+    update_depth_moments,
+)
 
 
 NORMALIZER_STATS_KEYS = (
@@ -134,6 +141,61 @@ def compare_full_stats(path, computed_stats, stored_stats, atol):
         )
 
 
+def update_episode_depth_stats(
+    path,
+    txn,
+    frame_start,
+    frame_end,
+    frame_specs,
+    depth_moments,
+):
+    depth_keys = list(DEPTH_CAMERA_KEYS.values())
+    per_camera_values = {camera_name: [] for camera_name in DEPTH_CAMERA_KEYS}
+    for frame_idx in range(frame_start, frame_end):
+        raw_frame = txn.get(frame_key(frame_idx))
+        if raw_frame is None:
+            raise KeyError(f"{path}: missing frame payload {frame_idx}")
+        decoded = unpack_frame(raw_frame, frame_specs, keys=depth_keys)
+        for camera_name, depth_key in DEPTH_CAMERA_KEYS.items():
+            per_camera_values[camera_name].append(decoded[depth_key])
+
+    for camera_name, values in per_camera_values.items():
+        if values:
+            update_depth_moments(
+                depth_moments,
+                camera_name,
+                np.stack(values, axis=0),
+            )
+
+
+def compare_depth_stats(path, computed_stats, stored_stats, atol):
+    if stored_stats is None:
+        raise ValueError(
+            f"{path}: metadata is missing {DEPTH_NORMALIZER_STATS_ATTR!r}"
+        )
+
+    for camera_name in DEPTH_CAMERA_KEYS:
+        if camera_name not in stored_stats:
+            raise ValueError(f"{path}: stored depth stats are missing {camera_name}")
+        expected = computed_stats[camera_name]
+        actual = stored_stats[camera_name]
+        if int(actual["count"]) != int(expected["count"]):
+            raise ValueError(
+                f"{path}: {camera_name} depth count mismatch: "
+                f"stored={actual['count']} computed={expected['count']}"
+            )
+        for stat_name in ("mean", "std", "M2"):
+            np.testing.assert_allclose(
+                float(actual[stat_name]),
+                float(expected[stat_name]),
+                atol=atol,
+                rtol=1e-10,
+                err_msg=(
+                    f"{path}: {camera_name} depth {stat_name} mismatch"
+                ),
+            )
+
+
 def validate_path(path: Path, sample_episodes: int, full_stats: bool, atol: float):
     meta = read_lmdb_meta(path)
     episode_index = read_lmdb_episode_index(path)
@@ -155,6 +217,7 @@ def validate_path(path: Path, sample_episodes: int, full_stats: bool, atol: floa
     lowdim_specs = meta["lowdim_specs"]
     frame_specs = meta["frame_specs"]
     stored_stats = as_stats(attrs.get(NORMALIZER_STATS_ATTR))
+    stored_depth_stats = attrs.get(DEPTH_NORMALIZER_STATS_ATTR)
 
     if full_stats:
         selected_indices = range(len(episode_index))
@@ -163,6 +226,7 @@ def validate_path(path: Path, sample_episodes: int, full_stats: bool, atol: floa
     selected_count = len(selected_indices)
 
     computed_stats = {}
+    computed_depth_moments = empty_depth_moments()
     checked_frames = 0
     env = open_lmdb_env(path, readonly=True)
     try:
@@ -196,6 +260,15 @@ def validate_path(path: Path, sample_episodes: int, full_stats: bool, atol: floa
                 )
                 check_frame_specs(path, txn, frame_candidates, frame_specs)
                 checked_frames += len(frame_candidates)
+                if full_stats:
+                    update_episode_depth_stats(
+                        path,
+                        txn,
+                        frame_start,
+                        frame_end,
+                        frame_specs,
+                        computed_depth_moments,
+                    )
 
             raw_meta = txn.get(b"__meta__")
             if json_loads_bytes(raw_meta) != meta:
@@ -205,6 +278,12 @@ def validate_path(path: Path, sample_episodes: int, full_stats: bool, atol: floa
 
     if full_stats:
         compare_full_stats(path, computed_stats, stored_stats, atol)
+        compare_depth_stats(
+            path,
+            finalize_depth_moments(computed_depth_moments),
+            stored_depth_stats,
+            atol,
+        )
 
     print(
         f"[OK] {path}: episodes_checked={selected_count}, "
@@ -222,7 +301,10 @@ def main():
     parser.add_argument(
         "--full-stats",
         action="store_true",
-        help="Scan all episodes and compare computed min/max against stored normalizer_stats.",
+        help=(
+            "Scan all episodes and compare low-dimensional min/max plus depth "
+            "moments against stored normalizer statistics."
+        ),
     )
     parser.add_argument("--atol", type=float, default=1e-6)
     args = parser.parse_args()

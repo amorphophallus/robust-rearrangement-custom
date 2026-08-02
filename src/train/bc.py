@@ -44,7 +44,11 @@ from src.dataset.source_sampling import (
     normalize_env_sampling_weights,
     stratified_random_split,
 )
-from src.dataset.storage import resolve_load_into_memory
+from src.dataset.storage import (
+    build_episode_manifest,
+    compute_global_depth_stats,
+    resolve_load_into_memory,
+)
 from src.eval.eval_utils import get_model_from_api_or_cached
 from src.eval.rollout import do_rollout_evaluation
 from src.gym import get_rl_env
@@ -706,6 +710,19 @@ def main(cfg: DictConfig):
         )
         print(f"Using normalized env sampling weights: {env_sampling_weights}")
 
+    depth_normalizer_stats = None
+    if cfg.observation_type == "rgbd":
+        selected_episode_refs = build_episode_manifest(
+            data_path,
+            max_episodes=cfg.data.data_subset,
+            max_ep_cnt=cfg.data.get("max_episode_count", None),
+        )
+        depth_normalizer_stats = compute_global_depth_stats(
+            data_path,
+            episode_refs=selected_episode_refs,
+        )
+        print(f"Using dataset depth normalizer stats: {depth_normalizer_stats}")
+
     OmegaConf.set_struct(cfg, False)
     if (job_id := os.environ.get("SLURM_JOB_ID")) is not None:
         cfg.slurm_job_id = job_id
@@ -723,6 +740,8 @@ def main(cfg: DictConfig):
         device,
     )
     actor.set_normalizer(dataset.normalizer)
+    if depth_normalizer_stats is not None:
+        actor.set_depth_normalizer_stats(depth_normalizer_stats)
     actor.to(device)
 
     # Set the data path in the cfg object
@@ -745,7 +764,12 @@ def main(cfg: DictConfig):
             .name
         )
         print(f"Loading checkpoint from {cfg.training.load_checkpoint_run_id}")
-        actor.load_state_dict(torch.load(model_path))
+        checkpoint_payload = torch.load(model_path)
+        actor.load_state_dict(
+            checkpoint_payload.get("model_state_dict", checkpoint_payload)
+            if isinstance(checkpoint_payload, dict)
+            else checkpoint_payload
+        )
 
     # Create dataloaders
     train_sampler = None
@@ -980,6 +1004,7 @@ def main(cfg: DictConfig):
     def build_save_dict():
         save_dict = {
             "model_state_dict": actor.state_dict(),
+            "depth_normalizer_stats": actor.get_depth_normalizer_stats(),
             "best_test_loss": best_test_loss,
             "best_success_rate": best_success_rate,
             "epoch": epoch_idx,
