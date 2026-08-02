@@ -4,6 +4,7 @@ import random
 import re
 import shutil
 import sys
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -49,6 +50,17 @@ LOWDIM_KEYS = tuple(key for key in TIMESERIES_KEYS if key not in {
     "depth_image2",
 })
 IMAGE_KEYS = ("color_image1", "color_image2", "depth_image1", "depth_image2")
+
+
+def normalize_env_label(value) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if isinstance(value, np.generic):
+        value = value.item()
+    label = str(value)
+    return label if label.strip() else None
 
 
 def format_bytes(num_bytes: int) -> str:
@@ -427,6 +439,7 @@ def process_batch(batch_paths, noop_threshold, n_cpus, resize_image):
                 noop_threshold=noop_threshold,
                 calculate_pos_action_from_delta=True,
                 resize_image=resize_image,
+                include_env_metadata=True,
             )
             for path in batch_paths
         ]
@@ -439,6 +452,7 @@ def process_batch(batch_paths, noop_threshold, n_cpus, resize_image):
                     noop_threshold=noop_threshold,
                     calculate_pos_action_from_delta=True,
                     resize_image=resize_image,
+                    include_env_metadata=True,
                 ),
                 batch_paths,
             )
@@ -634,6 +648,7 @@ def main():
 
     episode_index = []
     normalizer_stats = {}
+    env_counts = defaultdict(int)
     frame_specs = None
     lowdim_specs = None
     global_frame_idx = 0
@@ -709,6 +724,7 @@ def main():
                         pack_frame(frame_payload, frame_specs),
                     )
 
+                env_label = normalize_env_label(episode_data.get("env"))
                 episode_index.append(
                     {
                         "episode_idx": global_episode_idx,
@@ -717,8 +733,10 @@ def main():
                         "task": episode_data["task"],
                         "success": int(episode_data["success"]),
                         "pickle_file": episode_data["pickle_file"],
+                        "env": env_label,
                     }
                 )
+                env_counts[env_label if env_label is not None else "<missing>"] += 1
                 selected_task_counts.setdefault(episode_data["task"], 0)
                 selected_task_counts[episode_data["task"]] += 1
 
@@ -780,6 +798,7 @@ def main():
         "storage_format": "lmdb",
         "normalizer_stats": serialized_normalizer_stats,
         "normalizer_stats_keys": list(NORMALIZER_STATS_KEYS),
+        "env_counts": dict(sorted(env_counts.items())),
     }
     meta = {
         "format": "robust_rearrangement_lmdb",
