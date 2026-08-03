@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -207,6 +208,18 @@ def _rollout_suffix_model_name(condition: ConditionConfig, noise: NoiseLevel) ->
     )
 
 
+def _effective_rollout_suffix_model_name(
+    condition: ConditionConfig,
+    noise: NoiseLevel,
+) -> str:
+    suffix = _rollout_suffix_model_name(condition, noise)
+    if noise.pos_std_m <= 0.0 and noise.ori_std_deg <= 0.0:
+        return suffix
+    pos_tag = str(noise.pos_std_m).replace(".", "p")
+    ori_tag = str(noise.ori_std_deg).replace(".", "p")
+    return f"{suffix}_noise_pos{pos_tag}_ori{ori_tag}_seed0"
+
+
 def _rollout_group_dirs(
     *,
     task_group: str,
@@ -214,21 +227,24 @@ def _rollout_group_dirs(
     condition: ConditionConfig,
     noise: NoiseLevel,
 ) -> list[Path]:
-    suffix = _rollout_suffix_model_name(condition, noise)
-    return [
-        REPO_ROOT
-        / "data"
-        / "raw"
-        / "diffik"
-        / "sim"
-        / task
-        / "rollout"
-        / randomness
-        / condition.data_suffix
-        / task_group
-        / suffix
-        for task in task_group.split("+")
-    ]
+    suffix = _effective_rollout_suffix_model_name(condition, noise)
+    rollout_dirs = []
+    for task in task_group.split("+"):
+        base = (
+            REPO_ROOT
+            / "data"
+            / "raw"
+            / "diffik"
+            / "sim"
+            / task
+            / "rollout"
+            / randomness
+            / condition.data_suffix
+        )
+        if "+" in task_group:
+            base = base / task_group
+        rollout_dirs.append(base / suffix)
+    return rollout_dirs
 
 
 def _clean_rollout_group(
@@ -246,6 +262,43 @@ def _clean_rollout_group(
     ):
         if rollout_dir.exists():
             shutil.rmtree(rollout_dir)
+
+
+def _evict_rollout_group_cache(
+    *,
+    task_group: str,
+    randomness: str,
+    condition: ConditionConfig,
+    noise: NoiseLevel,
+) -> dict[str, int]:
+    stats = {"files": 0, "bytes": 0, "errors": 0}
+    if not hasattr(os, "posix_fadvise") or not hasattr(os, "POSIX_FADV_DONTNEED"):
+        stats["errors"] = 1
+        return stats
+
+    for rollout_dir in _rollout_group_dirs(
+        task_group=task_group,
+        randomness=randomness,
+        condition=condition,
+        noise=noise,
+    ):
+        if not rollout_dir.exists():
+            continue
+        for path in rollout_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                size = path.stat().st_size
+                fd = os.open(path, os.O_RDONLY)
+                try:
+                    os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+                finally:
+                    os.close(fd)
+                stats["files"] += 1
+                stats["bytes"] += size
+            except OSError:
+                stats["errors"] += 1
+    return stats
 
 
 def _build_command(
@@ -300,6 +353,134 @@ def _build_command(
     return command
 
 
+def _validate_summary(
+    *,
+    summary_path: Path | None,
+    condition: ConditionConfig,
+    noise: NoiseLevel,
+    task_group: str,
+    n_envs: int,
+    n_rollouts: int,
+    randomness: str,
+) -> list[str]:
+    errors: list[str] = []
+    if summary_path is None or not summary_path.exists():
+        return ["aggregate summary JSON was not created"]
+
+    try:
+        payload = json.loads(summary_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"aggregate summary JSON is unreadable: {exc}"]
+
+    expected_total = n_rollouts * len(task_group.split("+"))
+    if int(payload.get("n_rollouts", -1)) != expected_total:
+        errors.append(
+            f"aggregate n_rollouts={payload.get('n_rollouts')} expected={expected_total}"
+        )
+    if int(payload.get("n_envs", -1)) != n_envs:
+        errors.append(f"n_envs={payload.get('n_envs')} expected={n_envs}")
+    expected_checkpoint_name = condition.checkpoint.stem
+    if payload.get("checkpoint_name") != expected_checkpoint_name:
+        errors.append(
+            f"checkpoint_name={payload.get('checkpoint_name')!r} "
+            f"expected={expected_checkpoint_name!r}"
+        )
+    expected_task_value = task_group if "+" in task_group else task_group.split("+")[0]
+    actual_task_value = payload.get("task_group") or payload.get("task")
+    if actual_task_value != expected_task_value:
+        errors.append(
+            f"task={actual_task_value!r} expected={expected_task_value!r}"
+        )
+    if payload.get("eval_randomness") != randomness:
+        errors.append(
+            f"eval_randomness={payload.get('eval_randomness')!r} expected={randomness!r}"
+        )
+    if payload.get("observation_space") != "image":
+        errors.append(
+            f"observation_space={payload.get('observation_space')!r} expected='image'"
+        )
+    if payload.get("action_type") != "pos":
+        errors.append(f"action_type={payload.get('action_type')!r} expected='pos'")
+
+    train_data_cfg = (payload.get("training_config") or {}).get("data") or {}
+    for key in ("annotation_noise_pos_std_m", "annotation_noise_ori_std_deg"):
+        try:
+            train_noise = float(train_data_cfg.get(key, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            train_noise = float("nan")
+        if not math.isfinite(train_noise) or train_noise != 0.0:
+            errors.append(f"training_config.data.{key}={train_data_cfg.get(key)!r} expected=0")
+
+    noise_cfg = payload.get("annotation_noise_config") or {}
+    expected_enabled = noise.pos_std_m > 0.0 or noise.ori_std_deg > 0.0
+    checks: dict[str, Any] = {
+        "pos_std_m": noise.pos_std_m,
+        "ori_std_deg": noise.ori_std_deg,
+        "enabled": expected_enabled,
+    }
+    if expected_enabled:
+        checks.update(
+            {
+                "apply_to": condition.apply_to,
+                "mode": "gaussian_clip_2sigma",
+                "seed": 0,
+            }
+        )
+    for key, expected in checks.items():
+        actual = noise_cfg.get(key)
+        if isinstance(expected, float):
+            try:
+                matches = abs(float(actual) - expected) < 1e-9
+            except (TypeError, ValueError):
+                matches = False
+        else:
+            matches = actual == expected
+        if not matches:
+            errors.append(f"noise.{key}={actual!r} expected={expected!r}")
+
+    annotation_cfg = payload.get("eval_annotation_config") or {}
+    expected_flags = {
+        "annotate_skill": True,
+        "guidance_point_on_image": "--guidance-point-on-image" in condition.flags,
+        "guidance_point_colored": "--guidance-point-colored" in condition.flags,
+        "grasp_part_annotate": "--grasp-part-annotate" in condition.flags,
+        "grasp_annotation_colored": "--grasp-annotation-colored" in condition.flags,
+    }
+    for key, expected in expected_flags.items():
+        if bool(annotation_cfg.get(key)) != expected:
+            errors.append(
+                f"annotation.{key}={annotation_cfg.get(key)!r} expected={expected!r}"
+            )
+
+    tasks = task_group.split("+")
+    per_task = payload.get("per_task") or {}
+    if len(tasks) == 1 and not per_task:
+        per_task = {tasks[0]: payload}
+    for task in tasks:
+        task_payload = per_task.get(task)
+        if not isinstance(task_payload, dict):
+            errors.append(f"missing per_task.{task}")
+            continue
+        if int(task_payload.get("n_rollouts", -1)) != n_rollouts:
+            errors.append(
+                f"{task}.n_rollouts={task_payload.get('n_rollouts')} expected={n_rollouts}"
+            )
+        if int(task_payload.get("n_envs", -1)) != n_envs:
+            errors.append(
+                f"{task}.n_envs={task_payload.get('n_envs')} expected={n_envs}"
+            )
+        if task_payload.get("eval_randomness") != randomness:
+            errors.append(
+                f"{task}.eval_randomness={task_payload.get('eval_randomness')!r} "
+                f"expected={randomness!r}"
+            )
+        tracking = (task_payload.get("tracking_error") or {}).get("overall") or {}
+        if int(tracking.get("count", 0)) <= 0:
+            errors.append(f"{task}.tracking_error is missing or empty")
+
+    return errors
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--task-group", default="one_leg+round_table+lamp")
@@ -318,6 +499,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--continue-on-error", action="store_true")
     parser.add_argument("--save-rollouts-count", type=int, default=8)
+    parser.add_argument("--keep-rollout-cache", action="store_true")
     args = parser.parse_args()
 
     env = os.environ.copy()
@@ -414,17 +596,49 @@ def main() -> None:
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                 )
+            if not args.keep_rollout_cache:
+                cache_eviction = _evict_rollout_group_cache(
+                    task_group=args.task_group,
+                    randomness=args.randomness,
+                    condition=condition,
+                    noise=noise,
+                )
+                row["cache_eviction"] = cache_eviction
+                print(
+                    f"[cache] evicted files={cache_eviction['files']} "
+                    f"bytes={cache_eviction['bytes']} errors={cache_eviction['errors']}",
+                    flush=True,
+                )
             row["ended_at"] = datetime.now().isoformat(timespec="seconds")
             row["returncode"] = completed.returncode
             if completed.returncode == 0:
                 summary_path = _latest_json_after(log_dir, start_ts)
-                row["status"] = "ok"
                 row["summary_json"] = str(summary_path) if summary_path else ""
-                print(
-                    f"[ok] {condition.condition_id} {noise.noise_id} "
-                    f"summary={row['summary_json']} log={group_log}",
-                    flush=True,
+                validation_errors = _validate_summary(
+                    summary_path=summary_path,
+                    condition=condition,
+                    noise=noise,
+                    task_group=args.task_group,
+                    n_envs=args.n_envs,
+                    n_rollouts=args.n_rollouts,
+                    randomness=args.randomness,
                 )
+                row["validation_errors"] = validation_errors
+                if validation_errors:
+                    row["status"] = "failed"
+                    row["returncode"] = 2
+                    print(
+                        f"[failed] {condition.condition_id} {noise.noise_id} "
+                        f"validation={validation_errors} log={group_log}",
+                        flush=True,
+                    )
+                else:
+                    row["status"] = "ok"
+                    print(
+                        f"[ok] {condition.condition_id} {noise.noise_id} "
+                        f"summary={row['summary_json']} log={group_log}",
+                        flush=True,
+                    )
             else:
                 row["status"] = "failed"
                 row["summary_json"] = ""
@@ -435,8 +649,8 @@ def main() -> None:
                 )
             _append_manifest(args.manifest, row)
             manifest_index[key] = row
-            if completed.returncode != 0 and not args.continue_on_error:
-                raise SystemExit(completed.returncode)
+            if row["status"] != "ok" and not args.continue_on_error:
+                raise SystemExit(int(row.get("returncode", 1) or 1))
 
     if args.dry_run:
         print("[dry-run] commands written to manifest; report generation skipped", flush=True)

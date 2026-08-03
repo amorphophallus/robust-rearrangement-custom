@@ -145,7 +145,13 @@ def apply_annotation_noise(
     noisy_pose = None if guidance_pose is None else guidance_pose.copy()
 
     apply_point_pos = noisy_point is not None and config.apply_to in {"all", "point"}
-    apply_pose_pos = noisy_pose is not None and config.apply_to in {"all", "grasp"}
+    # The pose is annotation-only at this point. Keep its position aligned with
+    # the noisy point so tracking evaluates the target actually drawn to the policy.
+    apply_pose_pos = noisy_pose is not None and config.apply_to in {
+        "all",
+        "point",
+        "grasp",
+    }
     apply_ori = noisy_pose is not None and config.apply_to in {"all", "grasp"}
 
     if apply_point_pos:

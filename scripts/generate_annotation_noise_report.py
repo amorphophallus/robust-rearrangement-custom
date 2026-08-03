@@ -211,8 +211,14 @@ def _weighted_tracking_overall(per_task: dict[str, Any]) -> dict[str, float | in
 
 def _build_rows(
     manifest_rows: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     overall_rows: list[dict[str, Any]] = []
+    task_rows: list[dict[str, Any]] = []
     per_step_rows: list[dict[str, Any]] = []
     skill_type_rows: list[dict[str, Any]] = []
 
@@ -223,7 +229,7 @@ def _build_rows(
         if summary_path is None or not summary_path.exists():
             continue
         payload = json.loads(summary_path.read_text())
-        per_task = _enrich_per_task_payloads(run_row, payload.get("per_task", {}))
+        per_task = payload.get("per_task", {})
         tracking_overall = _weighted_tracking_overall(per_task)
         overall_row = {
             "condition": run_row["condition"],
@@ -248,6 +254,28 @@ def _build_rows(
             overall_row[f"{task}_success_rate"] = float(
                 task_payload.get("success_rate", 0.0) or 0.0
             )
+            task_tracking = (task_payload.get("tracking_error") or {}).get(
+                "overall", {}
+            )
+            task_rows.append(
+                {
+                    "condition": run_row["condition"],
+                    "condition_id": run_row["condition_id"],
+                    "family": run_row["family"],
+                    "noise_id": run_row["noise_id"],
+                    "noise_label": run_row["noise_label"],
+                    "pos_std_mm": float(run_row["pos_std_mm"]),
+                    "ori_std_deg": float(run_row["ori_std_deg"]),
+                    "task": task,
+                    "n_success": int(task_payload.get("n_success", 0)),
+                    "n_rollouts": int(task_payload.get("n_rollouts", 0)),
+                    "success_rate": float(task_payload.get("success_rate", 0.0) or 0.0),
+                    "track_pos_cm": float(task_tracking.get("mean_pos_m", 0.0)) * 100.0,
+                    "track_ori_deg": float(task_tracking.get("mean_ori_deg", 0.0)),
+                    "track_total": float(task_tracking.get("mean_total", 0.0)),
+                    "tracking_count": int(task_tracking.get("count", 0)),
+                }
+            )
         overall_rows.append(overall_row)
 
         skill_type_accumulator: dict[str, dict[str, float]] = defaultdict(
@@ -267,12 +295,17 @@ def _build_rows(
             state_counts = task_payload.get("skill_state_counts", {})
             completion_counts = task_payload.get("skill_completion_counts", {})
             success_rates = task_payload.get("skill_success_rates", {})
-            for skill_state, stats in by_skill.items():
+            skill_states = list(state_counts)
+            skill_states.extend(
+                skill_state for skill_state in by_skill if skill_state not in state_counts
+            )
+            for skill_state in skill_states:
+                stats = by_skill.get(skill_state, {})
                 count = int(stats.get("count", 0))
-                if count <= 0:
-                    continue
                 reached = int(state_counts.get(skill_state, 0))
                 completed = int(completion_counts.get(skill_state, 0))
+                if count <= 0 and reached <= 0:
+                    continue
                 per_step_rows.append(
                     {
                         "condition": run_row["condition"],
@@ -288,24 +321,33 @@ def _build_rows(
                         "reached_count": reached,
                         "completed_count": completed,
                         "skill_success_rate": float(success_rates.get(skill_state, 0.0) or 0.0),
-                        "track_pos_cm": float(stats.get("mean_pos_m", 0.0)) * 100.0,
-                        "track_ori_deg": float(stats.get("mean_ori_deg", 0.0)),
-                        "track_total": float(stats.get("mean_total", 0.0)),
+                        "track_pos_cm": (
+                            float(stats.get("mean_pos_m", 0.0)) * 100.0
+                            if count > 0
+                            else None
+                        ),
+                        "track_ori_deg": (
+                            float(stats.get("mean_ori_deg", 0.0)) if count > 0 else None
+                        ),
+                        "track_total": (
+                            float(stats.get("mean_total", 0.0)) if count > 0 else None
+                        ),
                         "tracking_count": count,
                     }
                 )
                 skill_type = _skill_type_from_state(skill_state)
                 bucket = skill_type_accumulator[skill_type]
                 bucket["count"] += count
-                bucket["pos_sum_cm"] += float(stats.get("mean_pos_m", 0.0)) * 100.0 * count
-                bucket["ori_sum_deg"] += float(stats.get("mean_ori_deg", 0.0)) * count
-                bucket["total_sum"] += float(stats.get("mean_total", 0.0)) * count
+                if count > 0:
+                    bucket["pos_sum_cm"] += float(stats.get("mean_pos_m", 0.0)) * 100.0 * count
+                    bucket["ori_sum_deg"] += float(stats.get("mean_ori_deg", 0.0)) * count
+                    bucket["total_sum"] += float(stats.get("mean_total", 0.0)) * count
                 bucket["reached"] += reached
                 bucket["completed"] += completed
 
         for skill_type in SKILL_TYPE_ORDER:
             bucket = skill_type_accumulator.get(skill_type)
-            if not bucket or bucket["count"] <= 0:
+            if not bucket or (bucket["count"] <= 0 and bucket["reached"] <= 0):
                 continue
             skill_type_rows.append(
                 {
@@ -325,15 +367,35 @@ def _build_rows(
                         if bucket["reached"] > 0
                         else 0.0
                     ),
-                    "track_pos_cm": float(bucket["pos_sum_cm"]) / float(bucket["count"]),
-                    "track_ori_deg": float(bucket["ori_sum_deg"]) / float(bucket["count"]),
-                    "track_total": float(bucket["total_sum"]) / float(bucket["count"]),
+                    "track_pos_cm": (
+                        float(bucket["pos_sum_cm"]) / float(bucket["count"])
+                        if bucket["count"] > 0
+                        else None
+                    ),
+                    "track_ori_deg": (
+                        float(bucket["ori_sum_deg"]) / float(bucket["count"])
+                        if bucket["count"] > 0
+                        else None
+                    ),
+                    "track_total": (
+                        float(bucket["total_sum"]) / float(bucket["count"])
+                        if bucket["count"] > 0
+                        else None
+                    ),
                 }
             )
 
     overall_rows.sort(
         key=lambda row: (
             FAMILY_ORDER.index(row["family"]),
+            CONDITION_ORDER.index(row["condition"]),
+            row["pos_std_mm"],
+            row["ori_std_deg"],
+        )
+    )
+    task_rows.sort(
+        key=lambda row: (
+            TASK_ORDER.index(row["task"]),
             CONDITION_ORDER.index(row["condition"]),
             row["pos_std_mm"],
             row["ori_std_deg"],
@@ -356,7 +418,7 @@ def _build_rows(
             SKILL_TYPE_ORDER.index(row["skill_type"]),
         )
     )
-    return overall_rows, per_step_rows, skill_type_rows
+    return overall_rows, task_rows, per_step_rows, skill_type_rows
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -412,9 +474,9 @@ def _format_skill_type_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "noise": row["noise_label"],
                 "skill_type": row["skill_type"],
                 "success": f"{100.0 * row['skill_success_rate']:.2f}% ({row['completed_count']}/{row['reached_count']})",
-                "track_pos_cm": f"{row['track_pos_cm']:.2f}",
-                "track_ori_deg": f"{row['track_ori_deg']:.2f}",
-                "track_total": f"{row['track_total']:.2f}",
+                "track_pos_cm": _format_optional(row["track_pos_cm"]),
+                "track_ori_deg": _format_optional(row["track_ori_deg"]),
+                "track_total": _format_optional(row["track_total"]),
             }
         )
     return formatted
@@ -430,26 +492,100 @@ def _format_per_step_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "task": row["task"],
                 "skill_state": row["skill_state"],
                 "success": f"{100.0 * row['skill_success_rate']:.2f}% ({row['completed_count']}/{row['reached_count']})",
-                "track_pos_cm": f"{row['track_pos_cm']:.2f}",
-                "track_ori_deg": f"{row['track_ori_deg']:.2f}",
-                "track_total": f"{row['track_total']:.2f}",
+                "track_pos_cm": _format_optional(row["track_pos_cm"]),
+                "track_ori_deg": _format_optional(row["track_ori_deg"]),
+                "track_total": _format_optional(row["track_total"]),
             }
         )
     return formatted
 
 
-def _plot_success_vs_noise(overall_rows: list[dict[str, Any]], figure_path: Path) -> None:
-    figure_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5), sharey=True)
-    family_rows = {"point": [], "grasp-part": []}
-    for row in overall_rows:
-        family_rows[row["family"]].append(row)
+def _format_optional(value: Any) -> str:
+    return "--" if value is None else f"{float(value):.2f}"
 
-    for axis, family in zip(axes, FAMILY_ORDER):
+
+def _result_cell(row: dict[str, Any] | None) -> str:
+    if row is None:
+        return "--"
+    success_rate = float(row.get("success_rate", row.get("skill_success_rate", 0.0)))
+    n_success = int(row.get("n_success", row.get("completed_count", 0)))
+    n_trials = int(row.get("n_rollouts", row.get("reached_count", 0)))
+    tracking_count = int(row.get("tracking_count", row.get("n_skill_states", 0)))
+    return (
+        f"SR {100.0 * success_rate:.1f}% ({n_success}/{n_trials})"
+        f"<br>P/O/T {_format_optional(row['track_pos_cm'])}/"
+        f"{_format_optional(row['track_ori_deg'])}/"
+        f"{_format_optional(row['track_total'])}"
+        f" (n={tracking_count})"
+    )
+
+
+def _matrix_table(
+    rows: list[dict[str, Any]],
+    *,
+    group_fields: list[tuple[str, str]],
+) -> str:
+    grouped: dict[tuple[str, ...], dict[str, dict[str, Any]]] = defaultdict(dict)
+    for row in rows:
+        key = tuple(str(row[field]) for field, _ in group_fields)
+        grouped[key][str(row["noise_id"])] = row
+
+    output_rows = []
+    for key in sorted(
+        grouped,
+        key=lambda values: tuple(
+            CONDITION_ORDER.index(values[0]) if idx == 0 else values[idx]
+            for idx in range(len(values))
+        ),
+    ):
+        row = {field: value for (field, _), value in zip(group_fields, key)}
+        for noise_id in ("n0", "n1", "n2", "n3", "n4"):
+            row[noise_id] = _result_cell(grouped[key].get(noise_id))
+        output_rows.append(row)
+
+    return _markdown_table(
+        output_rows,
+        [*group_fields, *((noise_id, noise_id) for noise_id in ("n0", "n1", "n2", "n3", "n4"))],
+    )
+
+
+def _task_overall_table(task_rows: list[dict[str, Any]]) -> str:
+    by_condition_task: dict[tuple[str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
+    for row in task_rows:
+        by_condition_task[(row["condition"], row["task"])][row["noise_id"]] = row
+
+    formatted_rows = []
+    for condition in CONDITION_ORDER:
+        formatted = {"condition": condition}
+        for task in TASK_ORDER:
+            cells = []
+            for noise_id in ("n0", "n1", "n2", "n3", "n4"):
+                result = by_condition_task[(condition, task)].get(noise_id)
+                cells.append(f"{noise_id}: {_result_cell(result)}")
+            formatted[task] = "<br><br>".join(cells)
+        formatted_rows.append(formatted)
+    return _markdown_table(
+        formatted_rows,
+        [
+            ("condition", "Condition"),
+            ("one_leg", "one_leg"),
+            ("round_table", "round_table"),
+            ("lamp", "lamp"),
+        ],
+    )
+
+
+def _plot_success_vs_noise(task_rows: list[dict[str, Any]], figure_path: Path) -> None:
+    figure_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, axes = plt.subplots(1, 3, figsize=(17, 4.8), sharey=True)
+    for axis, task in zip(axes, TASK_ORDER):
         grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in family_rows[family]:
+        for row in task_rows:
+            if row["task"] != task:
+                continue
             grouped[row["condition"]].append(row)
-        for condition, rows in grouped.items():
+        for condition in CONDITION_ORDER:
+            rows = grouped.get(condition, [])
             rows = sorted(rows, key=lambda item: item["pos_std_mm"])
             axis.plot(
                 [row["pos_std_mm"] for row in rows],
@@ -459,45 +595,53 @@ def _plot_success_vs_noise(overall_rows: list[dict[str, Any]], figure_path: Path
                 label=condition,
             )
         axis.set_xlabel("Position Noise Std (mm)")
-        axis.set_title(
-            "Point Guidance" if family == "point" else "Grasp-Part Guidance"
-        )
+        axis.set_title(task)
         axis.grid(True, alpha=0.3)
     axes[0].set_ylabel("Success Rate (%)")
-    axes[1].legend(loc="best", fontsize=9)
+    axes[-1].legend(loc="best", fontsize=8)
     fig.suptitle("Clean-Train -> Noisy-Eval Success Curves")
     fig.tight_layout()
     fig.savefig(figure_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 
-def _plot_tracking_vs_noise(overall_rows: list[dict[str, Any]], figure_path: Path) -> None:
+def _plot_tracking_vs_noise(task_rows: list[dict[str, Any]], figure_path: Path) -> None:
     figure_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
-    metric_specs = [
-        ("track_pos_cm", "Tracking Pos Error (cm)"),
-        ("track_ori_deg", "Tracking Ori Error (deg)"),
-        ("track_total", "Tracking Total"),
+    fig, axes = plt.subplots(3, 3, figsize=(17, 13), sharex=True)
+    metrics = [
+        ("track_pos_cm", "Position Error (cm)"),
+        ("track_ori_deg", "Orientation Error (deg)"),
+        ("track_total", "Total Error"),
     ]
-    for axis, (metric_key, metric_title) in zip(axes, metric_specs):
-        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in overall_rows:
-            grouped[row["condition"]].append(row)
-        for condition, rows in grouped.items():
-            rows = sorted(rows, key=lambda item: item["pos_std_mm"])
-            axis.plot(
-                [row["pos_std_mm"] for row in rows],
-                [row[metric_key] for row in rows],
-                marker="o",
-                linewidth=2,
-                label=condition,
-            )
-        axis.set_xlabel("Position Noise Std (mm)")
-        axis.set_title(metric_title)
-        axis.grid(True, alpha=0.3)
-    axes[0].legend(loc="best", fontsize=8)
-    fig.suptitle("Clean-Train -> Noisy-Eval Tracking Curves")
-    fig.tight_layout()
+    for metric_idx, (metric_key, metric_label) in enumerate(metrics):
+        for task_idx, task in enumerate(TASK_ORDER):
+            axis = axes[metric_idx][task_idx]
+            grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for row in task_rows:
+                if row["task"] == task:
+                    grouped[row["condition"]].append(row)
+            for condition in CONDITION_ORDER:
+                rows = sorted(
+                    grouped.get(condition, []),
+                    key=lambda item: item["pos_std_mm"],
+                )
+                axis.plot(
+                    [row["pos_std_mm"] for row in rows],
+                    [row[metric_key] for row in rows],
+                    marker="o",
+                    linewidth=2,
+                    label=condition,
+                )
+            if metric_idx == 0:
+                axis.set_title(task)
+            if metric_idx == len(metrics) - 1:
+                axis.set_xlabel("Position Noise Std (mm)")
+            if task_idx == 0:
+                axis.set_ylabel(metric_label)
+            axis.grid(True, alpha=0.3)
+    axes[0][-1].legend(loc="best", fontsize=8)
+    fig.suptitle("Clean-Train -> Noisy-Eval Tracking Error Curves")
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(figure_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -532,6 +676,107 @@ def _best_tolerance_rows(overall_rows: list[dict[str, Any]], threshold: float) -
     return rows
 
 
+def _endpoint_comparison_rows(overall_rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    grouped: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    for row in overall_rows:
+        grouped[row["condition"]][row["noise_id"]] = row
+
+    comparison_rows = []
+    for condition in CONDITION_ORDER:
+        n0 = grouped.get(condition, {}).get("n0")
+        n4 = grouped.get(condition, {}).get("n4")
+        if n0 is None or n4 is None:
+            continue
+        success_delta_pp = 100.0 * (n4["success_rate"] - n0["success_rate"])
+        tracking_delta = n4["track_total"] - n0["track_total"]
+        comparison_rows.append(
+            {
+                "condition": condition,
+                "n0_success": f"{100.0 * n0['success_rate']:.1f}%",
+                "n4_success": f"{100.0 * n4['success_rate']:.1f}%",
+                "success_delta": f"{success_delta_pp:+.1f} pp",
+                "n0_tracking": f"{n0['track_total']:.2f}",
+                "n4_tracking": f"{n4['track_total']:.2f}",
+                "tracking_delta": f"{tracking_delta:+.2f}",
+            }
+        )
+    return comparison_rows
+
+
+def _interpretation_lines(
+    overall_rows: list[dict[str, Any]],
+    task_rows: list[dict[str, Any]],
+) -> list[str]:
+    overall = {
+        (str(row["condition"]), str(row["noise_id"])): row
+        for row in overall_rows
+    }
+    by_task = {
+        (str(row["condition"]), str(row["task"]), str(row["noise_id"])): row
+        for row in task_rows
+    }
+
+    one_leg_n4 = [
+        float(by_task[(condition, "one_leg", "n4")]["success_rate"])
+        for condition in CONDITION_ORDER
+    ]
+    point_endpoint_parts = []
+    for condition in CONDITION_ORDER[:3]:
+        n0 = overall[(condition, "n0")]
+        n4 = overall[(condition, "n4")]
+        point_endpoint_parts.append(
+            f"`{condition}` SR {100.0 * (n4['success_rate'] - n0['success_rate']):+.1f} pp, "
+            f"T {n4['track_total'] - n0['track_total']:+.2f}"
+        )
+
+    grasp_endpoint_parts = []
+    for condition in CONDITION_ORDER[3:]:
+        n0 = overall[(condition, "n0")]
+        n4 = overall[(condition, "n4")]
+        grasp_endpoint_parts.append(
+            f"`{condition}` SR {100.0 * (n4['success_rate'] - n0['success_rate']):+.1f} pp, "
+            f"O {n4['track_ori_deg'] - n0['track_ori_deg']:+.2f} deg, "
+            f"T {n4['track_total'] - n0['track_total']:+.2f}"
+        )
+
+    round_table_clean_best = max(
+        float(by_task[(condition, "round_table", "n0")]["success_rate"])
+        for condition in CONDITION_ORDER
+    )
+    lamp_clean_best = max(
+        float(by_task[(condition, "lamp", "n0")]["success_rate"])
+        for condition in CONDITION_ORDER
+    )
+    return [
+        "### 3.1 主要观察",
+        "",
+        (
+            f"- `one_leg` 在最大噪声下五个 condition 的成功率仍为 "
+            f"{100.0 * min(one_leg_n4):.1f}%--{100.0 * max(one_leg_n4):.1f}%，"
+            "说明简单任务对本轮最大测试噪声仍有较高容忍度。"
+        ),
+        "- point condition 的 n0 -> n4 跨任务端点变化："
+        + "；".join(point_endpoint_parts)
+        + "。成功率总体下降，但 tracking 退化幅度和单调性依 condition 而异。",
+        "- grasp-part condition 的 n0 -> n4 端点变化："
+        + "；".join(grasp_endpoint_parts)
+        + "。两者 orientation/total tracking 都明显变差；colored 条件的成功率上升不能解释为噪声带来收益。",
+        (
+            f"- hard task 的 clean 上限本身有限：`round_table` 最好为 "
+            f"{100.0 * round_table_clean_best:.1f}%，`lamp` 最好为 "
+            f"{100.0 * lamp_clean_best:.1f}%。因此当前数据只能给出 condition/task-specific 容忍度，"
+            "不能给出一个适用于所有任务的 VLM 打点精度阈值。"
+        ),
+        "",
+        "### 3.2 结论边界",
+        "",
+        "- 每个 task 只有 12 个 rollout，单个成败会使 task 曲线变化 8.33 个百分点；跨三任务汇总仍以 2.78 个百分点为离散步长。",
+        "- 当前只使用一个 noise seed 和每个 checkpoint 一次评测，成功率曲线存在明显非单调波动；平台或拐点需要更多 rollout 和多个 seed 才能可靠确认。",
+        "- 目前能够支持的结论是：clean-trained policy 的 guidance-noise 鲁棒性强烈依赖任务和 condition；grasp-part 的 6D 噪声会稳定增大 tracking error，而成功率退化在 hard task 上更明显。",
+        "",
+    ]
+
+
 def generate_report(
     *,
     manifest_path: Path,
@@ -540,22 +785,25 @@ def generate_report(
     data_dir: Path,
 ) -> None:
     manifest_rows = _dedupe_latest(_read_jsonl(manifest_path))
-    overall_rows, per_step_rows, skill_type_rows = _build_rows(manifest_rows)
+    overall_rows, task_rows, per_step_rows, skill_type_rows = _build_rows(manifest_rows)
 
     overall_csv = data_dir / "annotation_noise_clean_train_overall.csv"
+    task_csv = data_dir / "annotation_noise_clean_train_by_task.csv"
     skill_type_csv = data_dir / "annotation_noise_clean_train_skill_type.csv"
     per_step_csv = data_dir / "annotation_noise_clean_train_per_step.csv"
     _write_csv(overall_csv, overall_rows)
+    _write_csv(task_csv, task_rows)
     _write_csv(skill_type_csv, skill_type_rows)
     _write_csv(per_step_csv, per_step_rows)
 
     success_fig = figures_dir / "annotation_noise_clean_train_success_vs_noise.png"
     tracking_fig = figures_dir / "annotation_noise_clean_train_tracking_vs_noise.png"
-    _plot_success_vs_noise(overall_rows, success_fig)
-    _plot_tracking_vs_noise(overall_rows, tracking_fig)
+    _plot_success_vs_noise(task_rows, success_fig)
+    _plot_tracking_vs_noise(task_rows, tracking_fig)
 
     best_80_rows = _best_tolerance_rows(overall_rows, threshold=0.80)
     best_60_rows = _best_tolerance_rows(overall_rows, threshold=0.60)
+    endpoint_rows = _endpoint_comparison_rows(overall_rows)
 
     report_lines = [
         "# 打点噪声鲁棒性实验：Clean Train -> Noisy Eval",
@@ -565,7 +813,11 @@ def generate_report(
         "- 只包含有空间 guidance 的 5 个 condition：`rgbd+GP`、`rgbd+colored GP`、`rgbd+GP+skill`、`rgbd+grasp-part`、`rgbd+grasp-part-colored`。",
         "- 训练 checkpoint 统一使用 clean-train 的现有模型；本轮不包含 noisy-train 曲线。",
         "- tracking error 统一定义为：每个 skill state 最后一帧 `final EE pose` 与当前画在图上的 `guidance pose` 的差。",
-        "- `overall tracking error` 按所有 task 的全部 skill-state 计数加权平均。",
+        "- 同一 episode 多次进入同名 skill state 时保留 `total error` 最小的一次；跨 episode、task 的汇总按有效 skill-state 记录数加权平均。",
+        "- `P/O/T` 分别为 position error (cm)、orientation error (deg)、total error；`total = pos_m / 0.01 + ori_deg / 5`，越低越好。",
+        "- point guidance 的 x 轴为位置噪声；grasp-part 的位置噪声相同，同时 n1-n4 分别耦合 2.5/5/10/20 deg orientation noise。",
+        "- 噪声档位：point 为 n0=0、n1=3、n2=6、n3=12、n4=24 mm；grasp-part 在相同位置档位上分别叠加 0/2.5/5/10/20 deg。",
+        f"- 完成组数：`{len(overall_rows)}/25`；task-level 数据行：`{len(task_rows)}/75`。",
         "",
         "## 2. 曲线",
         "",
@@ -573,26 +825,33 @@ def generate_report(
         "",
         f"![Tracking vs Noise](./figures/{tracking_fig.name})",
         "",
-        "## 3. Overall 表",
+        "## 3. 端点结果摘要",
+        "",
+        "下表比较跨三个 task 加权汇总后的 n0 与 n4；成功率变化单位为百分点，tracking total 越低越好。",
         "",
         _markdown_table(
-            _format_overall_rows(overall_rows),
+            endpoint_rows,
             [
                 ("condition", "Condition"),
-                ("noise", "Noise"),
-                ("pos_std_mm", "Pos Std (mm)"),
-                ("ori_std_deg", "Ori Std (deg)"),
-                ("success", "Success"),
-                ("track_pos_cm", "Track Pos (cm)"),
-                ("track_ori_deg", "Track Ori (deg)"),
-                ("track_total", "Track Total"),
-                ("count", "Count"),
+                ("n0_success", "n0 Success"),
+                ("n4_success", "n4 Success"),
+                ("success_delta", "Success Delta"),
+                ("n0_tracking", "n0 Track Total"),
+                ("n4_tracking", "n4 Track Total"),
+                ("tracking_delta", "Tracking Delta"),
             ],
         ),
         "",
-        "## 4. 成功率阈值对应的最大噪声",
+        *_interpretation_lines(overall_rows, task_rows),
+        "## 4. Table 1: Task Overall",
         "",
-        "### 4.1 `success_rate >= 80%`",
+        "每个 task 大列内按 n0 -> n4 给出 `SR` 和 `P/O/T`；括号内 `n` 是 tracking 有效 skill-state 数。",
+        "",
+        _task_overall_table(task_rows),
+        "",
+        "## 5. 成功率阈值对应的最大噪声",
+        "",
+        "### 5.1 `success_rate >= 80%`",
         "",
         _markdown_table(
             best_80_rows,
@@ -604,7 +863,7 @@ def generate_report(
             ],
         ),
         "",
-        "### 4.2 `success_rate >= 60%`",
+        "### 5.2 `success_rate >= 60%`",
         "",
         _markdown_table(
             best_60_rows,
@@ -616,40 +875,30 @@ def generate_report(
             ],
         ),
         "",
-        "## 5. Skill-Type Average 表",
+        "## 6. Skill Average 表",
         "",
-        _markdown_table(
-            _format_skill_type_rows(skill_type_rows),
-            [
-                ("condition", "Condition"),
-                ("noise", "Noise"),
-                ("skill_type", "Skill Type"),
-                ("success", "Success"),
-                ("track_pos_cm", "Track Pos (cm)"),
-                ("track_ori_deg", "Track Ori (deg)"),
-                ("track_total", "Track Total"),
-            ],
+        "跨三个 task 汇总同类 skill（push/pick/place/insert/screw）；每格仍为 `SR` 与 `P/O/T`。",
+        "",
+        _matrix_table(
+            skill_type_rows,
+            group_fields=[("condition", "Condition"), ("skill_type", "Skill Type")],
         ),
         "",
-        "## 6. Per-Step Tracking 表",
+        "## 7. Per-Step 表",
         "",
-        _markdown_table(
-            _format_per_step_rows(per_step_rows),
-            [
+        _matrix_table(
+            per_step_rows,
+            group_fields=[
                 ("condition", "Condition"),
-                ("noise", "Noise"),
                 ("task", "Task"),
                 ("skill_state", "Skill State"),
-                ("success", "Success"),
-                ("track_pos_cm", "Track Pos (cm)"),
-                ("track_ori_deg", "Track Ori (deg)"),
-                ("track_total", "Track Total"),
             ],
         ),
         "",
-        "## 7. 原始导出",
+        "## 8. 原始导出",
         "",
         f"- overall csv: `{overall_csv}`",
+        f"- by-task csv: `{task_csv}`",
         f"- skill-type csv: `{skill_type_csv}`",
         f"- per-step csv: `{per_step_csv}`",
         f"- manifest jsonl: `{manifest_path}`",
