@@ -32,16 +32,18 @@ class NoiseLevel:
     noise_label: str
     pos_std_m: float
     ori_std_deg: float
+    perturbation: str = "gaussian"
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CHECKPOINT_ROOT = REPO_ROOT / "checkpoints" / "bc" / "one_leg+round_table+lamp" / "low"
 AUTO_EVAL_DEFAULT = Path("/home/huyue/projects/gpu-snatcher/auto_eval.sh")
-MANIFEST_DEFAULT = REPO_ROOT / "reports" / "data" / "annotation_noise_clean_train_rgbd_manifest.jsonl"
+MANIFEST_DEFAULT = REPO_ROOT / "logs" / "annotation_noise_clean_train_rgbd_manifest.jsonl"
 REPORT_DEFAULT = REPO_ROOT / "reports" / "annotation_noise_clean_train_rgbd_eval.md"
 FIGURES_DEFAULT = REPO_ROOT / "reports" / "figures"
 DATA_DEFAULT = REPO_ROOT / "reports" / "data"
 GROUP_LOGS_DEFAULT = REPO_ROOT / "logs" / "annotation_noise_clean_train_rgbd_groups"
+GUIDANCE_BANK_DEFAULT = REPO_ROOT / "logs" / "annotation_noise_guidance_bank"
 
 CONDITIONS = [
     ConditionConfig(
@@ -116,9 +118,18 @@ GRASP_NOISE_LEVELS = [
     NoiseLevel("n4", "24mm/20deg", 0.024, 20.0),
 ]
 
+SHUFFLED_GUIDANCE = NoiseLevel(
+    "shuffle", "shuffled-guidance", 0.0, 0.0, perturbation="shuffle"
+)
 
-def _noise_levels_for_family(family: str) -> list[NoiseLevel]:
-    return POINT_NOISE_LEVELS if family == "point" else GRASP_NOISE_LEVELS
+
+def _noise_levels_for_family(
+    family: str, *, include_shuffled: bool = False
+) -> list[NoiseLevel]:
+    levels = list(POINT_NOISE_LEVELS if family == "point" else GRASP_NOISE_LEVELS)
+    if include_shuffled:
+        levels.append(SHUFFLED_GUIDANCE)
+    return levels
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -213,6 +224,8 @@ def _effective_rollout_suffix_model_name(
     noise: NoiseLevel,
 ) -> str:
     suffix = _rollout_suffix_model_name(condition, noise)
+    if noise.perturbation == "shuffle":
+        return f"{suffix}_shuffle_seed0"
     if noise.pos_std_m <= 0.0 and noise.ori_std_deg <= 0.0:
         return suffix
     pos_tag = str(noise.pos_std_m).replace(".", "p")
@@ -314,6 +327,8 @@ def _build_command(
     noise: NoiseLevel,
     apply_to: str,
     save_rollouts_count: int,
+    guidance_bank_dir: Path | None = None,
+    guidance_bank_out_dir: Path | None = None,
 ) -> list[str]:
     command = [
         str(auto_eval_path),
@@ -335,7 +350,23 @@ def _build_command(
     if save_rollouts_count > 0:
         command.extend(["--max-saved-rollouts", str(save_rollouts_count)])
     command.extend(flags)
-    if noise.pos_std_m > 0.0 or noise.ori_std_deg > 0.0:
+    if guidance_bank_out_dir is not None:
+        command.extend(["--guidance-bank-out-dir", str(guidance_bank_out_dir)])
+    if noise.perturbation == "shuffle":
+        if guidance_bank_dir is None:
+            raise ValueError("shuffled guidance requires a guidance bank directory")
+        command.extend(
+            [
+                "--annotation-shuffle-guidance",
+                "--annotation-shuffle-bank",
+                str(guidance_bank_dir),
+                "--annotation-shuffle-seed",
+                "0",
+                "--noise-apply-to",
+                apply_to,
+            ]
+        )
+    elif noise.pos_std_m > 0.0 or noise.ori_std_deg > 0.0:
         command.extend(
             [
                 "--noise-pos-std-m",
@@ -351,6 +382,34 @@ def _build_command(
             ]
         )
     return command
+
+
+def _load_summary(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError(f"summary is not a JSON object: {path}")
+    return payload
+
+
+def _validate_guidance_bank(bank_dir: Path, tasks: list[str]) -> None:
+    issues = []
+    for task in tasks:
+        path = bank_dir / f"{task}.json"
+        if not path.exists():
+            issues.append(f"missing {path}")
+            continue
+        try:
+            payload = _load_summary(path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            issues.append(f"invalid {path}: {exc}")
+            continue
+        records = payload.get("records") or []
+        if not records:
+            issues.append(f"empty {path}")
+        elif any(str(record.get("task")) != task for record in records):
+            issues.append(f"task mismatch in {path}")
+    if issues:
+        raise ValueError("invalid shuffled-guidance bank: " + "; ".join(issues))
 
 
 def _validate_summary(
@@ -412,13 +471,25 @@ def _validate_summary(
             errors.append(f"training_config.data.{key}={train_data_cfg.get(key)!r} expected=0")
 
     noise_cfg = payload.get("annotation_noise_config") or {}
-    expected_enabled = noise.pos_std_m > 0.0 or noise.ori_std_deg > 0.0
+    expected_enabled = (
+        noise.perturbation == "shuffle"
+        or noise.pos_std_m > 0.0
+        or noise.ori_std_deg > 0.0
+    )
     checks: dict[str, Any] = {
         "pos_std_m": noise.pos_std_m,
         "ori_std_deg": noise.ori_std_deg,
         "enabled": expected_enabled,
     }
-    if expected_enabled:
+    if noise.perturbation == "shuffle":
+        checks.update(
+            {
+                "apply_to": condition.apply_to,
+                "mode": "shuffle",
+                "shuffle_seed": 0,
+            }
+        )
+    elif expected_enabled:
         checks.update(
             {
                 "apply_to": condition.apply_to,
@@ -475,6 +546,19 @@ def _validate_summary(
                 f"expected={randomness!r}"
             )
         tracking = (task_payload.get("tracking_error") or {}).get("overall") or {}
+        metric_type = (task_payload.get("tracking_error") or {}).get(
+            "metric_type", "pose"
+        )
+        expected_metric_type = "position" if condition.family == "point" else "pose"
+        if metric_type != expected_metric_type:
+            errors.append(
+                f"{task}.tracking_error.metric_type={metric_type!r} "
+                f"expected={expected_metric_type!r}"
+            )
+        if condition.family == "point" and any(
+            key in tracking for key in ("mean_ori_deg", "mean_total")
+        ):
+            errors.append(f"{task}.point tracking contains orientation/total metrics")
         if int(tracking.get("count", 0)) <= 0:
             errors.append(f"{task}.tracking_error is missing or empty")
 
@@ -485,7 +569,20 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--task-group", default="one_leg+round_table+lamp")
     parser.add_argument("--n-envs", type=int, default=3)
-    parser.add_argument("--n-rollouts", type=int, default=12)
+    parser.add_argument(
+        "--n-rollouts",
+        type=int,
+        default=36,
+        help="Fresh rollouts per task for every selected condition/noise group.",
+    )
+    parser.add_argument(
+        "--guidance-bank-dir", type=Path, default=GUIDANCE_BANK_DEFAULT
+    )
+    parser.add_argument(
+        "--shuffled-only",
+        action="store_true",
+        help="Run only the five shuffled-guidance groups.",
+    )
     parser.add_argument("--randomness", default="low")
     parser.add_argument("--conditions", default=None)
     parser.add_argument("--noise-ids", default=None)
@@ -500,6 +597,18 @@ def main() -> None:
     parser.add_argument("--continue-on-error", action="store_true")
     parser.add_argument("--save-rollouts-count", type=int, default=8)
     parser.add_argument("--keep-rollout-cache", action="store_true")
+    parser.add_argument(
+        "--initial-min-free-disk-gib",
+        type=float,
+        default=500.0,
+        help="Free-space threshold when the manifest has no completed groups.",
+    )
+    parser.add_argument(
+        "--resume-min-free-disk-gib",
+        type=float,
+        default=80.0,
+        help="Free-space threshold when resuming a partially completed manifest.",
+    )
     args = parser.parse_args()
 
     env = os.environ.copy()
@@ -508,6 +617,27 @@ def main() -> None:
     selected_noise_ids = _resolve_noise_ids(args.noise_ids)
     manifest_rows = _read_jsonl(args.manifest)
     manifest_index = _manifest_lookup(manifest_rows)
+    if args.shuffled_only and not args.dry_run:
+        _validate_guidance_bank(args.guidance_bank_dir, args.task_group.split("+"))
+    if not args.dry_run:
+        free_disk_gib = shutil.disk_usage(REPO_ROOT).free / (1024**3)
+        has_completed_groups = any(
+            row.get("status") == "ok"
+            and int(row.get("n_rollouts", -1)) == args.n_rollouts
+            and int(row.get("tracking_rollouts_per_task", -1)) == args.n_rollouts
+            for row in manifest_rows
+        )
+        min_free_disk_gib = (
+            args.resume_min_free_disk_gib
+            if has_completed_groups
+            else args.initial_min_free_disk_gib
+        )
+        if free_disk_gib < min_free_disk_gib:
+            raise RuntimeError(
+                f"only {free_disk_gib:.1f} GiB free; "
+                f"this {'resume' if has_completed_groups else 'initial run'} "
+                f"requires {min_free_disk_gib:.1f} GiB"
+            )
 
     if not args.auto_eval_path.exists():
         raise FileNotFoundError(f"Missing auto_eval script: {args.auto_eval_path}")
@@ -515,7 +645,12 @@ def main() -> None:
     for condition in selected_conditions:
         if not condition.checkpoint.exists():
             raise FileNotFoundError(f"Missing checkpoint: {condition.checkpoint}")
-        for noise in _noise_levels_for_family(condition.family):
+        noise_levels = (
+            [SHUFFLED_GUIDANCE]
+            if args.shuffled_only
+            else _noise_levels_for_family(condition.family)
+        )
+        for noise in noise_levels:
             if selected_noise_ids is not None and noise.noise_id not in selected_noise_ids:
                 continue
             key = (condition.condition_id, noise.noise_id)
@@ -524,6 +659,9 @@ def main() -> None:
                 not args.rerun
                 and existing is not None
                 and existing.get("status") == "ok"
+                and int(existing.get("n_rollouts", -1)) == args.n_rollouts
+                and int(existing.get("tracking_rollouts_per_task", -1))
+                == args.n_rollouts
             ):
                 print(
                     f"[skip] condition={condition.condition_id} noise={noise.noise_id} "
@@ -544,6 +682,14 @@ def main() -> None:
                 noise=noise,
                 apply_to=condition.apply_to,
                 save_rollouts_count=args.save_rollouts_count,
+                guidance_bank_dir=(
+                    args.guidance_bank_dir if args.shuffled_only else None
+                ),
+                guidance_bank_out_dir=(
+                    args.guidance_bank_dir
+                    if condition.condition_id == "gp_skill" and noise.noise_id == "n0"
+                    else None
+                ),
             )
             checkpoint_name = condition.checkpoint.stem
             log_dir = _task_group_log_dir(args.task_group, checkpoint_name)
@@ -564,6 +710,8 @@ def main() -> None:
                 "randomness": args.randomness,
                 "n_envs": args.n_envs,
                 "n_rollouts": args.n_rollouts,
+                "tracking_rollouts_per_task": args.n_rollouts,
+                "perturbation": noise.perturbation,
                 "save_rollouts_count": args.save_rollouts_count,
                 "checkpoint": str(condition.checkpoint),
                 "checkpoint_name": checkpoint_name,
@@ -571,7 +719,6 @@ def main() -> None:
                 "group_log": str(group_log),
                 "status": "dry_run" if args.dry_run else "started",
             }
-
             print(
                 f"[run] {condition.condition} {noise.noise_label} "
                 f"checkpoint={checkpoint_name} log={group_log}",

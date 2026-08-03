@@ -179,6 +179,13 @@ def validate_args(args: argparse.Namespace):
     assert not args.enable_annotation_verify or args.annotate_skill, (
         "--enable-annotation-verify requires --annotate-skill"
     )
+    assert not args.annotation_shuffle_guidance or args.annotation_shuffle_bank, (
+        "--annotation-shuffle-guidance requires --annotation-shuffle-bank"
+    )
+    assert not args.annotation_shuffle_guidance or (
+        args.annotation_noise_pos_std_m == 0.0
+        and args.annotation_noise_ori_std_deg == 0.0
+    ), "shuffled guidance cannot be combined with numeric annotation noise"
     assert all(
         value >= 0 for value in rollout_after_success_values
     ), "--rollout-after-success must be non-negative"
@@ -377,19 +384,22 @@ def _print_tracking_error_stats(
         print(f"Tracking error ({task}): unavailable")
         return
 
-    print(f"Tracking error ({task}):")
+    metric_type = (tracking_error or {}).get("metric_type", "pose")
+    print(f"Tracking error ({task}, {metric_type}):")
     for state_label, stats in by_skill.items():
         count = int(stats.get("count", 0))
         if count <= 0:
             print(f"  {state_label}: — (n=0)")
             continue
-        print(
-            f"  {state_label}: "
-            f"pos={stats.get('mean_pos_m', 0.0):.4f}m, "
-            f"ori={stats.get('mean_ori_deg', 0.0):.2f}deg, "
-            f"total={stats.get('mean_total', 0.0):.2f}, "
-            f"n={count}"
-        )
+        fields = [f"pos={stats.get('mean_pos_m', 0.0):.4f}m"]
+        if metric_type == "pose":
+            fields.extend(
+                [
+                    f"ori={stats.get('mean_ori_deg', 0.0):.2f}deg",
+                    f"total={stats.get('mean_total', 0.0):.2f}",
+                ]
+            )
+        print(f"  {state_label}: {', '.join(fields)}, n={count}")
 
 
 def _build_progress_summary(
@@ -727,6 +737,24 @@ if __name__ == "__main__":
         choices=["point", "grasp", "all"],
         default="all",
     )
+    parser.add_argument(
+        "--annotation-shuffle-guidance",
+        action="store_true",
+        help="Replace annotation guidance with a same-task donor from a clean bank.",
+    )
+    parser.add_argument(
+        "--annotation-shuffle-bank",
+        type=str,
+        default=None,
+        help="Guidance bank JSON file, or directory containing one JSON per task.",
+    )
+    parser.add_argument("--annotation-shuffle-seed", type=int, default=0)
+    parser.add_argument(
+        "--guidance-bank-out-dir",
+        type=str,
+        default=None,
+        help="Write clean per-skill guidance donors to <dir>/<task>.json.",
+    )
 
     parser.add_argument("--save-rollouts-suffix", type=str, default="")
     parser.add_argument(
@@ -787,8 +815,10 @@ if __name__ == "__main__":
         pos_std_m=args.annotation_noise_pos_std_m,
         ori_std_deg=args.annotation_noise_ori_std_deg,
         seed=args.annotation_noise_seed,
-        mode=args.annotation_noise_mode,
+        mode=("shuffle" if args.annotation_shuffle_guidance else args.annotation_noise_mode),
         apply_to=args.annotation_noise_apply_to,
+        shuffle_seed=args.annotation_shuffle_seed,
+        shuffle_bank_path=args.annotation_shuffle_bank,
     )
     print(f"Annotation noise config: {annotation_noise_config.to_dict()}")
 
@@ -1373,6 +1403,11 @@ if __name__ == "__main__":
                         max_saved_rollouts=(
                             args.max_saved_rollouts
                             if args.max_saved_rollouts > 0
+                            else None
+                        ),
+                        guidance_bank_out=(
+                            Path(args.guidance_bank_out_dir) / f"{task}.json"
+                            if args.guidance_bank_out_dir
                             else None
                         ),
                     )

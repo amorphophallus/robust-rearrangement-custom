@@ -172,6 +172,28 @@ def test_tracking_error_keeps_min_total_for_repeated_skill_state():
     assert np.isclose(errors["top-leg-pick"]["pos_m"], 0.01)
 
 
+def test_position_tracking_ignores_orientation_and_keeps_min_position():
+    rotated_pose = _target_pose([0.01, 0.0, 0.0])
+    rotated_pose[:3, :3] = np.diag([1.0, -1.0, -1.0])
+    errors = compute_episode_tracking_errors(
+        robot_states=[
+            _robot_state([0.0, 0.0, 0.0]),
+            _robot_state([0.0, 0.0, 0.0]),
+            _robot_state([1.0, 0.0, 0.0]),
+        ],
+        skill_states=["pick", "place", "pick"],
+        target_poses=[
+            rotated_pose,
+            _target_pose([0.0, 0.0, 0.0]),
+            _target_pose([1.02, 0.0, 0.0]),
+        ],
+        metric_type="position",
+    )
+
+    assert np.isclose(errors["pick"]["pos_m"], 0.01)
+    assert set(errors["pick"]) == {"pos_m"}
+
+
 def test_tracking_error_treats_opposite_quaternion_sign_as_same_orientation():
     errors = compute_episode_tracking_errors(
         robot_states=[_robot_state([0.0, 0.0, 0.0], quat=(0.0, 0.0, 0.0, -1.0))],
@@ -203,3 +225,16 @@ def test_tracking_error_summary_includes_expected_empty_labels_and_overall():
     assert summary["by_skill"]["top-leg-pick"]["count"] == 1
     assert summary["by_skill"]["leg-top-place"]["count"] == 0
     assert summary["overall"]["mean_total"] == 2.0
+
+
+def test_position_tracking_summary_omits_orientation_and_total():
+    summary = build_tracking_error_summary(
+        {"pick": [{"pos_m": 0.01}]},
+        expected_labels=["pick"],
+        metric_type="position",
+    )
+
+    assert summary["metric_type"] == "position"
+    assert summary["overall"]["mean_pos_m"] == 0.01
+    assert "mean_ori_deg" not in summary["overall"]
+    assert "mean_total" not in summary["overall"]

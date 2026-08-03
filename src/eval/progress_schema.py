@@ -145,6 +145,7 @@ def compute_success_rates(
 
 TRACKING_TOTAL_POS_SCALE_M = 0.01
 TRACKING_TOTAL_ORI_SCALE_DEG = 5.0
+TRACKING_METRIC_TYPES = {"position", "pose"}
 
 
 def _as_float_array(value) -> Optional[np.ndarray]:
@@ -199,9 +200,12 @@ def _tracking_error_at_frame(
     robot_state,
     target_pose,
     *,
+    metric_type: str = "pose",
     pos_scale_m: float = TRACKING_TOTAL_POS_SCALE_M,
     ori_scale_deg: float = TRACKING_TOTAL_ORI_SCALE_DEG,
 ) -> Optional[dict[str, float]]:
+    if metric_type not in TRACKING_METRIC_TYPES:
+        raise ValueError(f"Unsupported tracking metric type: {metric_type}")
     ee_pose = _extract_ee_pose_from_robot_state(robot_state)
     target = _as_float_array(target_pose)
     if ee_pose is None or target is None or target.shape != (4, 4):
@@ -210,14 +214,15 @@ def _tracking_error_at_frame(
         return None
 
     ee_pos, ee_quat = ee_pose
+    target_pos = target[:3, 3]
+    pos_m = float(np.linalg.norm(ee_pos - target_pos))
+    if metric_type == "position":
+        return {"pos_m": pos_m}
+
     ee_rot = _quat_xyzw_to_matrix(ee_quat)
     if ee_rot is None:
         return None
-
-    target_pos = target[:3, 3]
     target_rot = target[:3, :3]
-    pos_m = float(np.linalg.norm(ee_pos - target_pos))
-
     rot_delta = target_rot @ ee_rot.T
     cos_angle = (float(np.trace(rot_delta)) - 1.0) / 2.0
     cos_angle = min(1.0, max(-1.0, cos_angle))
@@ -236,10 +241,13 @@ def compute_episode_tracking_errors(
     skill_states,
     target_poses,
     *,
+    metric_type: str = "pose",
     pos_scale_m: float = TRACKING_TOTAL_POS_SCALE_M,
     ori_scale_deg: float = TRACKING_TOTAL_ORI_SCALE_DEG,
 ) -> dict[str, dict[str, float]]:
-    """Compute per-skill final-ee-vs-target error, keeping min for repeated skills."""
+    """Compute per-skill final-EE error, keeping the best repeated phase."""
+    if metric_type not in TRACKING_METRIC_TYPES:
+        raise ValueError(f"Unsupported tracking metric type: {metric_type}")
     n_frames = min(len(robot_states or []), len(skill_states or []), len(target_poses or []))
     if n_frames <= 0:
         return {}
@@ -258,13 +266,15 @@ def compute_episode_tracking_errors(
         error = _tracking_error_at_frame(
             robot_states[final_idx],
             target_poses[final_idx],
+            metric_type=metric_type,
             pos_scale_m=pos_scale_m,
             ori_scale_deg=ori_scale_deg,
         )
         if error is None:
             return
         previous = per_skill.get(segment_label)
-        if previous is None or error["total"] < previous["total"]:
+        selection_key = "pos_m" if metric_type == "position" else "total"
+        if previous is None or error[selection_key] < previous[selection_key]:
             per_skill[segment_label] = error
 
     for frame_idx in range(1, n_frames):
@@ -287,27 +297,23 @@ def accumulate_tracking_error_records(
         accumulator.setdefault(skill_state, []).append(error)
 
 
-def _summarize_tracking_error_list(errors: list[dict[str, float]]) -> dict[str, float | int]:
+def _summarize_tracking_error_list(
+    errors: list[dict[str, float]],
+    *,
+    metric_type: str,
+) -> dict[str, float | int]:
     summary: dict[str, float | int] = {"count": len(errors)}
+    fields = [("pos_m", "pos_m")]
+    if metric_type == "pose":
+        fields.extend((("ori_deg", "ori_deg"), ("total", "total")))
     if not errors:
-        return {
-            **summary,
-            "mean_pos_m": 0.0,
-            "mean_ori_deg": 0.0,
-            "mean_total": 0.0,
-            "min_pos_m": 0.0,
-            "min_ori_deg": 0.0,
-            "min_total": 0.0,
-            "max_pos_m": 0.0,
-            "max_ori_deg": 0.0,
-            "max_total": 0.0,
-        }
+        for _, output_name in fields:
+            summary[f"mean_{output_name}"] = 0.0
+            summary[f"min_{output_name}"] = 0.0
+            summary[f"max_{output_name}"] = 0.0
+        return summary
 
-    for field, output_name in (
-        ("pos_m", "pos_m"),
-        ("ori_deg", "ori_deg"),
-        ("total", "total"),
-    ):
+    for field, output_name in fields:
         values = np.asarray([float(error[field]) for error in errors], dtype=np.float64)
         summary[f"mean_{output_name}"] = float(values.mean())
         summary[f"min_{output_name}"] = float(values.min())
@@ -319,9 +325,12 @@ def build_tracking_error_summary(
     accumulator: dict[str, list[dict[str, float]]],
     *,
     expected_labels: Iterable[str] = (),
+    metric_type: str = "pose",
     pos_scale_m: float = TRACKING_TOTAL_POS_SCALE_M,
     ori_scale_deg: float = TRACKING_TOTAL_ORI_SCALE_DEG,
 ) -> dict:
+    if metric_type not in TRACKING_METRIC_TYPES:
+        raise ValueError(f"Unsupported tracking metric type: {metric_type}")
     by_skill: dict[str, dict[str, float | int]] = {}
     all_labels = list(expected_labels)
     for label in accumulator.keys():
@@ -331,12 +340,19 @@ def build_tracking_error_summary(
     all_errors: list[dict[str, float]] = []
     for label in all_labels:
         errors = accumulator.get(label, [])
-        by_skill[label] = _summarize_tracking_error_list(errors)
+        by_skill[label] = _summarize_tracking_error_list(
+            errors,
+            metric_type=metric_type,
+        )
         all_errors.extend(errors)
 
     return {
+        "metric_type": metric_type,
         "pos_scale_m": float(pos_scale_m),
         "ori_scale_deg": float(ori_scale_deg),
-        "overall": _summarize_tracking_error_list(all_errors),
+        "overall": _summarize_tracking_error_list(
+            all_errors,
+            metric_type=metric_type,
+        ),
         "by_skill": by_skill,
     }

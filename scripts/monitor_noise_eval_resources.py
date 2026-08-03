@@ -249,6 +249,16 @@ def _restart(args: argparse.Namespace, state: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _stop_for_disk_pressure(
+    args: argparse.Namespace, state: dict[str, Any]
+) -> dict[str, Any]:
+    result = _run(["systemctl", "--user", "stop", args.unit], timeout=60)
+    state["stopped_for_disk_pressure_at"] = _now()
+    state["stopped_for_disk_pressure_result"] = result
+    state["needs_attention"] = True
+    return result
+
+
 def _audit_results(args: argparse.Namespace) -> dict[str, Any]:
     result = _run(
         [
@@ -300,13 +310,18 @@ def main() -> None:
     parser.add_argument("--critical-psi", type=float, default=35.0)
     parser.add_argument("--warn-swap-ratio", type=float, default=0.90)
     parser.add_argument("--critical-swap-ratio", type=float, default=0.97)
-    parser.add_argument("--warn-disk-free-gib", type=float, default=100.0)
-    parser.add_argument("--critical-disk-free-gib", type=float, default=50.0)
+    parser.add_argument("--warn-disk-free-gib", type=float, default=150.0)
+    parser.add_argument("--critical-disk-free-gib", type=float, default=80.0)
     parser.add_argument("--critical-samples", type=int, default=2)
     parser.add_argument("--diagnostic-cooldown", type=float, default=300.0)
     parser.add_argument("--restart-cooldown", type=float, default=900.0)
     parser.add_argument("--max-auto-restarts", type=int, default=3)
     parser.add_argument("--auto-restart", action="store_true")
+    parser.add_argument(
+        "--stop-on-critical-disk",
+        action="store_true",
+        help="Stop the experiment service instead of risking a full filesystem.",
+    )
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--cgroup-root", type=Path, default=Path("/sys/fs/cgroup"))
     args = parser.parse_args()
@@ -323,6 +338,9 @@ def main() -> None:
         "last_audit_at": None,
         "last_audit": None,
         "auto_restart_count": 0,
+        "disk_used_bytes_at_start": shutil.disk_usage(args.repo_root).used,
+        "stopped_for_disk_pressure_at": None,
+        "stopped_for_disk_pressure_result": None,
         "critical_streak": 0,
         "needs_attention": False,
     }
@@ -332,6 +350,9 @@ def main() -> None:
 
     while True:
         sample = _sample(args)
+        sample["disk"]["growth_since_start_bytes"] = (
+            sample["disk"]["used_bytes"] - state["disk_used_bytes_at_start"]
+        )
         severity, reasons = _classify(sample, args)
         sample["severity"] = severity
         sample["reasons"] = reasons
@@ -370,8 +391,30 @@ def main() -> None:
             state["last_diagnostic_at"] = _now()
             last_diagnostic_monotonic = now_monotonic
 
+        disk_critical = (
+            sample["disk"]["free_bytes"] / GIB <= args.critical_disk_free_gib
+        )
+        should_stop_for_disk = (
+            args.stop_on_critical_disk
+            and disk_critical
+            and state["stopped_for_disk_pressure_at"] is None
+            and sample["service"].get("ActiveState") in {"active", "activating"}
+        )
+        if should_stop_for_disk:
+            result = _stop_for_disk_pressure(args, state)
+            _append_jsonl(
+                args.alerts_log,
+                {
+                    "timestamp": _now(),
+                    "event": "experiment_stopped_for_disk_pressure",
+                    "disk": sample["disk"],
+                    "result": result,
+                },
+            )
+
         should_restart = (
             args.auto_restart
+            and not disk_critical
             and severity == "critical"
             and state["critical_streak"] >= args.critical_samples
             and state["auto_restart_count"] < args.max_auto_restarts

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
@@ -13,10 +15,17 @@ class AnnotationNoiseConfig:
     seed: int = 0
     mode: str = "gaussian_clip_2sigma"
     apply_to: str = "all"
+    shuffle_seed: int = 0
+    shuffle_bank_path: Optional[str] = None
+    shuffle_records: tuple[dict[str, Any], ...] = ()
 
     @property
     def enabled(self) -> bool:
-        return self.pos_std_m > 0.0 or self.ori_std_deg > 0.0
+        return (
+            self.mode == "shuffle"
+            or self.pos_std_m > 0.0
+            or self.ori_std_deg > 0.0
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -25,6 +34,9 @@ class AnnotationNoiseConfig:
             "seed": int(self.seed),
             "mode": self.mode,
             "apply_to": self.apply_to,
+            "shuffle_seed": int(self.shuffle_seed),
+            "shuffle_bank_path": self.shuffle_bank_path,
+            "shuffle_record_count": len(self.shuffle_records),
             "enabled": self.enabled,
         }
 
@@ -36,8 +48,11 @@ def make_annotation_noise_config(
     seed: int = 0,
     mode: str = "gaussian_clip_2sigma",
     apply_to: str = "all",
+    shuffle_seed: int = 0,
+    shuffle_bank_path: Optional[str | Path] = None,
+    shuffle_records: Optional[list[dict[str, Any]]] = None,
 ) -> AnnotationNoiseConfig:
-    if mode not in {"gaussian_clip_2sigma", "uniform"}:
+    if mode not in {"gaussian_clip_2sigma", "uniform", "shuffle"}:
         raise ValueError(f"Unsupported annotation noise mode: {mode}")
     if apply_to not in {"point", "grasp", "all"}:
         raise ValueError(f"Unsupported annotation noise apply_to: {apply_to}")
@@ -45,12 +60,53 @@ def make_annotation_noise_config(
         raise ValueError("--annotation-noise-pos-std-m must be non-negative")
     if ori_std_deg < 0.0:
         raise ValueError("--annotation-noise-ori-std-deg must be non-negative")
+    bank_path = None if shuffle_bank_path is None else str(shuffle_bank_path)
+    records = list(shuffle_records or [])
+    if mode == "shuffle" and not records:
+        if bank_path is None:
+            raise ValueError("shuffle mode requires a guidance bank")
+        records = load_guidance_shuffle_bank(Path(bank_path))
+    if mode == "shuffle" and not records:
+        raise ValueError("shuffle guidance bank is empty")
     return AnnotationNoiseConfig(
         pos_std_m=float(pos_std_m),
         ori_std_deg=float(ori_std_deg),
         seed=int(seed),
         mode=mode,
         apply_to=apply_to,
+        shuffle_seed=int(shuffle_seed),
+        shuffle_bank_path=bank_path,
+        shuffle_records=tuple(records),
+    )
+
+
+def load_guidance_shuffle_bank(path: Path) -> list[dict[str, Any]]:
+    if path.is_dir():
+        records: list[dict[str, Any]] = []
+        for child in sorted(path.glob("*.json")):
+            records.extend(load_guidance_shuffle_bank(child))
+        return records
+    payload = json.loads(path.read_text())
+    records = payload.get("records", payload) if isinstance(payload, dict) else payload
+    if not isinstance(records, list):
+        raise ValueError(f"Invalid guidance bank payload: {path}")
+    return [dict(record) for record in records if isinstance(record, dict)]
+
+
+def write_guidance_shuffle_bank(
+    path: Path,
+    *,
+    task: str,
+    records: list[dict[str, Any]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {"version": 1, "task": task, "records": records},
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
     )
 
 
@@ -91,6 +147,28 @@ class AnnotationNoisePhaseState:
     phase_key: Optional[tuple[Any, ...]] = None
     pos_noise: Optional[np.ndarray] = None
     rot_noise: Optional[np.ndarray] = None
+    shuffled_point: Optional[np.ndarray] = None
+    shuffled_pose: Optional[np.ndarray] = None
+    shuffle_info: Optional[dict[str, Any]] = None
+
+    def _phase_rng(
+        self,
+        config: AnnotationNoiseConfig,
+        phase_key: tuple[Any, ...],
+        *,
+        seed: int,
+    ) -> tuple[bool, np.random.Generator]:
+        changed = phase_key != self.phase_key
+        if changed:
+            self.phase_idx += 1
+            self.phase_key = phase_key
+        phase_seed = (
+            int(seed)
+            + self.seed_offset * 1_009_003
+            + self.env_idx * 1_000_003
+            + self.phase_idx * 9_176
+        )
+        return changed, np.random.default_rng(phase_seed)
 
     def current_noise(
         self,
@@ -105,16 +183,12 @@ class AnnotationNoisePhaseState:
                 self.phase_idx,
             )
 
-        if phase_key != self.phase_key:
-            self.phase_idx += 1
-            self.phase_key = phase_key
-            seed = (
-                int(config.seed)
-                + self.seed_offset * 1_009_003
-                + self.env_idx * 1_000_003
-                + self.phase_idx * 9_176
-            )
-            rng = np.random.default_rng(seed)
+        changed, rng = self._phase_rng(
+            config,
+            phase_key,
+            seed=int(config.seed),
+        )
+        if changed:
             self.pos_noise = _sample_vector(rng, float(config.pos_std_m), config.mode)
             ori_std_rad = np.deg2rad(float(config.ori_std_deg))
             self.rot_noise = _axis_angle_to_matrix(
@@ -127,11 +201,128 @@ class AnnotationNoisePhaseState:
             self.phase_idx,
         )
 
+    def current_shuffle(
+        self,
+        config: AnnotationNoiseConfig,
+        phase_key: tuple[Any, ...],
+        *,
+        task: str,
+        skill: Optional[str],
+        skill_state: Optional[str],
+        guidance_point: Optional[np.ndarray],
+        guidance_pose: Optional[np.ndarray],
+    ) -> tuple[Optional[np.ndarray], Optional[np.ndarray], dict[str, Any]]:
+        changed, rng = self._phase_rng(
+            config,
+            phase_key,
+            seed=int(config.shuffle_seed),
+        )
+        if not changed and self.shuffle_info is not None:
+            return self.shuffled_point, self.shuffled_pose, self.shuffle_info
+
+        current_state = str(skill_state or "")
+        current_type = str(skill or current_state.rsplit("-", 1)[-1])
+        candidates = [
+            record
+            for record in config.shuffle_records
+            if str(record.get("task")) == str(task)
+        ]
+        preferred = [
+            record
+            for record in candidates
+            if str(record.get("skill_type")) == current_type
+            and str(record.get("skill_state")) != current_state
+        ]
+        if not preferred:
+            preferred = [
+                record
+                for record in candidates
+                if str(record.get("skill_state")) == current_state
+            ]
+        if not preferred:
+            preferred = candidates
+        if not preferred:
+            raise ValueError(
+                f"No shuffled guidance donor for task={task} skill_state={current_state}"
+            )
+
+        donor = preferred[int(rng.integers(0, len(preferred)))]
+        donor_point_raw = donor.get("guidance_point")
+        donor_pose_raw = donor.get("guidance_pose")
+        donor_point = (
+            None
+            if donor_point_raw is None
+            else np.asarray(donor_point_raw, dtype=np.float32).reshape(3)
+        )
+        donor_pose = (
+            None
+            if donor_pose_raw is None
+            else np.asarray(donor_pose_raw, dtype=np.float32).reshape(4, 4)
+        )
+        if donor_point is None and donor_pose is not None:
+            donor_point = donor_pose[:3, 3].copy()
+
+        if config.apply_to == "point":
+            if donor_point is None:
+                raise ValueError("Point shuffle donor has no guidance point")
+            self.shuffled_point = donor_point.copy()
+            self.shuffled_pose = None if guidance_pose is None else guidance_pose.copy()
+            if self.shuffled_pose is not None:
+                self.shuffled_pose[:3, 3] = donor_point
+        else:
+            if donor_pose is None:
+                raise ValueError("Pose shuffle donor has no guidance pose")
+            self.shuffled_pose = donor_pose.copy()
+            self.shuffled_point = (
+                donor_pose[:3, 3].copy()
+                if guidance_point is not None
+                else None
+            )
+
+        clean_position = None
+        if guidance_point is not None:
+            clean_position = np.asarray(guidance_point, dtype=np.float32)
+        elif guidance_pose is not None:
+            clean_position = np.asarray(guidance_pose, dtype=np.float32)[:3, 3]
+        shuffled_position = (
+            self.shuffled_point
+            if self.shuffled_point is not None
+            else self.shuffled_pose[:3, 3]
+        )
+        displacement_m = (
+            None
+            if clean_position is None
+            else float(np.linalg.norm(shuffled_position - clean_position))
+        )
+        orientation_displacement_deg = None
+        if guidance_pose is not None and self.shuffled_pose is not None:
+            clean_rotation = np.asarray(guidance_pose, dtype=np.float32)[:3, :3]
+            shuffled_rotation = self.shuffled_pose[:3, :3]
+            rotation_delta = shuffled_rotation @ clean_rotation.T
+            cosine = np.clip((np.trace(rotation_delta) - 1.0) / 2.0, -1.0, 1.0)
+            orientation_displacement_deg = float(np.degrees(np.arccos(cosine)))
+        self.shuffle_info = {
+            "enabled": True,
+            "mode": "shuffle",
+            "phase_idx": int(self.phase_idx),
+            "phase_key": [None if item is None else str(item) for item in phase_key],
+            "donor_task": donor.get("task"),
+            "donor_skill_state": donor.get("skill_state"),
+            "donor_source_episode": donor.get("source_episode"),
+            "donor_visit_idx": donor.get("visit_idx"),
+            "realized_pos_displacement_m": displacement_m,
+            "realized_ori_displacement_deg": orientation_displacement_deg,
+            "apply_to": config.apply_to,
+        }
+        return self.shuffled_point, self.shuffled_pose, self.shuffle_info
+
 
 def apply_annotation_noise(
     *,
     guidance_point: Optional[np.ndarray],
     guidance_pose: Optional[np.ndarray],
+    task: str = "",
+    skill_state: Optional[str] = None,
     skill: Optional[str],
     phase_key: tuple[Any, ...],
     state: AnnotationNoisePhaseState,
@@ -139,6 +330,17 @@ def apply_annotation_noise(
 ) -> tuple[Optional[np.ndarray], Optional[np.ndarray], dict[str, Any]]:
     if config is None or not config.enabled:
         return guidance_point, guidance_pose, {"enabled": False}
+
+    if config.mode == "shuffle":
+        return state.current_shuffle(
+            config,
+            phase_key,
+            task=task,
+            skill=skill,
+            skill_state=skill_state,
+            guidance_point=guidance_point,
+            guidance_pose=guidance_pose,
+        )
 
     pos_noise, rot_noise, phase_idx = state.current_noise(config, phase_key)
     noisy_point = None if guidance_point is None else guidance_point.copy()

@@ -46,7 +46,7 @@ from src.eval.skill_annotation_util import (
     get_annotation_bundle_all_envs,
     reset_skill_annotator,
 )
-from src.eval.annotation_noise import AnnotationNoiseConfig
+from src.eval.annotation_noise import AnnotationNoiseConfig, write_guidance_shuffle_bank
 from src.eval.perturb_util import PerturbContext, PerturbRunner
 from src.eval.progress_schema import (
     accumulate_episode_skill_stats,
@@ -104,6 +104,74 @@ RolloutSaveValues = collections.namedtuple(
         "camera_infos",
     ],
 )
+
+
+def _guidance_bank_records_for_episode(
+    *,
+    task: str,
+    source_episode: int,
+    skill_states,
+    skills,
+    guidance_points,
+    guidance_poses,
+    guidance_gripper_widths,
+) -> list[dict]:
+    sequences = [
+        [] if sequence is None else sequence
+        for sequence in (skill_states, guidance_points, guidance_poses)
+    ]
+    n_frames = min(len(sequence) for sequence in sequences)
+    records = []
+    previous_state = None
+    visit_counts: dict[str, int] = {}
+    for frame_idx in range(n_frames):
+        raw_state = skill_states[frame_idx]
+        skill_state = None if raw_state is None else str(raw_state)
+        if skill_state == previous_state:
+            continue
+        previous_state = skill_state
+        if skill_state is None:
+            continue
+        point = guidance_points[frame_idx]
+        pose = guidance_poses[frame_idx]
+        if point is None and pose is None:
+            continue
+        visit_idx = visit_counts.get(skill_state, 0)
+        visit_counts[skill_state] = visit_idx + 1
+        skill = (
+            skills[frame_idx]
+            if skills is not None and frame_idx < len(skills)
+            else None
+        )
+        width = (
+            guidance_gripper_widths[frame_idx]
+            if guidance_gripper_widths is not None
+            and frame_idx < len(guidance_gripper_widths)
+            else None
+        )
+        records.append(
+            {
+                "task": task,
+                "skill_state": skill_state,
+                "skill_type": str(skill or skill_state.rsplit("-", 1)[-1]),
+                "source_episode": int(source_episode),
+                "visit_idx": int(visit_idx),
+                "guidance_point": (
+                    None
+                    if point is None
+                    else np.asarray(point, dtype=np.float32).reshape(3).tolist()
+                ),
+                "guidance_pose": (
+                    None
+                    if pose is None
+                    else np.asarray(pose, dtype=np.float32).reshape(4, 4).tolist()
+                ),
+                "guidance_gripper_width": (
+                    None if width is None else float(np.asarray(width).reshape(-1)[0])
+                ),
+            }
+        )
+    return records
 
 
 def _add_sim_local_ee_pose_to_robot_state(env: Env, robot_state):
@@ -1103,6 +1171,7 @@ def calculate_success_rate(
     target_successes: Optional[int] = None,
     init_states: Optional[List[dict]] = None,
     max_saved_rollouts: Optional[int] = None,
+    guidance_bank_out: Optional[Path] = None,
 ) -> RolloutStats:
 
     use_target_mode = target_successes is not None and target_successes > 0
@@ -1136,7 +1205,11 @@ def calculate_success_rate(
     step_counts: dict[str, int] = {}
     step_completion_counts: dict[str, int] = {}
     tracking_error_records: dict[str, list[dict[str, float]]] = {}
+    tracking_metric_type = (
+        "pose" if grasp_part_annotate or annotate_grasp else "position"
+    )
     saved_rollouts_count = 0
+    guidance_bank_records: list[dict] = []
 
     save_rollouts = rollout_save_dir is not None or save_rollouts_to_wandb
 
@@ -1227,6 +1300,45 @@ def calculate_success_rate(
                 step_counts=step_counts,
                 step_completion_counts=step_completion_counts,
             )
+            if guidance_bank_out is not None:
+                episode_idx = n_total_rollouts - env.num_envs + env_idx
+                guidance_bank_records.extend(
+                    _guidance_bank_records_for_episode(
+                        task=str(
+                            getattr(
+                                env,
+                                "furniture_name",
+                                getattr(env, "task_name", ""),
+                            )
+                        ),
+                        source_episode=episode_idx,
+                        skill_states=(
+                            rollout_data.skill_states[env_idx]
+                            if rollout_data.skill_states
+                            else []
+                        ),
+                        skills=(
+                            rollout_data.skills[env_idx]
+                            if rollout_data.skills
+                            else []
+                        ),
+                        guidance_points=(
+                            rollout_data.guidance_points_clean[env_idx]
+                            if rollout_data.guidance_points_clean
+                            else []
+                        ),
+                        guidance_poses=(
+                            rollout_data.guidance_poses_clean[env_idx]
+                            if rollout_data.guidance_poses_clean
+                            else []
+                        ),
+                        guidance_gripper_widths=(
+                            rollout_data.guidance_gripper_widths[env_idx]
+                            if rollout_data.guidance_gripper_widths
+                            else []
+                        ),
+                    )
+                )
             if collect_skill_stats and robot_states_for_tracking:
                 skill_states_for_tracking = (
                     rollout_data.skill_states[env_idx]
@@ -1244,6 +1356,7 @@ def calculate_success_rate(
                         robot_states_for_tracking,
                         skill_states_for_tracking,
                         guidance_poses_for_tracking,
+                        metric_type=tracking_metric_type,
                     ),
                 )
 
@@ -1451,6 +1564,15 @@ def calculate_success_rate(
                 }
             )
 
+    if guidance_bank_out is not None:
+        write_guidance_shuffle_bank(
+            guidance_bank_out,
+            task=str(
+                getattr(env, "furniture_name", getattr(env, "task_name", ""))
+            ),
+            records=guidance_bank_records,
+        )
+
     pbar.close()
     if perturb_runner is not None and perturb_runner.enabled:
         print(f"Perturbation stats: {perturb_runner.stats.summary()}")
@@ -1480,6 +1602,7 @@ def calculate_success_rate(
     tracking_error = build_tracking_error_summary(
         tracking_error_records,
         expected_labels=expected_skill_labels,
+        metric_type=tracking_metric_type,
     )
 
     final_total = n_total_rollouts if use_target_mode else n_rollouts

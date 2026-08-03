@@ -48,6 +48,9 @@ def audit(
     manifest_path: Path,
     state_path: Path | None,
     require_complete: bool,
+    n_rollouts: int = 36,
+    include_shuffled: bool = False,
+    shuffled_rollouts: int = 36,
 ) -> tuple[dict[str, Any], int]:
     manifest_index = _manifest_lookup(_read_jsonl(manifest_path))
     previously_validated = _load_state(state_path)
@@ -58,8 +61,13 @@ def audit(
     issues: list[str] = []
 
     for condition in CONDITIONS:
-        for noise in _noise_levels_for_family(condition.family):
+        for noise in _noise_levels_for_family(
+            condition.family, include_shuffled=include_shuffled
+        ):
             group_id = f"{condition.condition_id}/{noise.noise_id}"
+            group_rollouts = (
+                shuffled_rollouts if noise.perturbation == "shuffle" else n_rollouts
+            )
             row = manifest_index.get((condition.condition_id, noise.noise_id))
             if row is None or row.get("status") != "ok":
                 missing.append(group_id)
@@ -72,7 +80,7 @@ def audit(
                 "task_group": "one_leg+round_table+lamp",
                 "randomness": "low",
                 "n_envs": 3,
-                "n_rollouts": 12,
+                "n_rollouts": group_rollouts,
                 "save_rollouts_count": 8,
                 "checkpoint": str(condition.checkpoint),
             }
@@ -92,11 +100,10 @@ def audit(
                     noise=noise,
                     task_group="one_leg+round_table+lamp",
                     n_envs=3,
-                    n_rollouts=12,
+                    n_rollouts=group_rollouts,
                     randomness="low",
                 )
             )
-
             rollout_dirs = _rollout_group_dirs(
                 task_group="one_leg+round_table+lamp",
                 randomness="low",
@@ -119,16 +126,17 @@ def audit(
                     newly_validated.append(group_id)
 
     _write_state(state_path, validated_groups)
+    expected_count = 25 + (5 if include_shuffled else 0)
     payload = {
         "checked_at": datetime.now().isoformat(timespec="seconds"),
         "manifest": str(manifest_path),
         "completed_count": len(completed),
         "validated_count": len(validated_groups),
-        "expected_count": 25,
+        "expected_count": expected_count,
         "newly_validated": newly_validated,
         "missing": missing,
         "issues": issues,
-        "complete": len(validated_groups) == 25 and not issues,
+        "complete": len(validated_groups) == expected_count and not issues,
     }
     if issues:
         return payload, 1
@@ -142,12 +150,18 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--state", type=Path, default=None)
     parser.add_argument("--require-complete", action="store_true")
+    parser.add_argument("--n-rollouts", type=int, default=36)
+    parser.add_argument("--include-shuffled", action="store_true")
+    parser.add_argument("--shuffled-rollouts", type=int, default=36)
     args = parser.parse_args()
 
     payload, returncode = audit(
         manifest_path=args.manifest,
         state_path=args.state,
         require_complete=args.require_complete,
+        n_rollouts=args.n_rollouts,
+        include_shuffled=args.include_shuffled,
+        shuffled_rollouts=args.shuffled_rollouts,
     )
     print(json.dumps(payload, sort_keys=True))
     raise SystemExit(returncode)

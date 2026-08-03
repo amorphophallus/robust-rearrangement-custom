@@ -16,6 +16,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 
 TASK_ORDER = ["one_leg", "round_table", "lamp"]
@@ -185,27 +186,41 @@ def _skill_type_from_state(skill_state: str) -> str:
     return token
 
 
-def _weighted_tracking_overall(per_task: dict[str, Any]) -> dict[str, float | int]:
+def _weighted_tracking_overall(
+    per_task: dict[str, Any], *, family: str
+) -> dict[str, Any]:
     total_count = 0
     pos_sum = 0.0
     ori_sum = 0.0
     total_sum = 0.0
+    metric_type = "position" if family == "point" else "pose"
     for task_payload in per_task.values():
-        overall = (task_payload.get("tracking_error") or {}).get("overall", {})
+        tracking = task_payload.get("tracking_error") or {}
+        if family != "point":
+            metric_type = tracking.get("metric_type", metric_type)
+        overall = tracking.get("overall", {})
         count = int(overall.get("count", 0))
         if count <= 0:
             continue
         total_count += count
         pos_sum += float(overall.get("mean_pos_m", 0.0)) * count
-        ori_sum += float(overall.get("mean_ori_deg", 0.0)) * count
-        total_sum += float(overall.get("mean_total", 0.0)) * count
+        if metric_type == "pose":
+            ori_sum += float(overall.get("mean_ori_deg", 0.0)) * count
+            total_sum += float(overall.get("mean_total", 0.0)) * count
     if total_count <= 0:
-        return {"count": 0, "mean_pos_m": 0.0, "mean_ori_deg": 0.0, "mean_total": 0.0}
+        return {
+            "metric_type": metric_type,
+            "count": 0,
+            "mean_pos_m": 0.0,
+            "mean_ori_deg": None if metric_type == "position" else 0.0,
+            "mean_total": None if metric_type == "position" else 0.0,
+        }
     return {
+        "metric_type": metric_type,
         "count": total_count,
         "mean_pos_m": pos_sum / total_count,
-        "mean_ori_deg": ori_sum / total_count,
-        "mean_total": total_sum / total_count,
+        "mean_ori_deg": None if metric_type == "position" else ori_sum / total_count,
+        "mean_total": None if metric_type == "position" else total_sum / total_count,
     }
 
 
@@ -230,7 +245,9 @@ def _build_rows(
             continue
         payload = json.loads(summary_path.read_text())
         per_task = payload.get("per_task", {})
-        tracking_overall = _weighted_tracking_overall(per_task)
+        tracking_overall = _weighted_tracking_overall(
+            per_task, family=str(run_row["family"])
+        )
         overall_row = {
             "condition": run_row["condition"],
             "condition_id": run_row["condition_id"],
@@ -244,9 +261,13 @@ def _build_rows(
             "n_rollouts": int(payload.get("n_rollouts", 0)),
             "success_rate": float(payload.get("success_rate", 0.0) or 0.0),
             "track_pos_cm": float(tracking_overall["mean_pos_m"]) * 100.0,
-            "track_ori_deg": float(tracking_overall["mean_ori_deg"]),
-            "track_total": float(tracking_overall["mean_total"]),
+            "tracking_metric_type": tracking_overall["metric_type"],
+            "track_ori_deg": tracking_overall["mean_ori_deg"],
+            "track_total": tracking_overall["mean_total"],
             "skill_state_count": int(tracking_overall["count"]),
+            "tracking_rollouts_per_task": int(
+                run_row.get("tracking_rollouts_per_task", 0)
+            ),
             "summary_json": str(summary_path),
         }
         for task in TASK_ORDER:
@@ -254,9 +275,11 @@ def _build_rows(
             overall_row[f"{task}_success_rate"] = float(
                 task_payload.get("success_rate", 0.0) or 0.0
             )
-            task_tracking = (task_payload.get("tracking_error") or {}).get(
-                "overall", {}
+            task_tracking_payload = task_payload.get("tracking_error") or {}
+            metric_type = task_tracking_payload.get(
+                "metric_type", "position" if run_row["family"] == "point" else "pose"
             )
+            task_tracking = task_tracking_payload.get("overall", {})
             task_rows.append(
                 {
                     "condition": run_row["condition"],
@@ -271,8 +294,17 @@ def _build_rows(
                     "n_rollouts": int(task_payload.get("n_rollouts", 0)),
                     "success_rate": float(task_payload.get("success_rate", 0.0) or 0.0),
                     "track_pos_cm": float(task_tracking.get("mean_pos_m", 0.0)) * 100.0,
-                    "track_ori_deg": float(task_tracking.get("mean_ori_deg", 0.0)),
-                    "track_total": float(task_tracking.get("mean_total", 0.0)),
+                    "tracking_metric_type": metric_type,
+                    "track_ori_deg": (
+                        float(task_tracking.get("mean_ori_deg", 0.0))
+                        if metric_type == "pose"
+                        else None
+                    ),
+                    "track_total": (
+                        float(task_tracking.get("mean_total", 0.0))
+                        if metric_type == "pose"
+                        else None
+                    ),
                     "tracking_count": int(task_tracking.get("count", 0)),
                 }
             )
@@ -327,10 +359,14 @@ def _build_rows(
                             else None
                         ),
                         "track_ori_deg": (
-                            float(stats.get("mean_ori_deg", 0.0)) if count > 0 else None
+                            float(stats.get("mean_ori_deg", 0.0))
+                            if count > 0 and run_row["family"] != "point"
+                            else None
                         ),
                         "track_total": (
-                            float(stats.get("mean_total", 0.0)) if count > 0 else None
+                            float(stats.get("mean_total", 0.0))
+                            if count > 0 and run_row["family"] != "point"
+                            else None
                         ),
                         "tracking_count": count,
                     }
@@ -340,8 +376,9 @@ def _build_rows(
                 bucket["count"] += count
                 if count > 0:
                     bucket["pos_sum_cm"] += float(stats.get("mean_pos_m", 0.0)) * 100.0 * count
-                    bucket["ori_sum_deg"] += float(stats.get("mean_ori_deg", 0.0)) * count
-                    bucket["total_sum"] += float(stats.get("mean_total", 0.0)) * count
+                    if run_row["family"] != "point":
+                        bucket["ori_sum_deg"] += float(stats.get("mean_ori_deg", 0.0)) * count
+                        bucket["total_sum"] += float(stats.get("mean_total", 0.0)) * count
                 bucket["reached"] += reached
                 bucket["completed"] += completed
 
@@ -374,12 +411,12 @@ def _build_rows(
                     ),
                     "track_ori_deg": (
                         float(bucket["ori_sum_deg"]) / float(bucket["count"])
-                        if bucket["count"] > 0
+                        if bucket["count"] > 0 and run_row["family"] != "point"
                         else None
                     ),
                     "track_total": (
                         float(bucket["total_sum"]) / float(bucket["count"])
-                        if bucket["count"] > 0
+                        if bucket["count"] > 0 and run_row["family"] != "point"
                         else None
                     ),
                 }
@@ -511,13 +548,25 @@ def _result_cell(row: dict[str, Any] | None) -> str:
     n_success = int(row.get("n_success", row.get("completed_count", 0)))
     n_trials = int(row.get("n_rollouts", row.get("reached_count", 0)))
     tracking_count = int(row.get("tracking_count", row.get("n_skill_states", 0)))
+    tracking_fields = f"P {_format_optional(row['track_pos_cm'])}"
+    if row.get("family") != "point" and row.get("tracking_metric_type") != "position":
+        tracking_fields += (
+            f" / O {_format_optional(row['track_ori_deg'])}"
+            f" / T {_format_optional(row['track_total'])}"
+        )
     return (
         f"SR {100.0 * success_rate:.1f}% ({n_success}/{n_trials})"
-        f"<br>P/O/T {_format_optional(row['track_pos_cm'])}/"
-        f"{_format_optional(row['track_ori_deg'])}/"
-        f"{_format_optional(row['track_total'])}"
+        f"<br>{tracking_fields}"
         f" (n={tracking_count})"
     )
+
+
+def _noise_ids(rows: list[dict[str, Any]]) -> list[str]:
+    present = {str(row["noise_id"]) for row in rows}
+    ordered = [noise_id for noise_id in ("n0", "n1", "n2", "n3", "n4") if noise_id in present]
+    if "shuffle" in present:
+        ordered.append("shuffle")
+    return ordered
 
 
 def _matrix_table(
@@ -539,13 +588,13 @@ def _matrix_table(
         ),
     ):
         row = {field: value for (field, _), value in zip(group_fields, key)}
-        for noise_id in ("n0", "n1", "n2", "n3", "n4"):
+        for noise_id in _noise_ids(rows):
             row[noise_id] = _result_cell(grouped[key].get(noise_id))
         output_rows.append(row)
 
     return _markdown_table(
         output_rows,
-        [*group_fields, *((noise_id, noise_id) for noise_id in ("n0", "n1", "n2", "n3", "n4"))],
+        [*group_fields, *((noise_id, noise_id) for noise_id in _noise_ids(rows))],
     )
 
 
@@ -559,7 +608,7 @@ def _task_overall_table(task_rows: list[dict[str, Any]]) -> str:
         formatted = {"condition": condition}
         for task in TASK_ORDER:
             cells = []
-            for noise_id in ("n0", "n1", "n2", "n3", "n4"):
+            for noise_id in _noise_ids(task_rows):
                 result = by_condition_task[(condition, task)].get(noise_id)
                 cells.append(f"{noise_id}: {_result_cell(result)}")
             formatted[task] = "<br><br>".join(cells)
@@ -577,8 +626,16 @@ def _task_overall_table(task_rows: list[dict[str, Any]]) -> str:
 
 def _plot_success_vs_noise(task_rows: list[dict[str, Any]], figure_path: Path) -> None:
     figure_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(1, 3, figsize=(17, 4.8), sharey=True)
-    for axis, task in zip(axes, TASK_ORDER):
+    fig = plt.figure(figsize=(19, 4.8))
+    grid = fig.add_gridspec(1, 6, width_ratios=[4, 1.4] * 3, wspace=0.08)
+    shared_axis = None
+    colors = {condition: f"C{idx}" for idx, condition in enumerate(CONDITION_ORDER)}
+    legend_handles = []
+    for task_idx, task in enumerate(TASK_ORDER):
+        axis = fig.add_subplot(grid[0, 2 * task_idx], sharey=shared_axis)
+        if shared_axis is None:
+            shared_axis = axis
+        shuffle_axis = fig.add_subplot(grid[0, 2 * task_idx + 1], sharey=shared_axis)
         grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in task_rows:
             if row["task"] != task:
@@ -586,43 +643,73 @@ def _plot_success_vs_noise(task_rows: list[dict[str, Any]], figure_path: Path) -
             grouped[row["condition"]].append(row)
         for condition in CONDITION_ORDER:
             rows = grouped.get(condition, [])
-            rows = sorted(rows, key=lambda item: item["pos_std_mm"])
-            axis.plot(
-                [row["pos_std_mm"] for row in rows],
-                [100.0 * row["success_rate"] for row in rows],
+            regular = sorted(
+                [row for row in rows if row["noise_id"] != "shuffle"],
+                key=lambda item: item["pos_std_mm"],
+            )
+            line = axis.plot(
+                [row["pos_std_mm"] for row in regular],
+                [100.0 * row["success_rate"] for row in regular],
                 marker="o",
                 linewidth=2,
                 label=condition,
-            )
+                color=colors[condition],
+            )[0]
+            if task_idx == 0:
+                legend_handles.append(line)
+            clean = next((row for row in rows if row["noise_id"] == "n0"), None)
+            shuffled = next((row for row in rows if row["noise_id"] == "shuffle"), None)
+            if clean is not None and shuffled is not None:
+                shuffle_axis.plot(
+                    [0, 1],
+                    [100.0 * clean["success_rate"], 100.0 * shuffled["success_rate"]],
+                    marker="o",
+                    linestyle="--",
+                    linewidth=1.5,
+                    color=colors[condition],
+                )
         axis.set_xlabel("Position Noise Std (mm)")
         axis.set_title(task)
         axis.grid(True, alpha=0.3)
-    axes[0].set_ylabel("Success Rate (%)")
-    axes[-1].legend(loc="best", fontsize=8)
+        shuffle_axis.set_xticks([0, 1], ["Clean", "Shuffle"], rotation=35, ha="right")
+        shuffle_axis.grid(True, alpha=0.3)
+        shuffle_axis.tick_params(labelleft=False)
+    shared_axis.set_ylabel("Success Rate (%)")
+    fig.legend(legend_handles, CONDITION_ORDER, loc="lower center", ncol=5, fontsize=8)
     fig.suptitle("Clean-Train -> Noisy-Eval Success Curves")
-    fig.tight_layout()
-    fig.savefig(figure_path, dpi=200, bbox_inches="tight")
+    fig.savefig(figure_path, dpi=200, bbox_inches="tight", pad_inches=0.15)
     plt.close(fig)
 
 
 def _plot_tracking_vs_noise(task_rows: list[dict[str, Any]], figure_path: Path) -> None:
     figure_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(3, 3, figsize=(17, 13), sharex=True)
+    fig = plt.figure(figsize=(19, 13))
+    grid = fig.add_gridspec(3, 6, width_ratios=[4, 1.4] * 3, hspace=0.2, wspace=0.08)
+    colors = {condition: f"C{idx}" for idx, condition in enumerate(CONDITION_ORDER)}
     metrics = [
         ("track_pos_cm", "Position Error (cm)"),
         ("track_ori_deg", "Orientation Error (deg)"),
         ("track_total", "Total Error"),
     ]
     for metric_idx, (metric_key, metric_label) in enumerate(metrics):
+        shared_axis = None
         for task_idx, task in enumerate(TASK_ORDER):
-            axis = axes[metric_idx][task_idx]
+            axis = fig.add_subplot(grid[metric_idx, 2 * task_idx], sharey=shared_axis)
+            if shared_axis is None:
+                shared_axis = axis
+            shuffle_axis = fig.add_subplot(
+                grid[metric_idx, 2 * task_idx + 1], sharey=shared_axis
+            )
             grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
             for row in task_rows:
                 if row["task"] == task:
                     grouped[row["condition"]].append(row)
             for condition in CONDITION_ORDER:
+                if metric_key != "track_pos_cm" and condition in CONDITION_ORDER[:3]:
+                    continue
+                all_rows = grouped.get(condition, [])
                 rows = sorted(
-                    grouped.get(condition, []),
+                    [row for row in all_rows if row["noise_id"] != "shuffle"],
                     key=lambda item: item["pos_std_mm"],
                 )
                 axis.plot(
@@ -631,7 +718,21 @@ def _plot_tracking_vs_noise(task_rows: list[dict[str, Any]], figure_path: Path) 
                     marker="o",
                     linewidth=2,
                     label=condition,
+                    color=colors[condition],
                 )
+                clean = next((row for row in all_rows if row["noise_id"] == "n0"), None)
+                shuffled = next(
+                    (row for row in all_rows if row["noise_id"] == "shuffle"), None
+                )
+                if clean is not None and shuffled is not None:
+                    shuffle_axis.plot(
+                        [0, 1],
+                        [clean[metric_key], shuffled[metric_key]],
+                        marker="o",
+                        linestyle="--",
+                        linewidth=1.5,
+                        color=colors[condition],
+                    )
             if metric_idx == 0:
                 axis.set_title(task)
             if metric_idx == len(metrics) - 1:
@@ -639,10 +740,22 @@ def _plot_tracking_vs_noise(task_rows: list[dict[str, Any]], figure_path: Path) 
             if task_idx == 0:
                 axis.set_ylabel(metric_label)
             axis.grid(True, alpha=0.3)
-    axes[0][-1].legend(loc="best", fontsize=8)
+            shuffle_axis.set_xticks([0, 1], ["Clean", "Shuffle"], rotation=35, ha="right")
+            shuffle_axis.grid(True, alpha=0.3)
+            shuffle_axis.tick_params(labelleft=False)
+    legend_handles = [
+        Line2D([0], [0], color=colors[condition], marker="o", linewidth=2)
+        for condition in CONDITION_ORDER
+    ]
+    fig.legend(
+        legend_handles,
+        CONDITION_ORDER,
+        loc="lower center",
+        ncol=5,
+        fontsize=8,
+    )
     fig.suptitle("Clean-Train -> Noisy-Eval Tracking Error Curves")
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
-    fig.savefig(figure_path, dpi=200, bbox_inches="tight")
+    fig.savefig(figure_path, dpi=200, bbox_inches="tight", pad_inches=0.15)
     plt.close(fig)
 
 
@@ -652,7 +765,11 @@ def _best_tolerance_rows(overall_rows: list[dict[str, Any]], threshold: float) -
         grouped[row["condition"]].append(row)
     rows = []
     for condition, candidates in grouped.items():
-        valid = [row for row in candidates if row["success_rate"] >= threshold]
+        valid = [
+            row
+            for row in candidates
+            if row["noise_id"] != "shuffle" and row["success_rate"] >= threshold
+        ]
         if not valid:
             rows.append(
                 {
@@ -688,15 +805,18 @@ def _endpoint_comparison_rows(overall_rows: list[dict[str, Any]]) -> list[dict[s
         if n0 is None or n4 is None:
             continue
         success_delta_pp = 100.0 * (n4["success_rate"] - n0["success_rate"])
-        tracking_delta = n4["track_total"] - n0["track_total"]
+        tracking_key = "track_pos_cm" if n0["family"] == "point" else "track_total"
+        tracking_delta = n4[tracking_key] - n0[tracking_key]
+        tracking_name = "Position (cm)" if n0["family"] == "point" else "Total"
         comparison_rows.append(
             {
                 "condition": condition,
                 "n0_success": f"{100.0 * n0['success_rate']:.1f}%",
                 "n4_success": f"{100.0 * n4['success_rate']:.1f}%",
                 "success_delta": f"{success_delta_pp:+.1f} pp",
-                "n0_tracking": f"{n0['track_total']:.2f}",
-                "n4_tracking": f"{n4['track_total']:.2f}",
+                "tracking_metric": tracking_name,
+                "n0_tracking": f"{n0[tracking_key]:.2f}",
+                "n4_tracking": f"{n4[tracking_key]:.2f}",
                 "tracking_delta": f"{tracking_delta:+.2f}",
             }
         )
@@ -726,7 +846,7 @@ def _interpretation_lines(
         n4 = overall[(condition, "n4")]
         point_endpoint_parts.append(
             f"`{condition}` SR {100.0 * (n4['success_rate'] - n0['success_rate']):+.1f} pp, "
-            f"T {n4['track_total'] - n0['track_total']:+.2f}"
+            f"P {n4['track_pos_cm'] - n0['track_pos_cm']:+.2f} cm"
         )
 
     grasp_endpoint_parts = []
@@ -770,7 +890,7 @@ def _interpretation_lines(
         "",
         "### 3.2 结论边界",
         "",
-        "- 每个 task 只有 12 个 rollout，单个成败会使 task 曲线变化 8.33 个百分点；跨三任务汇总仍以 2.78 个百分点为离散步长。",
+        "- fresh rerun 中每个 task 的成功率与 tracking 都使用同一批 36 个 rollout；单次成败对应 2.78 个百分点。",
         "- 当前只使用一个 noise seed 和每个 checkpoint 一次评测，成功率曲线存在明显非单调波动；平台或拐点需要更多 rollout 和多个 seed 才能可靠确认。",
         "- 目前能够支持的结论是：clean-trained policy 的 guidance-noise 鲁棒性强烈依赖任务和 condition；grasp-part 的 6D 噪声会稳定增大 tracking error，而成功率退化在 hard task 上更明显。",
         "",
@@ -812,12 +932,14 @@ def generate_report(
         "",
         "- 只包含有空间 guidance 的 5 个 condition：`rgbd+GP`、`rgbd+colored GP`、`rgbd+GP+skill`、`rgbd+grasp-part`、`rgbd+grasp-part-colored`。",
         "- 训练 checkpoint 统一使用 clean-train 的现有模型；本轮不包含 noisy-train 曲线。",
-        "- tracking error 统一定义为：每个 skill state 最后一帧 `final EE pose` 与当前画在图上的 `guidance pose` 的差。",
-        "- 同一 episode 多次进入同名 skill state 时保留 `total error` 最小的一次；跨 episode、task 的汇总按有效 skill-state 记录数加权平均。",
-        "- `P/O/T` 分别为 position error (cm)、orientation error (deg)、total error；`total = pos_m / 0.01 + ori_deg / 5`，越低越好。",
+        "- tracking error 定义为：每个 skill state 最后一帧 `final EE pose` 与实际画在图上的 noisy/shuffled `guidance pose` 的差，不计算 clean semantic pose 误差。",
+        "- 同一 episode 多次进入同名 skill state 时，point 条件保留 position error 最小的一次；grasp-part 条件保留 total error 最小的一次。跨 episode、task 按有效 skill-state 记录数加权平均。",
+        "- point 条件只报告 `P` (position error, cm)，不定义 orientation/total tracking；grasp-part 报告 `P/O/T`，其中 `total = pos_m / 0.01 + ori_deg / 5`。",
+        "- n0-n4 全部从零重跑，每个 task 使用同一批 36 个 rollout 计算成功率、分步成功率和 tracking。",
         "- point guidance 的 x 轴为位置噪声；grasp-part 的位置噪声相同，同时 n1-n4 分别耦合 2.5/5/10/20 deg orientation noise。",
         "- 噪声档位：point 为 n0=0、n1=3、n2=6、n3=12、n4=24 mm；grasp-part 在相同位置档位上分别叠加 0/2.5/5/10/20 deg。",
-        f"- 完成组数：`{len(overall_rows)}/25`；task-level 数据行：`{len(task_rows)}/75`。",
+        "- shuffled guidance 从同 task clean bank 中按 skill type 优先选择其他 semantic state；图中放在独立窄轴，不作为数值噪声档位。",
+        f"- 当前完成组数：`{len(overall_rows)}`；task-level 数据行：`{len(task_rows)}`。",
         "",
         "## 2. 曲线",
         "",
@@ -827,7 +949,7 @@ def generate_report(
         "",
         "## 3. 端点结果摘要",
         "",
-        "下表比较跨三个 task 加权汇总后的 n0 与 n4；成功率变化单位为百分点，tracking total 越低越好。",
+        "下表比较跨三个 task 加权汇总后的 n0 与 n4；point 使用 position tracking，grasp-part 使用 total tracking。",
         "",
         _markdown_table(
             endpoint_rows,
@@ -836,8 +958,9 @@ def generate_report(
                 ("n0_success", "n0 Success"),
                 ("n4_success", "n4 Success"),
                 ("success_delta", "Success Delta"),
-                ("n0_tracking", "n0 Track Total"),
-                ("n4_tracking", "n4 Track Total"),
+                ("tracking_metric", "Tracking Metric"),
+                ("n0_tracking", "n0 Tracking"),
+                ("n4_tracking", "n4 Tracking"),
                 ("tracking_delta", "Tracking Delta"),
             ],
         ),
@@ -845,7 +968,7 @@ def generate_report(
         *_interpretation_lines(overall_rows, task_rows),
         "## 4. Table 1: Task Overall",
         "",
-        "每个 task 大列内按 n0 -> n4 给出 `SR` 和 `P/O/T`；括号内 `n` 是 tracking 有效 skill-state 数。",
+        "每个 task 大列内给出 `SR` 和适用 tracking 指标；GP 只显示 `P`，grasp-part 显示 `P/O/T`。括号内 `n` 是 tracking 有效 skill-state 数。",
         "",
         _task_overall_table(task_rows),
         "",
@@ -877,7 +1000,7 @@ def generate_report(
         "",
         "## 6. Skill Average 表",
         "",
-        "跨三个 task 汇总同类 skill（push/pick/place/insert/screw）；每格仍为 `SR` 与 `P/O/T`。",
+        "跨三个 task 汇总同类 skill（push/pick/place/insert/screw）；point 每格为 `SR/P`，grasp-part 为 `SR/P/O/T`。",
         "",
         _matrix_table(
             skill_type_rows,

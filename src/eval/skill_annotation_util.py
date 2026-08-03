@@ -832,6 +832,8 @@ class SkillAnnotator:
         guidance_point, guidance_pose, noise_info = apply_annotation_noise(
             guidance_point=guidance_point,
             guidance_pose=guidance_pose,
+            task=self.furniture_name,
+            skill_state=skill_state_label,
             skill=skill,
             phase_key=phase_key,
             state=self.noise_state,
