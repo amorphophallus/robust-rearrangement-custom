@@ -20,18 +20,13 @@ from src.eval.annotation_noise import (
     AnnotationNoisePhaseState,
     apply_annotation_noise,
 )
+from src.common.image_annotations import (
+    draw_grasp_annotation_on_image,
+    draw_guidance_point_on_image,
+)
 
 
 VALID_SKILLS = {"pick", "place", "insert", "screw", "push"}
-GUIDANCE_POINT_COLOR_MAP = {
-    "pick": (0, 255, 255),    # Yellow in BGR
-    "screw": (0, 255, 255),   # Yellow in BGR
-    "place": (255, 0, 0),     # Red in BGR (original)
-    "push": (255, 0, 0),      # Red in BGR (original)
-    "insert": (255, 0, 0),    # Red in BGR (original)
-}
-GRASP_COLOR_GROUP_A = {"pick", "screw"}
-GRASP_COLOR_GROUP_B = {"place", "push", "insert"}
 OUTPUT_HEIGHT = 240
 OUTPUT_WIDTH = 320
 DEFAULT_GRASP_WIDTH_M = 0.05
@@ -1084,102 +1079,3 @@ def draw_skill_on_image(image: np.ndarray, skill: str) -> np.ndarray:
         cv2.LINE_AA,
     )
     return annotated
-
-
-def draw_guidance_point_on_image(
-    image: np.ndarray,
-    guidance_point_2d,
-    skill: Optional[str] = None,
-    use_skill_color: bool = False,
-) -> np.ndarray:
-    if guidance_point_2d is None:
-        return image
-
-    uv = _to_numpy(guidance_point_2d).astype(np.int32)
-    annotated = image.copy()
-    if use_skill_color and skill and skill in GUIDANCE_POINT_COLOR_MAP:
-        point_color = GUIDANCE_POINT_COLOR_MAP[skill]
-    else:
-        point_color = (255, 0, 0)
-
-    def _draw_point(frame: np.ndarray, center: tuple[int, int]) -> np.ndarray:
-        overlay = frame.copy()
-        cv2.circle(
-            overlay,
-            center,
-            2,
-            point_color,
-            thickness=-1,
-            lineType=cv2.LINE_AA,
-        )
-        return cv2.addWeighted(overlay, 0.5, frame, 0.5, 0.0)
-
-    if annotated.ndim == 4:
-        if annotated.shape[0] != 1:
-            return annotated
-        frame = annotated[0]
-        height, width = frame.shape[:2]
-        center = (int(uv[0]), int(uv[1]))
-        if center[0] < 0 or center[0] >= width or center[1] < 0 or center[1] >= height:
-            return annotated
-        annotated[0] = _draw_point(frame, center)
-        return annotated
-
-    height, width = annotated.shape[:2]
-    center = (int(uv[0]), int(uv[1]))
-    if center[0] < 0 or center[0] >= width or center[1] < 0 or center[1] >= height:
-        return annotated
-    return _draw_point(annotated, center)
-
-
-def draw_grasp_annotation_on_image(
-    image: np.ndarray,
-    grasp_annotation_2d,
-    skill: Optional[str] = None,
-    use_skill_color: bool = False,
-) -> np.ndarray:
-    if not grasp_annotation_2d or grasp_annotation_2d.get("style") != "grasp_rect":
-        return image
-
-    corners = _to_numpy(grasp_annotation_2d.get("corners"))
-    center = _to_numpy(grasp_annotation_2d.get("center"))
-    if corners is None or center is None or corners.shape != (4, 2):
-        return image
-
-    # Default palette: stable geometry-centric colors.
-    main_a_color = (255, 0, 0)    # pure blue in BGR
-    main_b_color = (0, 0, 255)    # pure red in BGR
-    side_a_color = (0, 255, 255)  # yellow in BGR
-    side_b_color = (0, 255, 0)    # green in BGR
-    if use_skill_color and skill in GRASP_COLOR_GROUP_A:
-        # Pick/screw family.
-        main_a_color = (255, 0, 0)    # blue
-        main_b_color = (0, 255, 0)    # green
-        side_a_color = (0, 0, 255)    # red
-        side_b_color = (255, 255, 0)  # cyan
-    elif use_skill_color and skill in GRASP_COLOR_GROUP_B:
-        # Place/push/insert family.
-        main_a_color = (255, 0, 0)    # blue
-        main_b_color = (0, 0, 255)    # red
-        side_a_color = (0, 255, 0)    # green
-        side_b_color = (0, 255, 255)  # yellow
-    pts = np.round(corners).astype(np.int32)
-    center = np.round(center).astype(np.int32)
-
-    def _draw_rect(frame: np.ndarray) -> np.ndarray:
-        overlay = frame.copy()
-        cv2.line(overlay, tuple(pts[0]), tuple(pts[1]), main_a_color, 2, cv2.LINE_AA)
-        cv2.line(overlay, tuple(pts[2]), tuple(pts[3]), main_b_color, 2, cv2.LINE_AA)
-        cv2.line(overlay, tuple(pts[1]), tuple(pts[2]), side_b_color, 1, cv2.LINE_AA)
-        cv2.line(overlay, tuple(pts[3]), tuple(pts[0]), side_a_color, 1, cv2.LINE_AA)
-        cv2.circle(overlay, tuple(center), 2, (255, 255, 255), thickness=-1, lineType=cv2.LINE_AA)
-        return overlay
-
-    if image.ndim == 4:
-        if image.shape[0] != 1:
-            return image
-        annotated = image.copy()
-        annotated[0] = _draw_rect(annotated[0])
-        return annotated
-
-    return _draw_rect(image.copy())

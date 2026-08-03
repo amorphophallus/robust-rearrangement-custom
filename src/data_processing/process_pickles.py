@@ -23,6 +23,7 @@ from src.common.geometry import (
 )
 from src.data_processing.utils import resize, resize_crop
 from src.data_processing.utils import clip_quat_xyzw_magnitude
+from src.data_processing.offline_image_annotations import annotate_observation_image
 
 from ipdb import set_trace as bp  # noqa
 
@@ -117,6 +118,21 @@ def ensure_float32(array: np.ndarray) -> np.ndarray:
     if np.issubdtype(array.dtype, np.floating):
         return array.astype(np.float32, copy=False)
     return array
+
+
+def pickle_source_identity(pickle_path: Path) -> str:
+    """Return the legacy raw-relative identity, or an absolute external path."""
+    pickle_path = Path(pickle_path).expanduser()
+    try:
+        resolved_path = pickle_path.resolve()
+    except OSError:
+        resolved_path = pickle_path.absolute()
+
+    for candidate in (resolved_path, pickle_path):
+        if "raw" in candidate.parts:
+            raw_index = candidate.parts.index("raw")
+            return "/".join(candidate.parts[raw_index + 1 :])
+    return str(resolved_path)
 
 
 def update_normalizer_stats(stats, key: str, values: np.ndarray):
@@ -224,6 +240,7 @@ def process_pickle_file(
     noop_threshold: float,
     calculate_pos_action_from_delta: bool = False,
     resize_image: bool = False,
+    image_annotation_mode: str = "none",
 ):
     """
     Process a single pickle file and return processed data.
@@ -247,6 +264,12 @@ def process_pickle_file(
         raise ValueError(
             f"Observations and actions have different lengths: {len(obs)} vs {len(action_delta_quat)}"
         )
+
+    if image_annotation_mode != "none":
+        obs = [
+            annotate_observation_image(observation, image_annotation_mode)
+            for observation in obs
+        ]
 
     # Extract the observations from the pickle file and convert to 6D rotation
     color_image1 = np.array([o["color_image1"] for o in obs], dtype=np.uint8)
@@ -372,8 +395,7 @@ def process_pickle_file(
         action_delta_6d
     ), f"Reward mismatch in {pickle_path}, lengths differ by {len(reward) - len(action_delta_6d)}"
 
-    # Extract the pickle file name as the path after `raw` in the path
-    pickle_file = "/".join(pickle_path.parts[pickle_path.parts.index("raw") + 1 :])
+    pickle_file = pickle_source_identity(pickle_path)
 
     task = data.get("task", data.get("furniture"))
 

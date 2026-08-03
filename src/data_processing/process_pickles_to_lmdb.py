@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import random
 import re
@@ -24,6 +25,7 @@ from src.data_processing.process_pickles import (
     process_pickle_file,
     serialize_normalizer_stats,
 )
+from src.data_processing.offline_image_annotations import IMAGE_ANNOTATION_MODES
 from src.dataset.lmdb import (
     EPISODE_INDEX_KEY,
     LMDB_FORMAT_VERSION,
@@ -419,7 +421,13 @@ def gather_pickle_paths(args, task_episode_limits: Dict[str, int]) -> List[Path]
     return selected_paths
 
 
-def process_batch(batch_paths, noop_threshold, n_cpus, resize_image):
+def process_batch(
+    batch_paths,
+    noop_threshold,
+    n_cpus,
+    resize_image,
+    image_annotation_mode,
+):
     if n_cpus <= 1:
         return [
             process_pickle_file(
@@ -427,6 +435,7 @@ def process_batch(batch_paths, noop_threshold, n_cpus, resize_image):
                 noop_threshold=noop_threshold,
                 calculate_pos_action_from_delta=True,
                 resize_image=resize_image,
+                image_annotation_mode=image_annotation_mode,
             )
             for path in batch_paths
         ]
@@ -439,6 +448,7 @@ def process_batch(batch_paths, noop_threshold, n_cpus, resize_image):
                     noop_threshold=noop_threshold,
                     calculate_pos_action_from_delta=True,
                     resize_image=resize_image,
+                    image_annotation_mode=image_annotation_mode,
                 ),
                 batch_paths,
             )
@@ -533,6 +543,18 @@ def main():
         help="Resize images to standard dimensions (240x320x3).",
     )
     parser.add_argument(
+        "--image-annotation-mode",
+        choices=IMAGE_ANNOTATION_MODES,
+        default="none",
+        help="Deterministically render saved 2D metadata onto color_image2 before LMDB encoding.",
+    )
+    parser.add_argument(
+        "--provenance-json",
+        type=Path,
+        default=None,
+        help="Optional JSON object recorded verbatim in LMDB metadata.",
+    )
+    parser.add_argument(
         "--input-dir",
         type=str,
         help="Path to the directory containing pkl files",
@@ -557,6 +579,13 @@ def main():
         help="Print detailed LMDB payload estimates for image and low-dimensional data.",
     )
     args = parser.parse_args()
+
+    provenance = {}
+    if args.provenance_json is not None:
+        provenance_path = args.provenance_json.expanduser().resolve()
+        provenance = json.loads(provenance_path.read_text())
+        if not isinstance(provenance, dict):
+            raise ValueError("--provenance-json must contain a JSON object.")
 
     assert not args.randomize_order or args.offset == 0, "Cannot offset with randomize"
     if args.offset < 0:
@@ -654,6 +683,7 @@ def main():
             noop_threshold=noop_threshold,
             n_cpus=n_cpus,
             resize_image=args.resize_image,
+            image_annotation_mode=args.image_annotation_mode,
         )
         batch_image_bytes = 0
         batch_lowdim_bytes = 0
@@ -778,6 +808,8 @@ def main():
         "suffix": args.suffix,
         "output_suffix": args.output_suffix,
         "storage_format": "lmdb",
+        "image_annotation_mode": args.image_annotation_mode,
+        "provenance": provenance,
         "normalizer_stats": serialized_normalizer_stats,
         "normalizer_stats_keys": list(NORMALIZER_STATS_KEYS),
     }
