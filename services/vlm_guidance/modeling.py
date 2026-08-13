@@ -33,6 +33,10 @@ class FurniturePolicyModel(PreTrainedModel):
 
     base_model_prefix = "backbone"
     _keys_to_ignore_on_load_unexpected = [r"lm_head.weight"]
+    # The wrapper delegates attention to an already-created Qwen3.5 backbone.
+    # Mirror the backbone capability so Transformers does not reject SDPA while
+    # initializing this lightweight policy-head container.
+    _supports_sdpa = True
     _supports_flash_attn = True
     _supports_flash_attn_2 = True
 

@@ -89,6 +89,7 @@ zhouhangzhu/hy_furniture:
 ```text
 Python 3.11
 PyTorch 2.5.1 + CUDA 12.4
+torchvision 0.20.1 + CUDA 12.4
 transformers 5.5.4
 attention backend: sdpa
 ```
@@ -163,6 +164,7 @@ env PYTHONNOUSERSITE=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \
   "$VLM_ENV/bin/python" -m pip install \
   --prefix="$VLM_ENV" \
   torch==2.5.1 \
+  torchvision==0.20.1 \
   --index-url https://download.pytorch.org/whl/cu124
 ```
 
@@ -182,9 +184,11 @@ env PYTHONNOUSERSITE=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \
 env PYTHONNOUSERSITE=1 "$VLM_ENV/bin/python" - <<'PY'
 import fastapi
 import torch
+import torchvision
 import transformers
 
 print("torch:", torch.__version__, "CUDA runtime:", torch.version.cuda)
+print("torchvision:", torchvision.__version__)
 print("transformers:", transformers.__version__)
 print("fastapi:", fastapi.__version__)
 print("torch file:", torch.__file__)
@@ -528,6 +532,12 @@ PY
 ```
 
 本机应显示 PyTorch `2.5.1`、CUDA runtime `12.4`、CUDA 可用和 RTX 4090。
+
+### `Qwen3VLVideoProcessor requires the Torchvision library`
+
+Qwen3.5 processor 初始化时也会注册视频处理器；即使本服务只发送图片，环境中仍必须
+安装与 PyTorch/CUDA 匹配的 `torchvision 0.20.1+cu124`。重新执行第 5.1 节安装命令，
+再用第 5.1 节的 import 检查确认版本。
 
 ### strict load 报 key mismatch
 
