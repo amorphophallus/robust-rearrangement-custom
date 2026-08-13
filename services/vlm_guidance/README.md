@@ -403,7 +403,11 @@ curl --fail --show-error \
 
 ```bash
 export VLM_GUIDANCE_URL=http://10.71.106.240:8000
-export VLM_API_TOKEN='<从 server.env 复制 VLM_API_TOKEN 的值>'
+export VLM_API_TOKEN="$(
+  sed -n 's/^VLM_API_TOKEN=//p' \
+    /mnt/nas/share/home/hy/vlm-guidance/server.env
+)"
+test -n "$VLM_API_TOKEN"
 
 curl --fail --show-error \
   -H "Authorization: Bearer $VLM_API_TOKEN" \
@@ -433,7 +437,10 @@ SSH tunnel、VPN 或 HTTPS reverse proxy。
 cd /data/hy/robust-rearrangement
 
 export VLM_GUIDANCE_URL=http://10.71.106.240:8000
-export VLM_API_TOKEN='<与服务器一致的 Token>'
+export VLM_API_TOKEN="$(
+  sed -n 's/^VLM_API_TOKEN=//p' \
+    /mnt/nas/share/home/hy/vlm-guidance/server.env
+)"
 
 python -m src.eval.evaluate_model \
   <保留原有 checkpoint、task、n-envs、n-rollouts 等参数> \
