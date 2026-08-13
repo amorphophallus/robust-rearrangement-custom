@@ -1,338 +1,374 @@
-# HY Furniture VLM 服务端部署手册
+# HY Furniture VLM 服务端部署手册（4090 + NAS Conda）
 
-本文档用于把 `zhouhangzhu/hy_furniture` 部署到一台 NVIDIA RTX 4090
-服务器，并向运行 diffusion policy 的本地机器提供 HTTP 推理接口。
+本文档对应当前实际部署环境：
 
-推荐方案是：服务代码继续放在 `robust-rearrangement` 仓库中，但使用独立
-Docker 镜像运行。这样服务端和客户端共享 prompt、相机坐标约定和接口版本，
-同时不会污染本地 diffusion policy 的 Python 环境。
+- 推理服务器：`zju_4090_240`；
+- 推理 GPU：物理 GPU0，NVIDIA RTX 4090 24 GB；
+- NVIDIA Driver：`550.120`；
+- Python 环境：NAS 上独立 Conda prefix；
+- 服务框架：Transformers + PyTorch + FastAPI，单进程、单 GPU；
+- 客户端：当前 3060 机器上的 `evaluate_model.py`；
+- 协议：内网 HTTP + Bearer Token。
 
-## 1. 为什么不用 vLLM
+下面每一步都可以直接复制执行。没有特别说明时，“服务器命令”均在
+`zju_4090_240` 上执行，“本地命令”均在运行 diffusion policy 的 3060 机器执行。
 
-这个 checkpoint 不是标准文本生成模型。训练代码删除了 Qwen 的 LM head，新增了：
-
-- 五分类 skill head：`push/pick/place/insert/screw`；
-- 二维 point regression head：输出 Qwen `[0, 1000]` 坐标，随后转换到
-  front camera 的 `320x240` 像素坐标。
-
-推理需要取最后一个有效 token 的 hidden state，再调用这两个自定义 head。
-vLLM 的标准生成/OpenAI 接口不会执行这里的 `FurniturePolicyModel.forward`，
-因此不能直接加载和部署这个 checkpoint。
-
-本服务按照模型仓库里的 `visualize_inference.py` 实现：
-
-1. Transformers 加载原始 `Qwen3.5-2B`；
-2. 丢弃 LM head，挂载自定义 skill/point heads；
-3. 使用 `strict=True` 加载 `hy_furniture/ckpt/model.safetensors`；
-4. FastAPI 对外提供结构化预测接口。
-
-整体调用链如下：
+## 1. 最终架构
 
 ```text
-本地 evaluate_model.py
-  -> VLMGuidanceClient
-  -> HTTP POST /v1/guidance/predict
-  -> 4090 服务器上的 FastAPI
-  -> Transformers + FurniturePolicyModel
-  -> skill + point_px
-  -> 本地 diffusion policy
+3060 本地机器
+  evaluate_model.py
+    ├─ 本地自动机：只生成 shadow GT，不参与 VLM 模式下的 policy 控制
+    ├─ VLMGuidanceClient
+    └─ diffusion policy
+             │
+             │ HTTP multipart，front/wrist RGB + state_info.base
+             ▼
+zju_4090_240:8000
+  FastAPI /v1/guidance/predict
+    └─ FurniturePolicyModel
+         ├─ Qwen3.5-2B backbone
+         ├─ 5 类 skill head
+         └─ 2-D point regression head
 ```
 
-## 2. 部署前提
+VLM 返回：
 
-下面命令默认服务器使用 Linux，并约定：
+- `skill`：`push/pick/place/insert/screw`；
+- `point_1000`：Qwen `[0,1000]` 坐标；
+- `point_px`：front camera 的 `320x240` 像素坐标；
+- skill 概率、模型 revision 和服务端耗时。
+
+## 2. 为什么不直接使用 vLLM
+
+这个 checkpoint 不是标准的自回归文本生成 checkpoint。训练代码丢弃了 Qwen 的
+language-model head，新增了一个五分类 head 和一个二维回归 head。推理时必须取得最后
+一个有效 token 的 hidden state，再执行这两个自定义 head。
+
+vLLM 的标准生成接口或 OpenAI-compatible API 不会自动执行项目里的
+`FurniturePolicyModel.forward`，也不能把二维回归结果作为标准生成结果返回。即使底层
+vLLM 支持 Qwen3.5 backbone，直接指向这个 checkpoint 仍会遇到输出 head 和 state-dict
+不匹配。因此当前可靠方案是按照模型仓库的 `visualize_inference.py`，用 Transformers
+重建 backbone + heads，并用 `strict=True` 加载 checkpoint。
+
+不要通过 `strict=False`、补一个临时 LM head 或把 point 转成文本来绕开，这些做法会
+改变模型语义或隐藏 checkpoint 不匹配。
+
+## 3. 本次部署使用的固定路径和版本
+
+登录服务器：
 
 ```bash
-export RR_REPO=/data/hy/robust-rearrangement
-export VLM_ROOT=/data/hy/models/hy_furniture
+ssh zju_4090_240
 ```
 
-如果服务器目录不同，只需要修改这两个变量。后续命令都不要使用本地机器的路径。
-
-先确认 GPU、Docker 和 NVIDIA Container Toolkit 可用：
+设置本次部署变量：
 
 ```bash
-nvidia-smi
-docker --version
-docker info | sed -n '/Runtimes/,+3p'
+export RR_REPO=/mnt/nas/share/home/hy/robust-rearrangement-custom
+export VLM_ENV=/mnt/nas/share/home/hy/miniconda3/envs/rr-vlm-guidance-runtime
+export VLM_ROOT=/mnt/nas/share/home/hy/vlm-guidance
+export VLM_BASE_MODEL_DIR="$VLM_ROOT/Qwen3.5-2B"
+export VLM_CHECKPOINT_DIR=/mnt/nas/share/home/hy/zhouhangzhu--hy_furniture/snapshots/master/ckpt
+export VLM_MANIFEST_PATH="$VLM_ROOT/manifest.json"
+export VLM_SERVER_ENV_FILE="$VLM_ROOT/server.env"
 ```
 
-`nvidia-smi` 应该能看到 RTX 4090。Docker runtime 信息中应出现
-`nvidia`。如果 `docker` 无权限，需要让管理员把当前用户加入 Docker 用户组，
-或者在所有 Docker 命令前加 `sudo`。
+固定 revision：
 
-服务器还需要有足够空间存放：
+```text
+Qwen/Qwen3.5-2B:
+c00cc5fd7803c60b7788e053dcce33d0d26b11ef
 
-- Qwen3.5-2B 原始权重；
-- HY Furniture 完整 checkpoint；
-- PyTorch CUDA Docker 镜像；
-- 构建后的服务镜像。
+zhouhangzhu/hy_furniture:
+933f15ce0ed0bc7108ec1f42074bf94d985a4cbf
+```
 
-建议至少预留 35 GB。
+服务器驱动 `550.120` 不适合 CUDA 12.8，所以本机实际使用：
 
-## 3. 把本项目同步到服务器
+```text
+Python 3.11
+PyTorch 2.5.1 + CUDA 12.4
+transformers 5.5.4
+attention backend: sdpa
+```
 
-服务端必须使用包含 `services/vlm_guidance` 的这个版本。可以在服务器重新 clone，
-也可以通过已有代码同步流程把当前工作区传过去。
+Transformers 5.x 支持 PyTorch 2.4+。checkpoint 作者提供的 Conv3d workaround 只会在
+PyTorch 2.9 上启用；PyTorch 2.5.1 使用原生 Conv3d，不走该 patch。
 
-如果服务器能够访问项目的 GitHub origin，并且这些改动已经 push，可以执行：
+## 4. 同步服务代码
+
+仓库已经存在时：
 
 ```bash
-mkdir -p /data/hy
-git clone git@github.com:amorphophallus/robust-rearrangement-custom.git \
-  "$RR_REPO"
 cd "$RR_REPO"
 git checkout main
 git pull --ff-only origin main
 ```
 
-如果仓库已经存在，只执行最后三条。若改动还没有 push，则先从本地同步当前工作区；
-不要在服务器使用一个尚未包含 `services/vlm_guidance` 的旧 commit。
+第一次部署时：
 
-完成后确认：
+```bash
+mkdir -p /mnt/nas/share/home/hy
+git clone git@github.com:amorphophallus/robust-rearrangement-custom.git "$RR_REPO"
+cd "$RR_REPO"
+git checkout main
+```
+
+确认服务文件齐全：
 
 ```bash
 cd "$RR_REPO"
-test -f services/vlm_guidance/Dockerfile
 test -f services/vlm_guidance/app.py
-test -f src/vlm_data_generator.py
+test -f services/vlm_guidance/engine.py
+test -f services/vlm_guidance/modeling.py
+test -x services/vlm_guidance/conda_server.sh
 ```
 
-三条命令都没有输出即表示文件存在。
+四条命令都没有输出即表示通过。
 
-## 4. 下载并固定模型
+## 5. 创建 NAS Conda 环境
 
-### 4.1 创建下载工具环境
+不要修改已有 `rr` 或 `track` 环境。本次已经准备好的独立 prefix 是
+`$VLM_ENV`；下面的创建命令只在该目录尚不存在时执行：
 
-模型只需要下载一次。建议使用单独 venv：
+```bash
+/mnt/nas/share/home/hy/miniconda3/bin/conda create -y \
+  --override-channels \
+  -c conda-forge \
+  -p "$VLM_ENV" \
+  python=3.11 \
+  pip
+```
+
+这里显式使用 `conda-forge`，不会要求代替用户接受 Anaconda defaults channel 的 ToS，
+也不会改写全局 Conda channel 配置。
+
+确认 Python：
+
+```bash
+"$VLM_ENV/bin/python" --version
+```
+
+预期是 Python 3.11.x。
+
+### 5.1 安装与驱动兼容的 PyTorch
+
+NAS ACL 在部分服务器上可能让 `os.access()` 误报不可写，pip 随后会打印
+`Defaulting to user installation` 并污染 `~/.local`。因此下面始终显式设置
+`--prefix` 和 `PYTHONNOUSERSITE=1`：
+
+```bash
+env PYTHONNOUSERSITE=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \
+  "$VLM_ENV/bin/python" -m pip install \
+  --prefix="$VLM_ENV" \
+  torch==2.5.1 \
+  --index-url https://download.pytorch.org/whl/cu124
+```
+
+安装服务依赖和 ModelScope 下载工具：
+
+```bash
+env PYTHONNOUSERSITE=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \
+  "$VLM_ENV/bin/python" -m pip install \
+  --prefix="$VLM_ENV" \
+  -r "$RR_REPO/services/vlm_guidance/requirements.txt" \
+  modelscope-hub
+```
+
+检查所有包确实来自该环境：
+
+```bash
+env PYTHONNOUSERSITE=1 "$VLM_ENV/bin/python" - <<'PY'
+import fastapi
+import torch
+import transformers
+
+print("torch:", torch.__version__, "CUDA runtime:", torch.version.cuda)
+print("transformers:", transformers.__version__)
+print("fastapi:", fastapi.__version__)
+print("torch file:", torch.__file__)
+PY
+```
+
+`torch file` 必须位于 `$VLM_ENV` 下，不能位于 `/home/hy/.local`。
+
+## 6. 下载 base model 和 checkpoint
+
+创建模型目录：
 
 ```bash
 mkdir -p "$VLM_ROOT"
-python3 -m venv "$VLM_ROOT/download-env"
-source "$VLM_ROOT/download-env/bin/activate"
-python -m pip install --upgrade pip
-python -m pip install modelscope-hub Pillow
 ```
 
-### 4.2 下载 HY Furniture checkpoint
-
-固定使用下面的 checkpoint commit：
-
-```text
-933f15ce0ed0bc7108ec1f42074bf94d985a4cbf
-```
-
-下载：
+下载并固定 Qwen3.5-2B：
 
 ```bash
-ms-hub download zhouhangzhu/hy_furniture \
-  --revision 933f15ce0ed0bc7108ec1f42074bf94d985a4cbf \
-  --local-dir "$VLM_ROOT/source"
-```
-
-### 4.3 下载 Qwen3.5-2B base model
-
-当前实现固定到下面的 base model commit：
-
-```text
-c00cc5fd7803c60b7788e053dcce33d0d26b11ef
-```
-
-下载：
-
-```bash
-ms-hub download Qwen/Qwen3.5-2B \
+"$VLM_ENV/bin/ms-hub" download Qwen/Qwen3.5-2B \
   --revision c00cc5fd7803c60b7788e053dcce33d0d26b11ef \
-  --local-dir "$VLM_ROOT/base_model"
+  --local-dir "$VLM_BASE_MODEL_DIR"
 ```
 
-如果 ModelScope 命令出现超时，可以重新执行同一条命令；下载器会复用已完成文件。
+下载器支持断点续传。超时时重新执行同一条命令即可。
 
-### 4.4 检查目录
-
-执行：
-
-```bash
-test -f "$VLM_ROOT/source/ckpt/model.safetensors"
-test -f "$VLM_ROOT/source/ckpt/config.json"
-test -f "$VLM_ROOT/source/ckpt/processor_config.json"
-test -f "$VLM_ROOT/source/ckpt/tokenizer.json"
-test -f "$VLM_ROOT/base_model/config.json"
-find "$VLM_ROOT/base_model" -maxdepth 1 -name '*.safetensors' -print
-```
-
-最后一条命令应至少打印一个 base-model 权重文件。预期目录结构是：
+本次服务器已经有 HY Furniture checkpoint：
 
 ```text
-/data/hy/models/hy_furniture/
-├── base_model/
-│   ├── config.json
-│   └── *.safetensors
-└── source/
-    └── ckpt/
-        ├── chat_template.jinja
-        ├── config.json
-        ├── model.safetensors
-        ├── processor_config.json
-        ├── tokenizer.json
-        └── tokenizer_config.json
+/mnt/nas/share/home/hy/zhouhangzhu--hy_furniture/snapshots/master/ckpt
 ```
 
-## 5. 生成模型 manifest
+如果将来需要从零下载，可执行：
 
-manifest 用来防止部署时误用了其他 checkpoint、旧 point head 或被修改的权重。
-生成过程会计算两个模型权重的 SHA256，因此可能需要几分钟。
+```bash
+"$VLM_ENV/bin/ms-hub" download zhouhangzhu/hy_furniture \
+  --revision 933f15ce0ed0bc7108ec1f42074bf94d985a4cbf \
+  --local-dir "$VLM_ROOT/hy_furniture_source"
+
+export VLM_CHECKPOINT_DIR="$VLM_ROOT/hy_furniture_source/ckpt"
+```
+
+检查模型文件：
+
+```bash
+test -f "$VLM_BASE_MODEL_DIR/config.json"
+find "$VLM_BASE_MODEL_DIR" -maxdepth 1 -name '*.safetensors' -print
+
+test -f "$VLM_CHECKPOINT_DIR/config.json"
+test -f "$VLM_CHECKPOINT_DIR/model.safetensors"
+test -f "$VLM_CHECKPOINT_DIR/processor_config.json"
+test -f "$VLM_CHECKPOINT_DIR/tokenizer.json"
+```
+
+base model 的 `find` 至少应打印一个权重文件。
+
+## 7. 生成并校验 manifest
+
+manifest 会固定文件大小和 SHA256，防止误用旧输出头或被修改的权重：
 
 ```bash
 cd "$RR_REPO"
-source "$VLM_ROOT/download-env/bin/activate"
-
-python -m services.vlm_guidance.prepare_manifest \
-  --base-model-dir "$VLM_ROOT/base_model" \
-  --checkpoint-dir "$VLM_ROOT/source/ckpt" \
+env PYTHONNOUSERSITE=1 PYTHONPATH="$RR_REPO" \
+  "$VLM_ENV/bin/python" -m services.vlm_guidance.prepare_manifest \
+  --base-model-dir "$VLM_BASE_MODEL_DIR" \
+  --checkpoint-dir "$VLM_CHECKPOINT_DIR" \
   --base-revision c00cc5fd7803c60b7788e053dcce33d0d26b11ef \
   --checkpoint-revision 933f15ce0ed0bc7108ec1f42074bf94d985a4cbf \
-  --output "$VLM_ROOT/manifest.json"
+  --output "$VLM_MANIFEST_PATH"
 
-test -s "$VLM_ROOT/manifest.json"
+test -s "$VLM_MANIFEST_PATH"
 ```
 
-如果这里报 `unexpected point policy` 或 `unexpected skill order`，说明下载的不是本服务
-支持的新版输出头，不要跳过检查继续部署。
+计算两个大权重文件的 SHA256 需要几分钟。如果出现 `unexpected point policy` 或
+`unexpected skill order`，说明 checkpoint 不是当前新版输出头，必须停止部署。
 
-## 6. 构建 Docker 镜像
+## 8. 创建服务配置和 Token
 
-必须从 `robust-rearrangement` 仓库根目录构建：
+```bash
+mkdir -p "$VLM_ROOT"
+umask 077
+VLM_NEW_TOKEN="$(openssl rand -hex 32)"
+
+{
+  printf '%s\n' \
+    "VLM_BASE_MODEL_DIR=$VLM_BASE_MODEL_DIR" \
+    "VLM_CHECKPOINT_DIR=$VLM_CHECKPOINT_DIR" \
+    "VLM_MANIFEST_PATH=$VLM_MANIFEST_PATH" \
+    'VLM_MODEL_REVISION=933f15ce0ed0bc7108ec1f42074bf94d985a4cbf' \
+    'VLM_DEVICE=cuda:0' \
+    'VLM_ATTENTION_BACKEND=sdpa' \
+    'VLM_MAX_LENGTH=4096' \
+    'VLM_IMAGE_MAX_PIXELS=262144' \
+    'VLM_MAX_MICRO_BATCH_SIZE=4' \
+    "VLM_API_TOKEN=$VLM_NEW_TOKEN"
+} > "$VLM_SERVER_ENV_FILE"
+
+chmod 600 "$VLM_SERVER_ENV_FILE"
+unset VLM_NEW_TOKEN
+```
+
+不要提交 `server.env`，不要把 Token 复制到公开日志或 W&B config。
+
+## 9. 释放占卡程序，然后启动服务
+
+模型加载前必须显式释放 GPU0，不能只依赖自动检测，以免大模型首次分配显存时发生
+竞态 OOM。
+
+在 3060 本地机器执行：
+
+```bash
+cd /data/hy/gpu-snatcher
+./reserve_gpu.sh release --host zju_4090_240 --gpu 0
+./reserve_gpu.sh status --host zju_4090_240 --gpu 0
+```
+
+确认 `process_alive=false` 且 GPU 使用率低于 10%。
+
+回到 `zju_4090_240` 启动服务：
 
 ```bash
 cd "$RR_REPO"
-docker build \
-  -f services/vlm_guidance/Dockerfile \
-  -t rr-vlm-guidance:hy-furniture-933f15ce \
-  .
+export VLM_CONDA_ENV="$VLM_ENV"
+export VLM_SERVER_ENV_FILE="$VLM_SERVER_ENV_FILE"
+export VLM_GPU_ID=0
+
+./services/vlm_guidance/conda_server.sh start
 ```
 
-镜像以 `pytorch/pytorch:2.9.0-cuda12.8-cudnn9-runtime` 为基础，并固定
-`transformers==5.5.4`。第一次构建需要下载较大的 CUDA/PyTorch 镜像。
+脚本会再次检查：
 
-确认镜像存在：
+- GPU0 是否存在；
+- 当前显存占用是否小于 10%；
+- 是否已有任意 CUDA compute PID；
+- 8000 端口是否空闲；
+- Conda Python 和 `server.env` 是否存在；
+- 是否已有同一服务 PID。
+
+任一检查失败都会直接退出，不会抢占或终止别人的进程。
+
+查看模型加载日志：
 
 ```bash
-docker image inspect rr-vlm-guidance:hy-furniture-933f15ce \
-  --format '{{.Id}}'
+./services/vlm_guidance/conda_server.sh logs
 ```
 
-## 7. 创建服务配置和 API Token
+模型启动依次执行 manifest SHA256 校验、base model 加载、checkpoint strict load 和一次
+warmup，可能需要几分钟。
 
-生成一个随机 Token，并写入只允许当前用户读取的环境文件：
+## 10. 检查 readiness
+
+仍在服务器执行：
 
 ```bash
-VLM_TOKEN="$(openssl rand -hex 32)"
-umask 077
+cd "$RR_REPO"
+export VLM_CONDA_ENV="$VLM_ENV"
+export VLM_SERVER_ENV_FILE="$VLM_SERVER_ENV_FILE"
+export VLM_GPU_ID=0
 
-printf '%s\n' \
-  'VLM_BASE_MODEL_DIR=/models/base_model' \
-  'VLM_CHECKPOINT_DIR=/models/source/ckpt' \
-  'VLM_MANIFEST_PATH=/models/manifest.json' \
-  'VLM_MODEL_REVISION=933f15ce0ed0bc7108ec1f42074bf94d985a4cbf' \
-  'VLM_DEVICE=cuda:0' \
-  'VLM_ATTENTION_BACKEND=sdpa' \
-  'VLM_MAX_LENGTH=4096' \
-  'VLM_IMAGE_MAX_PIXELS=262144' \
-  'VLM_MAX_MICRO_BATCH_SIZE=8' \
-  "VLM_API_TOKEN=$VLM_TOKEN" \
-  > "$VLM_ROOT/server.env"
-
-chmod 600 "$VLM_ROOT/server.env"
+./services/vlm_guidance/conda_server.sh status
 ```
 
-不要把 `server.env` 提交到 Git，也不要把 Token 发到公开日志里。本地客户端稍后需要
-使用同一个 Token。
-
-## 8. 启动服务
-
-如果服务器只有这一张 4090，可以直接给容器全部 GPU：
-
-```bash
-docker run -d \
-  --name rr-vlm-guidance \
-  --restart unless-stopped \
-  --gpus all \
-  -p 8000:8000 \
-  --env-file "$VLM_ROOT/server.env" \
-  -v "$VLM_ROOT:/models:ro" \
-  rr-vlm-guidance:hy-furniture-933f15ce
-```
-
-如果服务器有多张 GPU，并且只想使用编号为 0 的 GPU，把 `--gpus all` 替换为：
-
-```bash
---gpus '"device=0"'
-```
-
-服务只允许启动一个 Uvicorn worker。不要通过 `--workers` 启动多个进程，否则每个
-worker 都会复制一份模型到同一张 GPU。
-
-查看启动日志：
-
-```bash
-docker logs -f --tail 100 rr-vlm-guidance
-```
-
-启动过程会依次执行：manifest 校验、base model 加载、checkpoint strict load 和
-一次 warmup。manifest 首次校验和模型加载可能需要几分钟。看到 Uvicorn 开始监听后，
-按 `Ctrl-C` 退出日志跟踪不会停止容器。
-
-查看容器状态和显存：
-
-```bash
-docker ps --filter name=rr-vlm-guidance
-nvidia-smi
-```
-
-## 9. 在服务器本机检查 readiness
-
-从环境文件读取 Token，只用于当前 shell：
-
-```bash
-set -a
-source "$VLM_ROOT/server.env"
-set +a
-
-curl --fail --show-error \
-  -H "Authorization: Bearer $VLM_API_TOKEN" \
-  http://127.0.0.1:8000/health/ready
-```
-
-成功时会返回类似：
+成功时最后一行类似：
 
 ```json
-{
-  "status": "ready",
-  "model_revision": "933f15ce0ed0bc7108ec1f42074bf94d985a4cbf",
-  "policy_version": 2,
-  "device": "cuda:0",
-  "attention_backend": "sdpa"
-}
+{"status":"ready","model_revision":"933f15ce0ed0bc7108ec1f42074bf94d985a4cbf","policy_version":2,"device":"cuda:0","attention_backend":"sdpa"}
 ```
 
-只要不是 `status=ready`，本地评测就不应开始。
+只要不是 `status=ready`，就不要启动本地 rollout。
 
-## 10. 执行一次完整推理 smoke test
+## 11. 完整 HTTP smoke test
 
-先生成两张符合接口尺寸要求的测试图：
+生成两张接口尺寸正确的黑图：
 
 ```bash
-source "$VLM_ROOT/download-env/bin/activate"
-
-python - <<'PY'
+env PYTHONNOUSERSITE=1 "$VLM_ENV/bin/python" - <<'PY'
 from PIL import Image
+
 Image.new("RGB", (320, 240), "black").save("/tmp/vlm-front.png")
 Image.new("RGB", (320, 240), "black").save("/tmp/vlm-wrist.png")
 PY
 ```
 
-创建请求 metadata：
+生成 metadata：
 
 ```bash
 printf '%s' \
@@ -340,9 +376,13 @@ printf '%s' \
   > /tmp/vlm-metadata.json
 ```
 
-请求推理接口：
+加载 Token 并请求：
 
 ```bash
+set -a
+source "$VLM_SERVER_ENV_FILE"
+set +a
+
 curl --fail --show-error \
   -H "Authorization: Bearer $VLM_API_TOKEN" \
   -F 'metadata=</tmp/vlm-metadata.json;type=application/json' \
@@ -351,243 +391,183 @@ curl --fail --show-error \
   http://127.0.0.1:8000/v1/guidance/predict
 ```
 
-成功响应应包含：
+黑图预测没有业务意义；这里只验证双图预处理、GPU forward、自定义 heads 和 HTTP schema。
 
-- `policy_version: 2`；
-- 与 manifest 一致的 `model_revision`；
-- `predictions[0].skill`；
-- `predictions[0].skill_probabilities`；
-- `predictions[0].point_1000`；
-- `predictions[0].point_px`；
-- `timing_ms`。
+## 12. 从 3060 本地机器访问
 
-黑图预测本身没有业务意义，这一步只验证完整的图片预处理、GPU forward 和自定义输出
-head 都能工作。
-
-## 11. 允许本地机器访问
-
-查询服务器局域网 IP：
+服务器地址是 `10.71.106.240`。在 3060 本地机器执行：
 
 ```bash
-hostname -I
-```
-
-假设服务器 IP 是 `192.168.1.20`，在运行 diffusion policy 的本地机器执行：
-
-```bash
-export VLM_GUIDANCE_URL=http://192.168.1.20:8000
-export VLM_API_TOKEN='<复制服务器 server.env 中的 VLM_API_TOKEN>'
+export VLM_GUIDANCE_URL=http://10.71.106.240:8000
+export VLM_API_TOKEN='<从 server.env 复制 VLM_API_TOKEN 的值>'
 
 curl --fail --show-error \
   -H "Authorization: Bearer $VLM_API_TOKEN" \
   "$VLM_GUIDANCE_URL/health/ready"
 ```
 
-如果服务器本机可以访问但本地机器不行，需要检查服务器防火墙、云安全组或机房网络
-ACL 是否允许本地机器访问 TCP 8000。只应允许可信内网来源，不建议把 8000 端口直接
-暴露到公网。
+如果服务器本机 readiness 正常而本地失败，检查服务器防火墙或机房 ACL 是否允许 3060
+机器访问 TCP 8000。当前是内网 HTTP；不要把 8000 直接暴露到公网。跨不可信网络应使用
+SSH tunnel、VPN 或 HTTPS reverse proxy。
 
-当前接口使用 HTTP。跨不可信网络时，应在前面增加 HTTPS reverse proxy 或使用 VPN/
-SSH 隧道；Bearer Token 本身不能加密传输内容。
+## 13. 运行 VLM + diffusion policy
 
-## 12. 本地运行 VLM + diffusion policy
+本地评测环境只需要原有依赖、`requests` 和 `Pillow`，不需要安装服务端 Transformers。
 
-本地机器不需要安装服务端的 Transformers 环境，只需要当前项目原有评测环境以及
-`requests`、`Pillow`。
-
-在原有 `evaluate_model.py` 命令后增加：
+在原有评测命令后增加：
 
 ```bash
 --annotation-source vlm \
---vlm-timeout-seconds 10 \
+--vlm-base-url "$VLM_GUIDANCE_URL" \
+--vlm-timeout-seconds 30 \
 --vlm-query-interval 0
 ```
 
-完整形式示意：
+示例骨架：
 
 ```bash
 cd /data/hy/robust-rearrangement
 
-export VLM_GUIDANCE_URL=http://192.168.1.20:8000
-export VLM_API_TOKEN='<服务器生成的 Token>'
+export VLM_GUIDANCE_URL=http://10.71.106.240:8000
+export VLM_API_TOKEN='<与服务器一致的 Token>'
 
 python -m src.eval.evaluate_model \
-  <原有 checkpoint、task、rollout 参数> \
+  <保留原有 checkpoint、task、n-envs、n-rollouts 等参数> \
   --annotation-source vlm \
-  --vlm-timeout-seconds 10 \
+  --vlm-base-url "$VLM_GUIDANCE_URL" \
+  --vlm-timeout-seconds 30 \
   --vlm-query-interval 0
 ```
 
-参数含义：
+参数说明：
 
-- `--vlm-query-interval 0`：自动使用 `actor.action_horizon` 作为查询间隔；
-- 设置为正整数：每隔固定数量的 environment steps 请求一次 VLM，中间复用缓存；
-- `--vlm-timeout-seconds`：单次 HTTP 请求超时，多环境大 batch 时可提高到 30；
-- API、schema、policy version 或模型 revision 不匹配时直接停止 rollout，不会偷偷回退
-  到自动机。
+- `--vlm-query-interval 0`：使用 `actor.action_horizon` 作为查询间隔；
+- 正整数：每隔指定 environment steps 查询一次，中间复用缓存；
+- 多环境 batch 或 NAS/网络抖动时，timeout 建议先用 30 秒；
+- API、policy version、revision 或响应 schema 不匹配时会停止 rollout，不会静默回退自动机。
 
-VLM 模式下，diffusion policy 实际使用 VLM 给出的 skill 和 2D point。自动机只作为
-shadow GT 同步运行，用来计算：
+VLM 模式下：
 
-- 所有实际控制 step 的平均像素误差和 RMSE；
-- 按 oracle skill 分组的 step-average 像素误差；
-- success-only 和 failure-only 的同类指标；
-- 无效/出画 GT 数量和 coverage。
+- policy 使用 VLM 的 `skill + point_px`；
+- 自动机同步运行，只产生 oracle/shadow GT；
+- 每个实际控制 step 计算 VLM point 与 oracle point 的欧氏像素距离；
+- 同一 VLM query 在 action horizon 内复用时，每个控制 step 都会计入 step-average；
+- 输出 overall 和按 oracle skill 分组的 mean/RMSE/coverage；
+- 同时输出 success-only 与 failure-only 统计；
+- rollout pickle 保存逐 step 的 VLM point、oracle point、误差、query step 和 cache age。
 
-这些聚合结果会写入 console、evaluation JSON 和 W&B。保存 rollout 时，每帧还会保留
-VLM prediction、oracle skill/point、cache age 和 point error，方便定位失败案例。
+聚合 JSON/W&B 中的主字段是：
 
-## 13. 常用运维命令
+```text
+vlm_point_error/all/overall/mean_error_px
+vlm_point_error/all/overall/rmse_px
+vlm_point_error/all/by_skill/<skill>/mean_error_px
+vlm_point_error/success_only/...
+vlm_point_error/failure_only/...
+```
+
+这里的 `mean_error_px` 就是要求的 step-average 打点误差；
+`by_skill/<skill>/mean_error_px` 是 each-skill step-average 打点误差。
+
+## 14. 日常运维
+
+在 `zju_4090_240`：
 
 ```bash
-# 查看日志
-docker logs --tail 200 rr-vlm-guidance
+cd /mnt/nas/share/home/hy/robust-rearrangement-custom
+
+export VLM_CONDA_ENV=/mnt/nas/share/home/hy/miniconda3/envs/rr-vlm-guidance-runtime
+export VLM_SERVER_ENV_FILE=/mnt/nas/share/home/hy/vlm-guidance/server.env
+export VLM_GPU_ID=0
+
+# 状态 + readiness
+./services/vlm_guidance/conda_server.sh status
+
+# 最近 200 行日志
+./services/vlm_guidance/conda_server.sh logs
 
 # 持续查看日志
-docker logs -f rr-vlm-guidance
+tail -f /home/hy/.cache/rr-vlm-guidance/server.log
 
-# 重启服务
-docker restart rr-vlm-guidance
+# 安全停止；只发送 SIGTERM，不发送 SIGKILL
+./services/vlm_guidance/conda_server.sh stop
 
-# 停止服务
-docker stop rr-vlm-guidance
-
-# 再次启动
-docker start rr-vlm-guidance
-
-# 查看容器状态
-docker inspect rr-vlm-guidance --format '{{.State.Status}}'
+# 重启前仍会重新执行 GPU <10% 和 compute PID 检查
+./services/vlm_guidance/conda_server.sh restart
 ```
 
-更新服务代码后，需要重新 build 镜像并重建容器：
+服务必须保持一个 Uvicorn worker。不要增加 `--workers`，否则每个 worker 都会复制模型。
 
-```bash
-cd "$RR_REPO"
-docker build \
-  -f services/vlm_guidance/Dockerfile \
-  -t rr-vlm-guidance:hy-furniture-933f15ce \
-  .
+## 15. 常见故障
 
-docker stop rr-vlm-guidance
-docker rm rr-vlm-guidance
+### pip 打印 `Defaulting to user installation`
+
+说明没有使用本手册的显式 prefix。中止安装并重新执行带有下面两项的命令：
+
+```text
+PYTHONNOUSERSITE=1
+--prefix="$VLM_ENV"
 ```
 
-然后重新执行第 8 节的 `docker run`。模型目录是只读挂载，不需要重新下载。
+### `GPU is not idle enough` 或 `already has compute PID`
 
-## 14. 常见问题
+服务脚本不会抢卡。先执行 `nvidia-smi`，确认目标进程；如果是占卡 worker，从 3060
+本地机器执行 `reserve_gpu.sh release`，不要手工 `kill -9`。
 
 ### `CUDA was requested but is unavailable`
 
-容器没有拿到 GPU。检查：
+检查：
 
 ```bash
-docker run --rm --gpus all \
-  pytorch/pytorch:2.9.0-cuda12.8-cudnn9-runtime \
-  python -c 'import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name())'
+CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 "$VLM_ENV/bin/python" - <<'PY'
+import torch
+print(torch.__version__, torch.version.cuda)
+print(torch.cuda.is_available())
+print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "no GPU")
+PY
 ```
 
-如果失败，修复 NVIDIA 驱动或 NVIDIA Container Toolkit 后再启动服务。
+本机应显示 PyTorch `2.5.1`、CUDA runtime `12.4`、CUDA 可用和 RTX 4090。
 
-### readiness 一直返回 503
+### strict load 报 key mismatch
 
-先看：
-
-```bash
-docker logs --tail 300 rr-vlm-guidance
-```
-
-常见原因包括模型文件路径错误、manifest 校验失败、checkpoint/base model 不匹配，或
-warmup 发生 CUDA OOM。
-
-### `checkpoint/model key mismatch` 或 strict load 报错
-
-不要设置 `strict=False` 绕过。确认使用的是：
-
-- base：`Qwen/Qwen3.5-2B` commit
-  `c00cc5fd7803c60b7788e053dcce33d0d26b11ef`；
-- checkpoint：`zhouhangzhu/hy_furniture` commit
-  `933f15ce0ed0bc7108ec1f42074bf94d985a4cbf`；
-- checkpoint 路径指向 `source/ckpt`，不是 `source`。
-
-### `401 unauthorized`
-
-客户端 Token 与服务器 `server.env` 不一致，或者请求没有携带：
-
-```text
-Authorization: Bearer <token>
-```
-
-### `422` 且提示图片尺寸错误
-
-接口只接受两张 `320x240` RGB 图片。项目客户端会在请求前使用现有 rollout resize/
-crop 逻辑处理图片；手写客户端时也必须遵守这个尺寸和 front/wrist 顺序。
+确认 base model 和 checkpoint revision 正确、checkpoint 路径以 `/ckpt` 结尾。不要改成
+`strict=False`。manifest SHA256 不匹配时也不要直接删除 manifest 绕过。
 
 ### CUDA OOM
 
-先把 `server.env` 中的：
+先确认没有占卡 worker 或其他进程。再把 `server.env` 中：
 
 ```text
-VLM_MAX_MICRO_BATCH_SIZE=8
+VLM_MAX_MICRO_BATCH_SIZE=4
 ```
 
-改成 `4`、`2` 或 `1`，然后执行：
+改成 `2` 或 `1`，然后 stop/start。不要增加 Uvicorn worker。
+
+### readiness 连接失败
 
 ```bash
-docker stop rr-vlm-guidance
-docker rm rr-vlm-guidance
+./services/vlm_guidance/conda_server.sh logs
+ps -fp "$(cat /home/hy/.cache/rr-vlm-guidance/server.pid)"
+nvidia-smi -i 0
 ```
 
-再重新执行第 8 节的 `docker run`。修改 `server.env` 后只执行
-`docker restart` 不会更新容器已有的环境变量，必须重建容器。
+检查 manifest、模型路径、依赖导入、GPU OOM 和端口占用。
 
-不要通过增加 Uvicorn workers 解决吞吐问题；多个 worker 会复制模型并进一步增加显存。
+### 本地请求超时
 
-### `flash_attn` 缺失
+依次确认：服务器本机 readiness、本地到 `10.71.106.240:8000` 的连通性、服务日志中的
+forward 时间、`--vlm-timeout-seconds`，以及 batch size。
 
-默认配置是 `VLM_ATTENTION_BACKEND=sdpa`，不依赖 FlashAttention。除非自行构建并验证了
-与 PyTorch 2.9/CUDA 12.8 匹配的 FlashAttention，否则不要改成
-`flash_attention_2`。
+## 16. Docker 说明
 
-### 服务端正常，但本地请求超时
+仓库保留 `services/vlm_guidance/Dockerfile` 作为其他服务器的备选方案，但本次
+`zju_4090_240` 不使用 Docker。当前 Docker 基础镜像是 CUDA 12.8 / PyTorch 2.9，和
+本机 `550.120` 驱动组合不合适；不要照搬该镜像到这台服务器。
 
-依次检查：
+## 17. 参考
 
-1. 本地能否访问 `http://服务器IP:8000/health/ready`；
-2. 防火墙/安全组是否允许 TCP 8000；
-3. `--vlm-timeout-seconds` 是否过小；
-4. 服务器 `nvidia-smi` 是否有其他进程占满 GPU；
-5. `docker logs` 中实际 forward 时间和错误信息。
-
-## 15. 不使用 Docker 时的备选启动方式
-
-只有服务器无法使用 Docker 时才建议这样部署：
-
-```bash
-python3 -m venv /data/hy/venvs/rr-vlm-guidance
-source /data/hy/venvs/rr-vlm-guidance/bin/activate
-
-python -m pip install --upgrade pip
-python -m pip install torch==2.9.0 \
-  --index-url https://download.pytorch.org/whl/cu128
-python -m pip install -r "$RR_REPO/services/vlm_guidance/requirements.txt"
-
-set -a
-source "$VLM_ROOT/server.env"
-set +a
-
-# Docker 内路径改成服务器真实路径
-export VLM_BASE_MODEL_DIR="$VLM_ROOT/base_model"
-export VLM_CHECKPOINT_DIR="$VLM_ROOT/source/ckpt"
-export VLM_MANIFEST_PATH="$VLM_ROOT/manifest.json"
-export CUDA_VISIBLE_DEVICES=0
-export PYTHONPATH="$RR_REPO"
-
-cd "$RR_REPO"
-uvicorn services.vlm_guidance.app:app \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --workers 1
-```
-
-这种方式需要自行配置进程守护和开机重启，因此生产/长期实验仍推荐 Docker 的
-`--restart unless-stopped` 方案。
+- [ModelScope Hub CLI](https://github.com/modelscope/modelscope_hub)
+- [PyTorch 历史版本安装命令](https://docs.pytorch.org/get-started/previous-versions/)
+- [Transformers 官方仓库与运行要求](https://github.com/huggingface/transformers)
+- [NVIDIA nvidia-smi 文档](https://docs.nvidia.com/deploy/nvidia-smi/index.html)
