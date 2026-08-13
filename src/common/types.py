@@ -28,6 +28,8 @@ class Trajectory(TypedDict):
     furniture: str
     error: bool
     error_description: str
+    annotation_source: str
+    vlm_model_revision: Optional[str]
 
 
 # Make type for the encoder name choices

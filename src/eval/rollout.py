@@ -57,6 +57,17 @@ from src.eval.progress_schema import (
     get_task_progress_labels,
     normalize_progress_counts,
 )
+from src.eval.vlm_guidance import (
+    VLMGuidanceClient,
+    VLMPrediction,
+    policy_bundles_from_vlm,
+    state_info_for_env,
+)
+from src.eval.vlm_point_metrics import (
+    build_vlm_point_error_summary,
+    make_point_error_record,
+    merge_vlm_point_error_summaries,
+)
 
 
 RolloutStats = collections.namedtuple(
@@ -76,6 +87,8 @@ RolloutStats = collections.namedtuple(
         "step_completion_counts",
         "step_success_rates",
         "tracking_error",
+        "vlm_point_error",
+        "vlm_model_revision",
     ],
 )
 
@@ -102,6 +115,10 @@ RolloutSaveValues = collections.namedtuple(
         "guidance_points_2d",
         "grasp_annotations_2d",
         "camera_infos",
+        "oracle_skills",
+        "oracle_guidance_points_2d",
+        "vlm_annotations",
+        "vlm_point_error_records",
     ],
 )
 
@@ -535,6 +552,8 @@ def _build_rollout_progress_summary(rollout_stats: RolloutStats) -> dict:
         "assembly_step_completion_counts": dict(rollout_stats.step_completion_counts),
         "assembly_step_success_rates": dict(rollout_stats.step_success_rates),
         "tracking_error": rollout_stats.tracking_error,
+        "vlm_point_error": rollout_stats.vlm_point_error,
+        "vlm_model_revision": rollout_stats.vlm_model_revision,
     }
 
 
@@ -641,6 +660,56 @@ def _attach_skill_tensor_to_obs(obs, actor: Actor, skills):
     )
 
 
+def _query_vlm_annotations(
+    *,
+    client: VLMGuidanceClient,
+    env: Env,
+    obs,
+    oracle_bundles,
+    step_idx: int,
+) -> tuple[list[dict], list[VLMPrediction]]:
+    if "color_image1" not in obs or "color_image2" not in obs:
+        raise ValueError("VLM guidance requires both wrist and front RGB images")
+    robot_state = _add_sim_local_ee_pose_to_robot_state(env, obs.get("robot_state"))
+    if not isinstance(robot_state, dict):
+        raise ValueError("VLM guidance requires dictionary robot_state")
+    predictions, _ = client.predict(
+        task=env.furniture_name,
+        front_images=[obs["color_image2"][idx] for idx in range(env.num_envs)],
+        wrist_images=[obs["color_image1"][idx] for idx in range(env.num_envs)],
+        state_infos=[
+            state_info_for_env(robot_state, idx) for idx in range(env.num_envs)
+        ],
+        step_idx=step_idx,
+    )
+    return policy_bundles_from_vlm(
+        oracle_bundles, predictions, step_idx=step_idx
+    ), predictions
+
+
+def _record_vlm_point_errors(
+    records_per_env,
+    oracle_bundles,
+    predictions,
+    active_mask,
+    *,
+    step_idx: int,
+) -> None:
+    for env_idx, (oracle, prediction) in enumerate(zip(oracle_bundles, predictions)):
+        if not active_mask[env_idx]:
+            continue
+        oracle_point = oracle.get("guidance_point_2d", {}).get("color_image2")
+        records_per_env[env_idx].append(
+            make_point_error_record(
+                step_idx=step_idx,
+                oracle_skill=oracle.get("skill"),
+                oracle_point=oracle_point,
+                vlm_point=prediction.point_px,
+                query_step=prediction.query_step,
+            )
+        )
+
+
 def rollout(
     env: Env,
     actor: Actor,
@@ -670,7 +739,20 @@ def rollout(
     full_length_rollout: bool = False,
     perturb_runner: Optional[PerturbRunner] = None,
     init_states: Optional[List[dict]] = None,
+    annotation_source: str = "scripted",
+    vlm_client: Optional[VLMGuidanceClient] = None,
+    vlm_query_interval: Optional[int] = None,
 ) -> Optional[RolloutSaveValues]:
+    use_vlm = annotation_source == "vlm"
+    if annotation_source not in {"scripted", "vlm"}:
+        raise ValueError(f"unsupported annotation_source: {annotation_source}")
+    if use_vlm and vlm_client is None:
+        raise ValueError("annotation_source=vlm requires a VLM client")
+    query_interval = None
+    if use_vlm:
+        query_interval = int(vlm_query_interval or actor.action_horizon)
+        if query_interval <= 0:
+            raise ValueError("vlm_query_interval must be positive")
     # get first observation
     with suppress_all_output(False):
         if init_states is not None:
@@ -683,7 +765,8 @@ def rollout(
             obs = env.reset()
         actor.reset()
     collect_skill_annotations = (
-        annotate_skill
+        use_vlm
+        or annotate_skill
         or annotate_guidance_point
         or guidance_point_on_image
         or grasp_annotation_on_image
@@ -701,18 +784,19 @@ def rollout(
 
     video_obs = deepcopy(obs)
     previous_skills = [None] * env.num_envs
-    initial_annotations = (
+    oracle_initial_annotations = (
         get_annotation_bundle_all_envs(
             env,
             previous_skills=previous_skills,
             annotate_wrist_camera=annotate_wrist_camera,
-            resize_images=resize_video,
+            resize_images=(resize_video or use_vlm),
             enable_verify=enable_annotation_verify,
-            annotation_noise_config=annotation_noise_config,
+            annotation_noise_config=(None if use_vlm else annotation_noise_config),
         )
         if collect_skill_annotations
         else [{} for _ in range(env.num_envs)]
     )
+    initial_annotations = oracle_initial_annotations
     initial_skills = [bundle.get("skill") for bundle in initial_annotations]
     initial_skill_states = [bundle.get("skill_state") for bundle in initial_annotations]
     initial_assembly_steps = [bundle.get("assembly_step") for bundle in initial_annotations]
@@ -746,6 +830,19 @@ def rollout(
     # Resize the depth image
     resize_depth(obs, "depth_image1")
     resize_crop_depth(obs, "depth_image2")
+    vlm_predictions: list[VLMPrediction] = []
+    if use_vlm:
+        initial_annotations, vlm_predictions = _query_vlm_annotations(
+            client=vlm_client,
+            env=env,
+            obs=obs,
+            oracle_bundles=oracle_initial_annotations,
+            step_idx=0,
+        )
+        initial_skills = [bundle.get("skill") for bundle in initial_annotations]
+        initial_guidance_points_2d = [
+            bundle.get("guidance_point_2d", {}) for bundle in initial_annotations
+        ]
     _apply_policy_visual_annotations(
         obs,
         initial_annotations,
@@ -804,6 +901,19 @@ def rollout(
     guidance_points_2d = [initial_guidance_points_2d]
     grasp_annotations_2d = [initial_grasp_annotations_2d]
     camera_infos = [[bundle.get("camera_info", {}) for bundle in initial_annotations]]
+    oracle_skills = [
+        [bundle.get("skill") for bundle in oracle_initial_annotations]
+    ]
+    oracle_guidance_points_2d = [
+        [bundle.get("guidance_point_2d", {}) for bundle in oracle_initial_annotations]
+    ]
+    vlm_annotations = [
+        [bundle.get("vlm_annotation") for bundle in initial_annotations]
+    ]
+    vlm_point_error_records = [[] for _ in range(env.num_envs)]
+    vlm_metric_active = [True] * env.num_envs
+    current_oracle_annotations = oracle_initial_annotations
+    current_annotations = initial_annotations
     active_skill_states = initial_skill_states
 
     # Verify history for summary at end of rollout
@@ -859,6 +969,14 @@ def rollout(
     actor.model = actor.model.to(actor.device)
 
     while True:
+        if use_vlm:
+            _record_vlm_point_errors(
+                vlm_point_error_records,
+                current_oracle_annotations,
+                vlm_predictions,
+                vlm_metric_active,
+                step_idx=step_idx,
+            )
         raw_robot_state = obs.get("robot_state") if isinstance(obs, dict) else None
         ee_pos_vel = (
             raw_robot_state.get("ee_pos_vel")
@@ -909,43 +1027,42 @@ def rollout(
             pcs_step = None
 
         video_obs = deepcopy(obs)
-        current_annotations = (
+        current_oracle_annotations = (
             get_annotation_bundle_all_envs(
                 env,
                 previous_skills=previous_skills,
                 annotate_wrist_camera=annotate_wrist_camera,
-                resize_images=resize_video,
+                resize_images=(resize_video or use_vlm),
                 enable_verify=enable_annotation_verify,
-                annotation_noise_config=annotation_noise_config,
+                annotation_noise_config=(None if use_vlm else annotation_noise_config),
             )
             if collect_skill_annotations
             else [{} for _ in range(env.num_envs)]
         )
-        current_skills = [bundle.get("skill") for bundle in current_annotations]
-        current_skill_states = [bundle.get("skill_state") for bundle in current_annotations]
-        current_assembly_steps = [bundle.get("assembly_step") for bundle in current_annotations]
-        current_guidance_points = [bundle.get("guidance_point") for bundle in current_annotations]
-        current_guidance_points_clean = [
-            bundle.get("guidance_point_clean") for bundle in current_annotations
+        oracle_current_skills = [
+            bundle.get("skill") for bundle in current_oracle_annotations
         ]
-        current_guidance_poses = [bundle.get("guidance_pose") for bundle in current_annotations]
+        current_skill_states = [bundle.get("skill_state") for bundle in current_oracle_annotations]
+        current_assembly_steps = [bundle.get("assembly_step") for bundle in current_oracle_annotations]
+        current_guidance_points = [bundle.get("guidance_point") for bundle in current_oracle_annotations]
+        current_guidance_points_clean = [
+            bundle.get("guidance_point_clean") for bundle in current_oracle_annotations
+        ]
+        current_guidance_poses = [bundle.get("guidance_pose") for bundle in current_oracle_annotations]
         current_guidance_poses_clean = [
-            bundle.get("guidance_pose_clean") for bundle in current_annotations
+            bundle.get("guidance_pose_clean") for bundle in current_oracle_annotations
         ]
         current_guidance_gripper_widths = [
-            bundle.get("guidance_gripper_width") for bundle in current_annotations
-        ]
-        current_guidance_points_2d = [
-            bundle.get("guidance_point_2d", {}) for bundle in current_annotations
+            bundle.get("guidance_gripper_width") for bundle in current_oracle_annotations
         ]
         current_grasp_annotations_2d = [
-            bundle.get("grasp_annotation_2d", {}) for bundle in current_annotations
+            bundle.get("grasp_annotation_2d", {}) for bundle in current_oracle_annotations
         ]
-        for env_idx, skill in enumerate(current_skills):
+        for env_idx, skill in enumerate(oracle_current_skills):
             if skill is not None:
                 previous_skills[env_idx] = skill
         # Record verify results for end-of-rollout summary
-        for bundle in current_annotations:
+        for bundle in current_oracle_annotations:
             verify_and_record(
                 bundle, _verify_history,
                 step_idx=step_idx + 1,
@@ -958,6 +1075,29 @@ def rollout(
         resize_crop_image(obs, "color_image2")
         resize_depth(obs, "depth_image1")
         resize_crop_depth(obs, "depth_image2")
+        next_step_idx = step_idx + 1
+        if use_vlm:
+            assert query_interval is not None
+            if next_step_idx % query_interval == 0:
+                current_annotations, vlm_predictions = _query_vlm_annotations(
+                    client=vlm_client,
+                    env=env,
+                    obs=obs,
+                    oracle_bundles=current_oracle_annotations,
+                    step_idx=next_step_idx,
+                )
+            else:
+                current_annotations = policy_bundles_from_vlm(
+                    current_oracle_annotations,
+                    vlm_predictions,
+                    step_idx=next_step_idx,
+                )
+        else:
+            current_annotations = current_oracle_annotations
+        current_skills = [bundle.get("skill") for bundle in current_annotations]
+        current_guidance_points_2d = [
+            bundle.get("guidance_point_2d", {}) for bundle in current_annotations
+        ]
         _apply_policy_visual_annotations(
             obs,
             current_annotations,
@@ -999,6 +1139,16 @@ def rollout(
         skills.append(current_skills)
         skill_states.append(current_skill_states)
         assembly_steps.append(current_assembly_steps)
+        oracle_skills.append(oracle_current_skills)
+        oracle_guidance_points_2d.append(
+            [
+                bundle.get("guidance_point_2d", {})
+                for bundle in current_oracle_annotations
+            ]
+        )
+        vlm_annotations.append(
+            [bundle.get("vlm_annotation") for bundle in current_annotations]
+        )
         active_skill_states = current_skill_states
 
         # Store the results for visualization and logging
@@ -1061,6 +1211,10 @@ def rollout(
             delayed_success_done = current_success & (step_idx >= success_stop_step)
             done_for_break = torch.where(current_success, delayed_success_done, done)
 
+        if not full_length_rollout:
+            flattened_done = done_for_break.reshape(-1).detach().cpu().tolist()
+            vlm_metric_active = [not bool(value) for value in flattened_done]
+
         if done_for_break.all() and not full_length_rollout:
             break
 
@@ -1100,6 +1254,13 @@ def rollout(
         grasp_annotations_2d, env.num_envs
     )
     camera_infos_per_env = _transpose_step_env_annotations(camera_infos, env.num_envs)
+    oracle_skills_per_env = _transpose_step_env_annotations(oracle_skills, env.num_envs)
+    oracle_guidance_points_2d_per_env = _transpose_step_env_annotations(
+        oracle_guidance_points_2d, env.num_envs
+    )
+    vlm_annotations_per_env = _transpose_step_env_annotations(
+        vlm_annotations, env.num_envs
+    )
 
     # --- verify summary ---
     if enable_annotation_verify:
@@ -1126,6 +1287,10 @@ def rollout(
         guidance_points_2d_per_env,
         grasp_annotations_2d_per_env,
         camera_infos_per_env,
+        oracle_skills_per_env,
+        oracle_guidance_points_2d_per_env,
+        vlm_annotations_per_env,
+        vlm_point_error_records,
     )
 
 
@@ -1172,6 +1337,9 @@ def calculate_success_rate(
     init_states: Optional[List[dict]] = None,
     max_saved_rollouts: Optional[int] = None,
     guidance_bank_out: Optional[Path] = None,
+    annotation_source: str = "scripted",
+    vlm_client: Optional[VLMGuidanceClient] = None,
+    vlm_query_interval: Optional[int] = None,
 ) -> RolloutStats:
 
     use_target_mode = target_successes is not None and target_successes > 0
@@ -1208,6 +1376,8 @@ def calculate_success_rate(
     tracking_metric_type = (
         "pose" if grasp_part_annotate or annotate_grasp else "position"
     )
+    vlm_point_error_summaries: list[dict] = []
+    vlm_model_revisions: set[str] = set()
     saved_rollouts_count = 0
     guidance_bank_records: list[dict] = []
 
@@ -1272,10 +1442,24 @@ def calculate_success_rate(
             full_length_rollout=full_length_rollout,
             perturb_runner=perturb_runner,
             init_states=round_init_states,
+            annotation_source=annotation_source,
+            vlm_client=vlm_client,
+            vlm_query_interval=vlm_query_interval,
         )
 
         # Calculate the success rate
         success_flags = rollout_data.rewards.sum(dim=1) == n_parts_assemble
+        if annotation_source == "vlm":
+            for episode in rollout_data.vlm_annotations:
+                for annotation in episode:
+                    if isinstance(annotation, dict) and annotation.get("model_revision"):
+                        vlm_model_revisions.add(str(annotation["model_revision"]))
+            vlm_point_error_summaries.append(
+                build_vlm_point_error_summary(
+                    rollout_data.vlm_point_error_records,
+                    [bool(value) for value in success_flags.tolist()],
+                )
+            )
         n_success += success_flags.sum().item()
         n_total_rollouts += env.num_envs
 
@@ -1411,6 +1595,35 @@ def calculate_success_rate(
                     if rollout_data.camera_infos
                     else []
                 )
+                oracle_skills_for_rollout = (
+                    rollout_data.oracle_skills[env_idx]
+                    if rollout_data.oracle_skills
+                    else []
+                )
+                oracle_guidance_points_2d_for_rollout = (
+                    rollout_data.oracle_guidance_points_2d[env_idx]
+                    if rollout_data.oracle_guidance_points_2d
+                    else []
+                )
+                vlm_annotations_for_rollout = (
+                    rollout_data.vlm_annotations[env_idx]
+                    if rollout_data.vlm_annotations
+                    else []
+                )
+                vlm_point_error_records_for_rollout = (
+                    rollout_data.vlm_point_error_records[env_idx]
+                    if rollout_data.vlm_point_error_records
+                    else []
+                )
+                vlm_model_revision = next(
+                    (
+                        annotation.get("model_revision")
+                        for annotation in vlm_annotations_for_rollout
+                        if isinstance(annotation, dict)
+                        and annotation.get("model_revision")
+                    ),
+                    None,
+                )
                 success = success_flags[env_idx].item()
                 task = env.furniture_name
                 
@@ -1499,6 +1712,22 @@ def calculate_success_rate(
                     )
                 )
                 if should_save_rollout:
+                    point_error_records_to_save = None
+                    if annotation_source == "vlm":
+                        point_error_records_to_save = []
+                        for record in vlm_point_error_records_for_rollout:
+                            source_step = int(record["step_idx"])
+                            if not trim_start_steps <= source_step < n_steps:
+                                continue
+                            source_query_step = int(record["query_step"])
+                            rebased = dict(record)
+                            rebased["source_step_idx"] = source_step
+                            rebased["source_query_step"] = source_query_step
+                            rebased["step_idx"] = source_step - trim_start_steps
+                            rebased["query_step"] = (
+                                source_query_step - trim_start_steps
+                            )
+                            point_error_records_to_save.append(rebased)
                     # Trim point clouds to match n_steps
                     pcs_trimmed = None
                     if pcs_for_rollout is not None:
@@ -1531,6 +1760,26 @@ def calculate_success_rate(
                         pcs=pcs_trimmed,
                         skill_on_image=skill_on_image,
                         output_only_pickle=output_only_pickle,
+                        oracle_skills=(
+                            oracle_skills_for_rollout[trim_start_steps : n_steps + 1]
+                            if annotation_source == "vlm"
+                            else None
+                        ),
+                        oracle_guidance_points_2d=(
+                            oracle_guidance_points_2d_for_rollout[
+                                trim_start_steps : n_steps + 1
+                            ]
+                            if annotation_source == "vlm"
+                            else None
+                        ),
+                        vlm_annotations=(
+                            vlm_annotations_for_rollout[trim_start_steps : n_steps + 1]
+                            if annotation_source == "vlm"
+                            else None
+                        ),
+                        vlm_point_error_records=point_error_records_to_save,
+                        annotation_source=annotation_source,
+                        vlm_model_revision=vlm_model_revision,
                     )
                     saved_rollouts_count += 1
 
@@ -1604,6 +1853,16 @@ def calculate_success_rate(
         expected_labels=expected_skill_labels,
         metric_type=tracking_metric_type,
     )
+    vlm_point_error = (
+        merge_vlm_point_error_summaries(vlm_point_error_summaries)
+        if vlm_point_error_summaries
+        else None
+    )
+    if len(vlm_model_revisions) > 1:
+        raise RuntimeError(
+            f"VLM model revision changed during evaluation: {sorted(vlm_model_revisions)}"
+        )
+    vlm_model_revision = next(iter(vlm_model_revisions), None)
 
     final_total = n_total_rollouts if use_target_mode else n_rollouts
     return RolloutStats(
@@ -1621,6 +1880,8 @@ def calculate_success_rate(
         step_completion_counts=step_completion_counts,
         step_success_rates=step_success_rates,
         tracking_error=tracking_error,
+        vlm_point_error=vlm_point_error,
+        vlm_model_revision=vlm_model_revision,
     )
 
 

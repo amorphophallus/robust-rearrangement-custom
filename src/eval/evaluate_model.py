@@ -40,6 +40,8 @@ from src.gym import get_rl_env
 from src.eval.eval_utils import load_checkpoint_payload
 from src.eval.perturb_util import PERTURB_MODES, PerturbRunner
 from src.eval.annotation_noise import make_annotation_noise_config
+from src.eval.vlm_guidance import VLMGuidanceClient
+from src.eval.vlm_point_metrics import merge_vlm_point_error_summaries
 from src.eval.progress_schema import (
     get_task_progress_labels,
     normalize_progress_counts,
@@ -196,6 +198,14 @@ def validate_args(args: argparse.Namespace):
         "--rollout-after-success must provide either one value for all tasks "
         "or one value per task in the same order as --task"
     )
+    if args.annotation_source == "vlm":
+        assert args.vlm_base_url, (
+            "--annotation-source vlm requires --vlm-base-url or VLM_GUIDANCE_URL"
+        )
+        unsupported = sorted(set(tasks) - {"one_leg", "round_table", "lamp"})
+        assert not unsupported, f"VLM guidance does not support tasks: {unsupported}"
+        assert args.vlm_timeout_seconds > 0
+        assert args.vlm_query_interval >= 0
 
 
 def resolve_rollout_after_success_by_task(
@@ -400,6 +410,44 @@ def _print_tracking_error_stats(
                 ]
             )
         print(f"  {state_label}: {', '.join(fields)}, n={count}")
+
+
+def _print_vlm_point_error_stats(task: str, summary: Optional[Dict[str, Any]]):
+    if not summary:
+        return
+    print(f"VLM point error ({task}):")
+    for scope in ("all", "success_only", "failure_only"):
+        scoped = summary.get(scope, {})
+        overall = scoped.get("overall", {})
+        count = int(overall.get("count_valid", 0))
+        mean = overall.get("mean_error_px")
+        coverage = overall.get("coverage")
+        mean_text = "—" if mean is None else f"{float(mean):.2f}px"
+        coverage_text = "—" if coverage is None else f"{float(coverage):.1%}"
+        print(f"  {scope}: mean={mean_text}, n={count}, coverage={coverage_text}")
+        for skill, stats in scoped.get("by_skill", {}).items():
+            skill_count = int(stats.get("count_valid", 0))
+            skill_mean = stats.get("mean_error_px")
+            if skill_count <= 0 or skill_mean is None:
+                continue
+            print(f"    {skill}: mean={float(skill_mean):.2f}px, n={skill_count}")
+
+
+def _write_vlm_point_error_to_wandb(summary_dict, prefix, summary):
+    if not summary:
+        return
+    for scope, scoped in summary.items():
+        overall = scoped.get("overall", {})
+        for field in ("mean_error_px", "rmse_px", "coverage", "count_valid"):
+            value = overall.get(field)
+            if value is not None:
+                summary_dict[f"{prefix}vlm_point_error/{scope}/overall/{field}"] = value
+        for skill, stats in scoped.get("by_skill", {}).items():
+            value = stats.get("mean_error_px")
+            if value is not None:
+                summary_dict[
+                    f"{prefix}vlm_point_error/{scope}/by_skill/{skill}/mean_error_px"
+                ] = value
 
 
 def _build_progress_summary(
@@ -722,6 +770,24 @@ if __name__ == "__main__":
     parser.add_argument("--guidance-point-colored", action="store_true")
     parser.add_argument("--grasp-annotation-colored", action="store_true")
     parser.add_argument("--skill-on-image", action="store_true")
+    parser.add_argument(
+        "--annotation-source",
+        choices=["scripted", "vlm"],
+        default="scripted",
+        help="Source for policy skill and 2-D guidance point annotations.",
+    )
+    parser.add_argument(
+        "--vlm-base-url",
+        default=os.environ.get("VLM_GUIDANCE_URL"),
+        help="Base URL of the remote VLM guidance service.",
+    )
+    parser.add_argument("--vlm-timeout-seconds", type=float, default=10.0)
+    parser.add_argument(
+        "--vlm-query-interval",
+        type=int,
+        default=0,
+        help="Environment steps between VLM queries; 0 follows actor.action_horizon.",
+    )
     parser.add_argument("--annotation-noise-pos-std-m", type=float, default=0.0)
     parser.add_argument("--annotation-noise-ori-std-deg", type=float, default=0.0)
     parser.add_argument("--annotation-noise-seed", type=int, default=0)
@@ -928,6 +994,16 @@ if __name__ == "__main__":
             f"{format_success_rate(total_success_all_tasks, total_rollouts_all_tasks)}"
         )
         first_task_summary = per_task_summaries.get(tasks[0], {}) if tasks else {}
+        child_point_error_summaries = [
+            summary["vlm_point_error"]
+            for summary in per_task_summaries.values()
+            if summary.get("vlm_point_error")
+        ]
+        multitask_vlm_point_error = (
+            merge_vlm_point_error_summaries(child_point_error_summaries)
+            if child_point_error_summaries
+            else None
+        )
         multitask_payload = {
             "task_group": task_group,
             "checkpoint_name": first_task_summary.get(
@@ -943,6 +1019,7 @@ if __name__ == "__main__":
             "n_envs": args.n_envs,
             "observation_space": args.observation_space,
             "action_type": args.action_type,
+            "annotation_source": args.annotation_source,
             "eval_command": sys.argv,
             "n_success": total_success_all_tasks,
             "n_rollouts": total_rollouts_all_tasks,
@@ -951,6 +1028,8 @@ if __name__ == "__main__":
                 if total_rollouts_all_tasks > 0
                 else None
             ),
+            "vlm_point_error": multitask_vlm_point_error,
+            "vlm_model_revision": first_task_summary.get("vlm_model_revision"),
             "per_task": per_task_summaries,
         }
         _write_eval_stats_log(
@@ -963,6 +1042,19 @@ if __name__ == "__main__":
 
     primary_task = tasks[0]
     primary_spf = f"{primary_task}/" if args.multitask else ""
+
+    vlm_client = None
+    if args.annotation_source == "vlm":
+        vlm_client = VLMGuidanceClient(
+            args.vlm_base_url,
+            timeout_seconds=args.vlm_timeout_seconds,
+        )
+        readiness = vlm_client.check_ready()
+        print(
+            "VLM guidance ready: "
+            f"url={args.vlm_base_url} revision={readiness.get('model_revision')} "
+            f"device={readiness.get('device')}"
+        )
 
     # Get the environment(s)
     # TODO: This needs to be changed to enable recreation the env for each run
@@ -980,6 +1072,8 @@ if __name__ == "__main__":
     summary_step_counts: Dict[str, int] = {}
     summary_step_completion_counts: Dict[str, int] = {}
     summary_tracking_error: Optional[Dict[str, Any]] = None
+    summary_vlm_point_error: Optional[Dict[str, Any]] = None
+    summary_vlm_model_revision: Optional[str] = None
     summary_checkpoint_name: Optional[str] = None
     summary_checkpoint_path: Optional[str] = None
     summary_training_config: Optional[Dict[str, Any]] = None
@@ -1212,6 +1306,8 @@ if __name__ == "__main__":
                             suffix = f"{image_mode}-only-skill"
                     elif args.save_depth_image:
                         suffix = image_mode
+                    if args.annotation_source == "vlm":
+                        suffix = f"{suffix}-vlm" if suffix else "vlm"
                     if task_group:
                         suffix = f"{suffix}/{task_group}" if suffix else task_group
                     if args.rollout_suffix_model_name is not None:
@@ -1410,6 +1506,13 @@ if __name__ == "__main__":
                             if args.guidance_bank_out_dir
                             else None
                         ),
+                        annotation_source=args.annotation_source,
+                        vlm_client=vlm_client,
+                        vlm_query_interval=(
+                            args.vlm_query_interval
+                            if args.vlm_query_interval > 0
+                            else None
+                        ),
                     )
 
                     if args.store_video_wandb:
@@ -1431,6 +1534,10 @@ if __name__ == "__main__":
                         task,
                         rollout_stats.tracking_error,
                     )
+                    _print_vlm_point_error_stats(
+                        task,
+                        rollout_stats.vlm_point_error,
+                    )
                     task_payload = {
                         "run_name": run.name,
                         "run_id": getattr(run, "id", None),
@@ -1445,6 +1552,7 @@ if __name__ == "__main__":
                         "n_envs": args.n_envs,
                         "observation_space": args.observation_space,
                         "action_type": args.action_type,
+                        "annotation_source": args.annotation_source,
                         "eval_command": sys.argv,
                         "n_success": rollout_stats.n_success,
                         "n_rollouts": rollout_stats.n_rollouts,
@@ -1455,6 +1563,8 @@ if __name__ == "__main__":
                         "rollout_path_hint": str(rollout_path_hint),
                         "perturb_mode": args.perturb_mode,
                         "tracking_error": rollout_stats.tracking_error,
+                        "vlm_point_error": rollout_stats.vlm_point_error,
+                        "vlm_model_revision": rollout_stats.vlm_model_revision,
                         **_build_progress_summary(
                             task=task,
                             state_counts=rollout_stats.state_counts,
@@ -1547,6 +1657,27 @@ if __name__ == "__main__":
                         for key, value in progress_summary.items():
                             s[spf + key] = value
 
+                        wandb_vlm_point_error = rollout_stats.vlm_point_error
+                        if how_update == "append" and wandb_vlm_point_error:
+                            existing_vlm_point_error = s.get(
+                                spf + "vlm_point_error"
+                            )
+                            if existing_vlm_point_error:
+                                wandb_vlm_point_error = merge_vlm_point_error_summaries(
+                                    [existing_vlm_point_error, wandb_vlm_point_error]
+                                )
+                        if wandb_vlm_point_error:
+                            s[spf + "vlm_point_error"] = wandb_vlm_point_error
+                        if rollout_stats.vlm_model_revision:
+                            s[spf + "vlm_model_revision"] = (
+                                rollout_stats.vlm_model_revision
+                            )
+                        _write_vlm_point_error_to_wandb(
+                            s,
+                            spf,
+                            wandb_vlm_point_error,
+                        )
+
                         run.update()
                     else:
                         print("Not writing to wandb")
@@ -1571,6 +1702,25 @@ if __name__ == "__main__":
                     )
                     if len(tasks) == 1:
                         summary_tracking_error = rollout_stats.tracking_error
+                        if rollout_stats.vlm_point_error:
+                            summary_vlm_point_error = (
+                                merge_vlm_point_error_summaries(
+                                    [
+                                        summary_vlm_point_error,
+                                        rollout_stats.vlm_point_error,
+                                    ]
+                                )
+                                if summary_vlm_point_error
+                                else rollout_stats.vlm_point_error
+                            )
+                        if rollout_stats.vlm_model_revision:
+                            if (
+                                summary_vlm_model_revision is not None
+                                and summary_vlm_model_revision
+                                != rollout_stats.vlm_model_revision
+                            ):
+                                raise RuntimeError("VLM revision changed across evaluations")
+                            summary_vlm_model_revision = rollout_stats.vlm_model_revision
 
                 if total_rollouts > 0:
                     print(
@@ -1616,6 +1766,7 @@ if __name__ == "__main__":
                         "n_envs": args.n_envs,
                         "observation_space": args.observation_space,
                         "action_type": args.action_type,
+                        "annotation_source": args.annotation_source,
                         "eval_command": sys.argv,
                         "n_success": summary_total_success,
                         "n_rollouts": summary_total_rollouts,
@@ -1625,6 +1776,8 @@ if __name__ == "__main__":
                             else None
                         ),
                         "tracking_error": summary_tracking_error,
+                        "vlm_point_error": summary_vlm_point_error,
+                        "vlm_model_revision": summary_vlm_model_revision,
                         **progress_summary,
                     },
                     f,

@@ -67,8 +67,23 @@ def save_raw_rollout(
     output_only_pickle: bool = False,
     guidance_points_clean: List[np.ndarray] = None,
     guidance_poses_clean: List[np.ndarray] = None,
+    oracle_skills: List[str] = None,
+    oracle_guidance_points_2d: List[dict] = None,
+    vlm_annotations: List[dict] = None,
+    vlm_point_error_records: List[dict] = None,
+    annotation_source: str = "scripted",
+    vlm_model_revision: str = None,
 ):
     observations: List[Observation] = list()
+    include_vlm_metadata = any(
+        value is not None
+        for value in (
+            oracle_skills,
+            oracle_guidance_points_2d,
+            vlm_annotations,
+            vlm_point_error_records,
+        )
+    )
 
     # If pcs is None, create a list of Nones with the same length as robot_states
     if pcs is None:
@@ -92,8 +107,18 @@ def save_raw_rollout(
         grasp_annotations_2d = [None] * len(robot_states)
     if camera_infos is None:
         camera_infos = [None] * len(robot_states)
+    if oracle_skills is None:
+        oracle_skills = [None] * len(robot_states)
+    if oracle_guidance_points_2d is None:
+        oracle_guidance_points_2d = [None] * len(robot_states)
+    if vlm_annotations is None:
+        vlm_annotations = [None] * len(robot_states)
+    error_by_step = {
+        int(record["step_idx"]): record
+        for record in (vlm_point_error_records or [])
+    }
 
-    for robot_state, image1, image2, depth1, depth2, parts_pose, pc, skill, guidance_point, guidance_point_clean, guidance_pose, guidance_pose_clean, guidance_gripper_width, guidance_point_2d, grasp_annotation_2d in zip(
+    rows = zip(
         robot_states,
         imgs1,
         imgs2,
@@ -109,26 +134,58 @@ def save_raw_rollout(
         guidance_gripper_widths,
         guidance_points_2d,
         grasp_annotations_2d,
-    ):
-        observations.append(
-            {
-                "robot_state": robot_state,
-                "color_image1": image1,
-                "color_image2": image2,
-                "depth_image1": depth1,
-                "depth_image2": depth2,
-                "parts_poses": parts_pose,
-                "point_cloud": pc,
-                "skill": skill,
-                "guidance_point": guidance_point,
-                "guidance_point_clean": guidance_point_clean,
-                "guidance_pose": guidance_pose,
-                "guidance_pose_clean": guidance_pose_clean,
-                "guidance_gripper_width": guidance_gripper_width,
-                "guidance_point_2d": guidance_point_2d,
-                "grasp_annotation_2d": grasp_annotation_2d,
-            }
-        )
+        oracle_skills,
+        oracle_guidance_points_2d,
+        vlm_annotations,
+    )
+    for frame_idx, row in enumerate(rows):
+        (
+            robot_state,
+            image1,
+            image2,
+            depth1,
+            depth2,
+            parts_pose,
+            pc,
+            skill,
+            guidance_point,
+            guidance_point_clean,
+            guidance_pose,
+            guidance_pose_clean,
+            guidance_gripper_width,
+            guidance_point_2d,
+            grasp_annotation_2d,
+            oracle_skill,
+            oracle_guidance_point_2d,
+            vlm_annotation,
+        ) = row
+        observation = {
+            "robot_state": robot_state,
+            "color_image1": image1,
+            "color_image2": image2,
+            "depth_image1": depth1,
+            "depth_image2": depth2,
+            "parts_poses": parts_pose,
+            "point_cloud": pc,
+            "skill": skill,
+            "guidance_point": guidance_point,
+            "guidance_point_clean": guidance_point_clean,
+            "guidance_pose": guidance_pose,
+            "guidance_pose_clean": guidance_pose_clean,
+            "guidance_gripper_width": guidance_gripper_width,
+            "guidance_point_2d": guidance_point_2d,
+            "grasp_annotation_2d": grasp_annotation_2d,
+        }
+        if include_vlm_metadata:
+            observation.update(
+                {
+                    "oracle_skill": oracle_skill,
+                    "oracle_guidance_point_2d": oracle_guidance_point_2d,
+                    "vlm_annotation": vlm_annotation,
+                    "vlm_point_error": error_by_step.get(frame_idx),
+                }
+            )
+        observations.append(observation)
 
     front_camera_info = None
     for camera_info in camera_infos:
@@ -176,6 +233,8 @@ def save_raw_rollout(
         "success": success,
         "task": task,
         "action_type": action_type,
+        "annotation_source": annotation_source,
+        "vlm_model_revision": vlm_model_revision,
     }
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S.%f")
