@@ -421,6 +421,11 @@ SSH tunnel、VPN 或 HTTPS reverse proxy。
 ## 13. 运行 VLM + diffusion policy
 
 本地评测环境只需要原有依赖、`requests` 和 `Pillow`，不需要安装服务端 Transformers。
+Isaac Gym 还需要显式找到 rr 环境里的 `libpython3.8.so.1.0`：
+
+```bash
+export LD_LIBRARY_PATH="/home/hy/anaconda3/envs/rr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+```
 
 在原有评测命令后增加：
 
@@ -449,6 +454,32 @@ python -m src.eval.evaluate_model \
   --vlm-timeout-seconds 30 \
   --vlm-query-interval 0
 ```
+
+本机现有 checkpoint 可用下面的 16-step 命令做 VLM+DP 冒烟；它确实使用 VLM point
+作为 diffusion policy 的 guidance point：
+
+```bash
+/home/hy/anaconda3/bin/conda run --no-capture-output -n rr \
+  python -m src.eval.evaluate_model \
+  --gpu 0 \
+  --n-envs 1 \
+  --n-rollouts 1 \
+  -f round_table \
+  --if-exists overwrite \
+  --max-rollout-steps 16 \
+  --action-type pos \
+  --observation-space image \
+  --randomness low \
+  --wt-path checkpoints/bc/round_table/low/rgbd_guidance_dit_200traj_last_.pt \
+  --annotation-source vlm \
+  --vlm-base-url "$VLM_GUIDANCE_URL" \
+  --vlm-timeout-seconds 30 \
+  --vlm-query-interval 0
+```
+
+16 step 通常不足以完成装配，因此这个命令的成功率没有实验意义；它用于检查仿真、
+远端 VLM、DP 输入和误差统计链路。正式实验应改回 task 对应的完整
+`--max-rollout-steps`，并增加 `--n-rollouts`。
 
 参数说明：
 
@@ -545,6 +576,11 @@ PY
 Qwen3.5 processor 初始化时也会注册视频处理器；即使本服务只发送图片，环境中仍必须
 安装与 PyTorch/CUDA 匹配的 `torchvision 0.20.1+cu124`。重新执行第 5.1 节安装命令，
 再用第 5.1 节的 import 检查确认版本。
+
+### `libpython3.8.so.1.0: cannot open shared object file`
+
+这是 3060 客户端的 Isaac Gym 动态库路径问题，不是 VLM 服务故障。在启动评测前执行
+第 13 节的 `LD_LIBRARY_PATH` 导出命令即可，不需要修改系统库或使用 sudo。
 
 ### strict load 报 key mismatch
 
