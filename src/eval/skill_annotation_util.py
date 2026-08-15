@@ -455,7 +455,12 @@ class SkillAnnotator:
     previous_skill: Optional[str] = None
     previous_guidance_point_robot: Optional[np.ndarray] = None
     previous_guidance_pose_robot: Optional[np.ndarray] = None
+    previous_guidance_point: Optional[np.ndarray] = None
+    previous_guidance_point_clean: Optional[np.ndarray] = None
+    previous_guidance_pose: Optional[np.ndarray] = None
+    previous_guidance_pose_clean: Optional[np.ndarray] = None
     previous_guidance_gripper_width: Optional[float] = None
+    previous_annotation_noise: Optional[dict] = None
     previous_skill_state: Optional[str] = None
     previous_assembly_step: Optional[str] = None
     verifier: Optional[object] = None  # SkillAnnotationVerifier or None
@@ -475,7 +480,12 @@ class SkillAnnotator:
         self.previous_skill = None
         self.previous_guidance_point_robot = None
         self.previous_guidance_pose_robot = None
+        self.previous_guidance_point = None
+        self.previous_guidance_point_clean = None
+        self.previous_guidance_pose = None
+        self.previous_guidance_pose_clean = None
         self.previous_guidance_gripper_width = None
+        self.previous_annotation_noise = None
         self.previous_skill_state = None
         self.previous_assembly_step = None
         self.noise_state = None
@@ -686,21 +696,41 @@ class SkillAnnotator:
             annotate_wrist_camera=annotate_wrist_camera,
         )
         if self.assemble_idx >= num_pairs:
+            guidance_point_2d = {}
+            grasp_annotation_2d = {}
+            for image_key, cam in camera_info.items():
+                point_uv = (
+                    None
+                    if self.previous_guidance_point is None
+                    else project_3d_to_2d(self.previous_guidance_point, cam)
+                )
+                guidance_point_2d[image_key] = (
+                    None if point_uv is None else point_uv.astype(np.float32)
+                )
+                grasp_annotation_2d[image_key] = (
+                    None
+                    if self.previous_guidance_pose is None
+                    else project_pose_to_grasp_annotation_2d(
+                        self.previous_guidance_pose,
+                        cam,
+                        gripper_width=self.previous_guidance_gripper_width,
+                    )
+                )
             return {
                 "skill": self.previous_skill,
                 "skill_state": self.previous_skill_state,
                 "assembly_step": self.previous_assembly_step,
-                "guidance_point": self.previous_guidance_point_robot,
-                "guidance_point_clean": self.previous_guidance_point_robot,
-                "guidance_pose": self.previous_guidance_pose_robot,
-                "guidance_pose_clean": self.previous_guidance_pose_robot,
+                "guidance_point": self.previous_guidance_point,
+                "guidance_point_clean": self.previous_guidance_point_clean,
+                "guidance_pose": self.previous_guidance_pose,
+                "guidance_pose_clean": self.previous_guidance_pose_clean,
                 "guidance_gripper_width": self.previous_guidance_gripper_width,
-                "guidance_point_2d": {},
-                "grasp_annotation_2d": {},
+                "guidance_point_2d": guidance_point_2d,
+                "grasp_annotation_2d": grasp_annotation_2d,
                 "camera_info": camera_info,
                 "verify": None,
-                "debug": {},
-                "annotation_noise": {"enabled": False},
+                "debug": {"phase": "complete"},
+                "annotation_noise": dict(self.previous_annotation_noise or {}),
             }
 
         part1_idx, part2_idx = self.furniture.should_be_assembled[self.assemble_idx]
@@ -839,6 +869,19 @@ class SkillAnnotator:
             state=self.noise_state,
             config=annotation_noise_config,
         )
+        self.previous_guidance_point = (
+            None if guidance_point is None else guidance_point.copy()
+        )
+        self.previous_guidance_point_clean = (
+            None if guidance_point_clean is None else guidance_point_clean.copy()
+        )
+        self.previous_guidance_pose = (
+            None if guidance_pose is None else guidance_pose.copy()
+        )
+        self.previous_guidance_pose_clean = (
+            None if guidance_pose_clean is None else guidance_pose_clean.copy()
+        )
+        self.previous_annotation_noise = dict(noise_info)
 
         guidance_point_2d = {}
         grasp_annotation_2d = {}

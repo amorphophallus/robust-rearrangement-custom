@@ -1,0 +1,451 @@
+condition,condition_id,family,noise_id,noise_label,pos_std_mm,ori_std_deg,task,skill_type,reached_count,completed_count,skill_success_rate,track_pos_cm,track_ori_deg,track_total,tracking_count,tracking_complete
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,one_leg,push,36,35,0.9722222222222222,3.074146731006286,,,8,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,push,35,35,1.0,11.556409611415638,,,35,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,one_leg,push,36,35,0.9722222222222222,5.298340555412744,,,8,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,one_leg,push,36,33,0.9166666666666666,3.261936123678881,,,8,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,one_leg,push,36,32,0.8888888888888888,3.841248775721468,,,7,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,one_leg,push,36,36,1.0,5.528147427436835,,,7,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,one_leg,pick,71,71,1.0,1.625968757024994,,,16,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,pick,71,70,0.9859154929577465,22.985488234844365,,,71,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,one_leg,pick,71,71,1.0,1.5252222333700127,,,15,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,one_leg,pick,69,69,1.0,1.4613830522444875,,,16,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,one_leg,pick,68,68,1.0,2.662583558547562,,,14,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,one_leg,pick,72,72,1.0,3.273862978128116,,,12,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,one_leg,place,35,32,0.9142857142857143,1.0201672215910842,,,8,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,place,35,35,1.0,16.091986655240635,,,35,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,one_leg,place,35,35,1.0,1.0218400397973484,,,7,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,one_leg,place,33,32,0.9696969696969697,1.4622677269897366,,,8,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,one_leg,place,32,29,0.90625,2.0818577719144007,,,8,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,one_leg,place,36,34,0.9444444444444444,3.390214967643934,,,8,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,one_leg,insert,32,32,1.0,0.5188585740863205,,,7,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,insert,35,30,0.8571428571428571,17.802822381577172,,,35,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,one_leg,insert,35,35,1.0,0.872076131304538,,,7,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,one_leg,insert,32,29,0.90625,1.0831469999809777,,,8,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,one_leg,insert,29,28,0.9655172413793104,1.8735747211249623,,,7,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,one_leg,insert,34,33,0.9705882352941176,4.092283567345508,,,8,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,one_leg,screw,32,32,1.0,2.079451476635548,,,2,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,screw,30,29,0.9666666666666667,45.22477364039943,,,30,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,one_leg,screw,35,35,1.0,2.0681985717684204,,,2,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,one_leg,screw,29,29,1.0,2.388170590203678,,,3,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,one_leg,screw,28,28,1.0,3.0495224965569614,,,2,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,one_leg,screw,33,32,0.9696969696969697,3.798641660717227,,,1,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,round_table,push,36,36,1.0,7.123258666895394,,,8,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,round_table,push,36,36,1.0,11.496536302144422,,,36,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,round_table,push,36,36,1.0,7.146016242394117,,,7,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,round_table,push,36,36,1.0,7.445752156771344,,,5,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,round_table,push,36,36,1.0,7.510887649321345,,,5,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,round_table,push,36,36,1.0,8.511854853923445,,,3,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,round_table,pick,50,46,0.92,3.555656579805604,,,15,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,round_table,pick,57,51,0.8947368421052632,25.45314181692216,,,57,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,round_table,pick,53,46,0.8679245283018868,1.7339757772220776,,,14,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,round_table,pick,55,47,0.8545454545454545,4.360731415045486,,,15,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,round_table,pick,58,51,0.8793103448275862,4.435415388588069,,,10,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,round_table,pick,58,54,0.9310344827586207,4.275102747750837,,,13,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,round_table,place,46,38,0.8260869565217391,2.8670219270834827,,,12,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,round_table,place,51,50,0.9803921568627451,3.3513613971491685,,,51,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,round_table,place,46,39,0.8478260869565217,2.7030668439049577,,,12,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,round_table,place,47,43,0.9148936170212766,2.099925353087572,,,12,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,round_table,place,51,44,0.8627450980392157,3.003122462502688,,,7,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,round_table,place,54,46,0.8518518518518519,5.816825857263816,,,11,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,round_table,insert,38,37,0.9736842105263158,1.2459608624584355,,,10,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,round_table,insert,50,47,0.94,4.002250007463808,,,50,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,round_table,insert,39,39,1.0,1.6932972268063842,,,11,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,round_table,insert,43,43,1.0,1.66710774091785,,,11,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,round_table,insert,44,44,1.0,2.4727622518934522,,,6,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,round_table,insert,46,45,0.9782608695652174,3.8640707061973796,,,9,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,round_table,screw,37,24,0.6486486486486487,2.3824858939935902,,,8,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,round_table,screw,46,35,0.7608695652173914,11.63790281034568,,,46,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,round_table,screw,39,29,0.7435897435897436,2.24520147293977,,,7,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,round_table,screw,43,33,0.7674418604651163,2.3572384722529507,,,9,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,round_table,screw,44,37,0.8409090909090909,3.5695598256405656,,,4,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,round_table,screw,45,38,0.8444444444444444,4.496968505974364,,,6,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,lamp,push,36,36,1.0,8.168889911894189,,,8,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,lamp,push,36,36,1.0,13.012284922651121,,,36,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,lamp,push,36,35,0.9722222222222222,9.345313293088841,,,8,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,lamp,push,36,36,1.0,8.560883375318145,,,8,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,lamp,push,35,35,1.0,7.239136523592194,,,7,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,lamp,push,36,36,1.0,7.29506855680108,,,7,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,lamp,pick,45,44,0.9777777777777777,5.17103202499163,,,8,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,lamp,pick,43,41,0.9534883720930233,17.44279771796502,,,43,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,lamp,pick,44,43,0.9772727272727273,2.163756317988181,,,8,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,lamp,pick,45,44,0.9777777777777777,2.837685268134349,,,11,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,lamp,pick,45,43,0.9555555555555556,3.0641243054592007,,,11,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,lamp,pick,46,41,0.8913043478260869,6.593591288348474,,,9,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,lamp,place,44,34,0.7727272727272727,4.5602684148747965,,,6,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,lamp,place,40,25,0.625,14.768795197345307,,,40,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,lamp,place,43,32,0.7441860465116279,2.7297216340553354,,,7,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,lamp,place,44,31,0.7045454545454546,5.84955810466419,,,9,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,lamp,place,43,30,0.6976744186046512,3.087336046666511,,,8,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,lamp,place,39,28,0.717948717948718,5.915236939203376,,,7,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,lamp,insert,25,25,1.0,1.5525651647789633,,,4,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,lamp,insert,19,19,1.0,11.634950285210392,,,19,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,lamp,insert,24,24,1.0,1.58959279120136,,,5,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,lamp,insert,23,23,1.0,1.3723223890616292,,,5,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,lamp,insert,22,22,1.0,1.9437768015672467,,,5,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,lamp,insert,22,22,1.0,3.5608608966334807,,,3,True
+rgbd+GP,gp,point,n0,0mm,0.0,0.0,lamp,screw,25,15,0.6,21.361084368369955,,,2,True
+rgbd+GP,gp,point,shuffle,shuffled-guidance,0.0,0.0,lamp,screw,19,11,0.5789473684210527,26.022547659796448,,,19,False
+rgbd+GP,gp,point,n1,3mm,3.0,0.0,lamp,screw,24,12,0.5,17.922134561035197,,,4,True
+rgbd+GP,gp,point,n2,6mm,6.0,0.0,lamp,screw,23,13,0.5652173913043478,16.91794851111096,,,4,True
+rgbd+GP,gp,point,n3,12mm,12.0,0.0,lamp,screw,22,14,0.6363636363636364,9.968320172907925,,,4,True
+rgbd+GP,gp,point,n4,24mm,24.0,0.0,lamp,screw,22,14,0.6363636363636364,4.10525567113784,,,1,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,one_leg,push,36,35,0.9722222222222222,5.505133287058482,,,8,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,push,36,34,0.9444444444444444,11.6225885713993,,,36,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,one_leg,push,36,34,0.9444444444444444,6.081839181072436,,,8,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,one_leg,push,36,33,0.9166666666666666,4.958873748620219,,,8,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,one_leg,push,36,34,0.9444444444444444,4.101589315876093,,,8,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,one_leg,push,36,32,0.8888888888888888,7.898771703276973,,,7,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,one_leg,pick,71,71,1.0,2.017089644106901,,,15,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,pick,70,70,1.0,23.292966622733513,,,70,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,one_leg,pick,70,70,1.0,2.1945627733277084,,,14,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,one_leg,pick,69,69,1.0,1.9481538337084672,,,15,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,one_leg,pick,70,70,1.0,2.2419258328256153,,,14,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,one_leg,pick,68,68,1.0,3.4265425307190993,,,11,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,one_leg,place,35,32,0.9142857142857143,0.859588048027536,,,7,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,place,34,31,0.9117647058823529,18.572523185240193,,,34,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,one_leg,place,34,33,0.9705882352941176,1.191887266974359,,,6,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,one_leg,place,33,32,0.9696969696969697,1.6147287936274513,,,7,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,one_leg,place,34,34,1.0,1.5215302068992984,,,8,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,one_leg,place,32,31,0.96875,3.223468956867644,,,6,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,one_leg,insert,32,31,0.96875,0.7675528115255689,,,7,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,insert,31,30,0.967741935483871,18.590377122678714,,,31,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,one_leg,insert,33,31,0.9393939393939394,1.0241876141720276,,,6,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,one_leg,insert,32,31,0.96875,1.1742724056788776,,,7,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,one_leg,insert,34,33,0.9705882352941176,2.386418965912959,,,8,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,one_leg,insert,31,31,1.0,5.0253763755606515,,,5,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,one_leg,screw,31,31,1.0,1.8084892849353649,,,1,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,screw,30,29,0.9666666666666667,49.43948410431987,,,30,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,one_leg,screw,31,31,1.0,1.730968767300111,,,1,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,one_leg,screw,31,30,0.967741935483871,2.1796785279636106,,,1,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,one_leg,screw,33,32,0.9696969696969697,2.1424883419663177,,,2,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,one_leg,screw,30,30,1.0,4.436620347162545,,,1,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,round_table,push,36,36,1.0,7.2835804608073635,,,8,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,round_table,push,36,36,1.0,11.739471676901909,,,36,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,round_table,push,36,36,1.0,7.114820254795721,,,7,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,round_table,push,36,36,1.0,7.249422445789746,,,5,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,round_table,push,36,36,1.0,7.190925839378676,,,5,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,round_table,push,36,36,1.0,8.122179218967577,,,3,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,round_table,pick,58,49,0.8448275862068966,2.321833408391151,,,13,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,round_table,pick,59,56,0.9491525423728814,24.995369131204423,,,59,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,round_table,pick,60,51,0.85,3.3088384319993254,,,14,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,round_table,pick,56,50,0.8928571428571429,2.2777890354373436,,,13,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,round_table,pick,58,54,0.9310344827586207,3.0095114673096535,,,13,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,round_table,pick,57,47,0.8245614035087719,5.776898709119735,,,12,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,round_table,place,49,40,0.8163265306122449,2.357078514068967,,,10,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,round_table,place,56,50,0.8928571428571429,3.770008258335172,,,56,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,round_table,place,51,41,0.803921568627451,1.9485702807727086,,,11,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,round_table,place,50,41,0.82,2.006087094980996,,,13,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,round_table,place,54,46,0.8518518518518519,3.776108466603162,,,12,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,round_table,place,47,41,0.8723404255319149,3.917849757245963,,,11,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,round_table,insert,40,39,0.975,1.6326239315733366,,,9,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,round_table,insert,50,49,0.98,4.229984303323965,,,50,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,round_table,insert,41,41,1.0,1.1182065218859716,,,9,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,round_table,insert,41,40,0.975609756097561,1.6633909074503008,,,10,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,round_table,insert,46,45,0.9782608695652174,1.81976248714246,,,8,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,round_table,insert,41,40,0.975609756097561,4.061961229141929,,,9,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,round_table,screw,39,33,0.8461538461538461,2.0284620659118078,,,6,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,round_table,screw,49,37,0.7551020408163265,11.004990160746805,,,49,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,round_table,screw,41,38,0.926829268292683,2.041763634389013,,,8,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,round_table,screw,40,33,0.825,2.8697163157916212,,,7,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,round_table,screw,45,35,0.7777777777777778,3.111989929578804,,,6,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,round_table,screw,40,35,0.875,4.2827923886478585,,,5,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,lamp,push,36,36,1.0,7.425217078594909,,,8,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,lamp,push,36,36,1.0,12.98265819484549,,,36,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,lamp,push,36,36,1.0,7.542696528427858,,,8,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,lamp,push,36,36,1.0,7.3706044351942275,,,8,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,lamp,push,36,36,1.0,7.485267244960789,,,7,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,lamp,push,36,34,0.9444444444444444,7.28317812716405,,,7,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,lamp,pick,49,47,0.9591836734693877,2.519197541795979,,,12,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,lamp,pick,44,44,1.0,16.58035221915853,,,44,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,lamp,pick,47,45,0.9574468085106383,5.014022600327403,,,9,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,lamp,pick,49,48,0.9795918367346939,2.510231414941118,,,13,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,lamp,pick,47,45,0.9574468085106383,3.541868152775688,,,10,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,lamp,pick,39,37,0.9487179487179487,4.853803194599327,,,8,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,lamp,place,45,32,0.7111111111111111,3.9779439679347703,,,8,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,lamp,place,44,29,0.6590909090909091,15.99661472206036,,,44,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,lamp,place,45,36,0.8,1.9170660821973013,,,8,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,lamp,place,48,37,0.7708333333333334,1.494926175074535,,,8,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,lamp,place,44,30,0.6818181818181818,7.096919893938638,,,8,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,lamp,place,37,27,0.7297297297297297,7.831758969661112,,,8,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,lamp,insert,22,22,1.0,1.5264486121069156,,,6,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,lamp,insert,21,21,1.0,13.060170549974819,,,21,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,lamp,insert,26,26,1.0,1.4257343113869114,,,6,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,lamp,insert,24,24,1.0,1.4195245091051027,,,7,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,lamp,insert,20,20,1.0,2.3814826046283897,,,2,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,lamp,insert,22,22,1.0,3.0760729168844345,,,3,True
+rgbd+colored GP,colored_gp,point,n0,0mm,0.0,0.0,lamp,screw,22,15,0.6818181818181818,8.344379753382338,,,6,True
+rgbd+colored GP,colored_gp,point,shuffle,shuffled-guidance,0.0,0.0,lamp,screw,21,13,0.6190476190476191,26.84254121228351,,,21,False
+rgbd+colored GP,colored_gp,point,n1,3mm,3.0,0.0,lamp,screw,26,15,0.5769230769230769,16.985353353633602,,,4,True
+rgbd+colored GP,colored_gp,point,n2,6mm,6.0,0.0,lamp,screw,24,17,0.7083333333333334,13.437858226540596,,,7,True
+rgbd+colored GP,colored_gp,point,n3,12mm,12.0,0.0,lamp,screw,20,13,0.65,6.919469545976622,,,2,True
+rgbd+colored GP,colored_gp,point,n4,24mm,24.0,0.0,lamp,screw,22,15,0.6818181818181818,6.829759094020316,,,1,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,one_leg,push,36,34,0.9444444444444444,4.875710019555947,,,8,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,push,36,33,0.9166666666666666,12.105012106597453,,,36,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,one_leg,push,36,35,0.9722222222222222,3.0907925723584593,,,8,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,one_leg,push,36,35,0.9722222222222222,3.2548221503760577,,,8,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,one_leg,push,36,35,0.9722222222222222,5.70387616825704,,,8,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,one_leg,push,36,34,0.9444444444444444,5.667779951182491,,,7,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,one_leg,pick,70,70,1.0,1.3239607711296097,,,15,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,pick,69,69,1.0,23.54451215630887,,,69,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,one_leg,pick,71,71,1.0,1.587777997414975,,,16,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,one_leg,pick,71,71,1.0,1.8430508574060516,,,16,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,one_leg,pick,71,71,1.0,2.803531415152679,,,13,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,one_leg,pick,70,70,1.0,4.263611309324182,,,11,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,one_leg,place,34,30,0.8823529411764706,1.0677084593081974,,,7,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,place,33,33,1.0,18.43036079322445,,,33,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,one_leg,place,35,34,0.9714285714285714,1.2531194516089268,,,8,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,one_leg,place,35,33,0.9428571428571428,1.625141706442292,,,8,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,one_leg,place,35,35,1.0,2.7543459110720607,,,7,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,one_leg,place,34,29,0.8529411764705882,3.2961685179486446,,,8,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,one_leg,insert,30,30,1.0,0.5916142782498168,,,6,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,insert,33,33,1.0,17.22993138121584,,,33,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,one_leg,insert,34,33,0.9705882352941176,0.7240960257871824,,,8,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,one_leg,insert,33,32,0.9696969696969697,1.0744092726873302,,,6,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,one_leg,insert,35,34,0.9714285714285714,1.8333817443956175,,,7,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,one_leg,insert,29,27,0.9310344827586207,4.593731485761948,,,6,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,one_leg,screw,30,30,1.0,2.3950963143709925,,,2,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,one_leg,screw,33,32,0.9696969696969697,42.206284612892276,,,33,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,one_leg,screw,33,33,1.0,1.969313059570325,,,3,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,one_leg,screw,32,32,1.0,2.0314124178089905,,,1,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,one_leg,screw,34,33,0.9705882352941176,3.462640976388957,,,3,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,one_leg,screw,27,26,0.9629629629629629,3.392604850359563,,,1,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,round_table,push,36,36,1.0,7.306933076160567,,,8,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,round_table,push,36,36,1.0,11.490962100215071,,,36,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,round_table,push,36,36,1.0,7.190704489599161,,,7,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,round_table,push,36,36,1.0,6.900117913106184,,,5,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,round_table,push,36,36,1.0,7.192249735610686,,,5,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,round_table,push,36,36,1.0,7.894763096781642,,,3,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,round_table,pick,59,54,0.9152542372881356,3.501716078182359,,,15,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,round_table,pick,56,49,0.875,24.164358239564784,,,56,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,round_table,pick,55,43,0.7818181818181819,2.5937056087008843,,,15,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,round_table,pick,58,52,0.896551724137931,2.4500961692046346,,,14,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,round_table,pick,52,45,0.8653846153846154,2.841909509860172,,,10,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,round_table,pick,58,53,0.9137931034482759,4.977839248701126,,,12,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,round_table,place,54,48,0.8888888888888888,1.7621966766888093,,,12,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,round_table,place,49,39,0.7959183673469388,4.218270384518453,,,49,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,round_table,place,43,38,0.8837209302325582,2.0168467418160687,,,14,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,round_table,place,52,44,0.8461538461538461,4.095687186551294,,,14,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,round_table,place,45,36,0.8,3.0756282862288247,,,9,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,round_table,place,53,46,0.8679245283018868,4.814304007268958,,,12,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,round_table,insert,48,47,0.9791666666666666,1.422691845146648,,,12,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,round_table,insert,38,38,1.0,4.249794785994309,,,38,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,round_table,insert,38,38,1.0,1.9288031138531214,,,13,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,round_table,insert,44,44,1.0,1.5052783271599905,,,9,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,round_table,insert,36,35,0.9722222222222222,3.2428893263609315,,,6,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,round_table,insert,46,44,0.9565217391304348,3.6253627746339356,,,10,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,round_table,screw,47,39,0.8297872340425532,2.3214559393823313,,,8,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,round_table,screw,38,34,0.8947368421052632,19.67754927308974,,,38,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,round_table,screw,38,35,0.9210526315789473,2.3006658757617293,,,7,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,round_table,screw,44,39,0.8863636363636364,3.232095973424842,,,6,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,round_table,screw,35,27,0.7714285714285715,3.7743479623034273,,,4,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,round_table,screw,44,38,0.8636363636363636,5.791140791838933,,,7,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,lamp,push,36,36,1.0,7.744541951580816,,,8,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,lamp,push,36,36,1.0,13.25315917552893,,,36,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,lamp,push,36,35,0.9722222222222222,6.958964692299402,,,8,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,lamp,push,36,35,0.9722222222222222,7.776884862982211,,,8,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,lamp,push,36,36,1.0,7.1091350151196435,,,7,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,lamp,push,36,36,1.0,7.515467676046016,,,7,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,lamp,pick,44,42,0.9545454545454546,4.301310594498053,,,10,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,lamp,pick,42,40,0.9523809523809523,16.53036738271538,,,42,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,lamp,pick,42,41,0.9761904761904762,2.299739563841065,,,10,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,lamp,pick,46,45,0.9782608695652174,2.460880214768766,,,12,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,lamp,pick,44,42,0.9545454545454546,3.5373190489091533,,,10,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,lamp,pick,43,41,0.9534883720930233,5.309154309730946,,,9,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,lamp,place,40,27,0.675,2.7057726350709075,,,7,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,lamp,place,40,28,0.7,12.702101715120573,,,40,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,lamp,place,41,27,0.6585365853658537,4.026939244819307,,,8,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,lamp,place,45,33,0.7333333333333333,3.1477835041792064,,,8,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,lamp,place,42,25,0.5952380952380952,3.562994096346185,,,8,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,lamp,place,41,30,0.7317073170731707,7.892987005450556,,,9,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,lamp,insert,21,21,1.0,1.5294389777901243,,,4,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,lamp,insert,22,22,1.0,11.66858651756835,,,22,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,lamp,insert,20,20,1.0,1.5766142877381422,,,4,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,lamp,insert,23,23,1.0,1.1571543843412329,,,7,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,lamp,insert,19,19,1.0,1.5984330585159068,,,5,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,lamp,insert,24,24,1.0,3.31450799905232,,,5,True
+rgbd+GP+skill,gp_skill,point,n0,0mm,0.0,0.0,lamp,screw,21,12,0.5714285714285714,4.227280878247109,,,3,True
+rgbd+GP+skill,gp_skill,point,shuffle,shuffled-guidance,0.0,0.0,lamp,screw,22,10,0.45454545454545453,25.920975531703473,,,22,False
+rgbd+GP+skill,gp_skill,point,n1,3mm,3.0,0.0,lamp,screw,20,13,0.65,12.892369416022722,,,4,True
+rgbd+GP+skill,gp_skill,point,n2,6mm,6.0,0.0,lamp,screw,23,18,0.782608695652174,16.222884190424363,,,5,True
+rgbd+GP+skill,gp_skill,point,n3,12mm,12.0,0.0,lamp,screw,19,12,0.631578947368421,8.500158572642427,,,3,True
+rgbd+GP+skill,gp_skill,point,n4,24mm,24.0,0.0,lamp,screw,24,10,0.4166666666666667,17.815044178764204,,,5,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,one_leg,push,36,29,0.8055555555555556,5.21310324611383,22.445106941876286,9.702124634489088,8,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,one_leg,push,36,33,0.9166666666666666,9.517263187995887,30.969817591816756,15.711226706359238,36,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,one_leg,push,36,34,0.9444444444444444,3.2896165478243136,11.885801308440591,5.666776809512431,8,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,one_leg,push,36,31,0.8611111111111112,5.275533562783017,25.07049793781154,10.289633150345324,8,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,one_leg,push,36,33,0.9166666666666666,5.33592976793119,32.860797843713186,11.908089336673827,7,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,one_leg,push,36,34,0.9444444444444444,5.678977303202714,37.12113469500391,13.103204242203494,7,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,one_leg,pick,65,65,1.0,2.1668263500397433,16.63564618284879,5.493955586609502,15,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,one_leg,pick,69,69,1.0,23.3712833176576,104.86319329833954,44.34392197732551,69,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,one_leg,pick,70,70,1.0,1.7156222046208605,14.845748490752221,4.684771902771305,16,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,one_leg,pick,67,67,1.0,2.213129874897444,17.857529361107822,5.784635747119008,15,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,one_leg,pick,69,69,1.0,5.088268017106698,18.530335429768808,8.79433510306046,14,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,one_leg,pick,70,70,1.0,4.262654552690944,30.69020942291568,10.400696437274078,11,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,one_leg,place,29,29,1.0,0.7977634151737908,10.01193786445051,2.8001509880638933,7,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,one_leg,place,33,30,0.9090909090909091,17.244814998719864,66.9447686194132,30.633768722602497,33,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,one_leg,place,34,34,1.0,1.1814605922515324,10.006274327645418,3.182715457780616,8,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,one_leg,place,31,30,0.967741935483871,1.599755420932613,11.862532002623741,3.9722618214573617,7,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,one_leg,place,33,32,0.9696969696969697,2.117336856464507,16.696931502058703,5.456723156876248,7,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,one_leg,place,34,31,0.9117647058823529,3.491233009192455,34.59711239899673,10.4106554889918,8,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,one_leg,insert,29,28,0.9655172413793104,0.5065756827419284,5.715399648094127,1.649655612360754,7,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,one_leg,insert,30,27,0.9,19.010988535564895,70.87446922109353,33.185882379783614,30,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,one_leg,insert,34,34,1.0,0.8251322396299015,7.277819837890672,2.280696207208036,8,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,one_leg,insert,30,29,0.9666666666666667,1.2257193012155392,10.422960574558033,3.310311416127146,7,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,one_leg,insert,32,32,1.0,1.5824671145489937,16.84065812775125,4.950598740099243,6,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,one_leg,insert,31,30,0.967741935483871,3.78677940829773,37.37440195441967,11.261659799181663,8,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,one_leg,screw,28,27,0.9642857142857143,2.275983288563662,17.407725265136854,5.7575283415910326,2,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,one_leg,screw,27,27,1.0,49.62551252983989,37.08685033336498,57.04288259651288,27,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,one_leg,screw,34,34,1.0,1.5439293061997208,20.741033640420994,5.692136034283919,3,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,one_leg,screw,29,29,1.0,2.489092076211091,50.53624783897149,12.596341644005388,1,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,one_leg,screw,32,32,1.0,3.8273132653186237,20.664379431724004,7.960189151663425,1,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,one_leg,screw,30,30,1.0,6.05038058120972,18.976522038732025,9.845684988956124,1,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,round_table,push,36,36,1.0,7.326270696107424,61.89311545739443,19.704893787586307,8,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,round_table,push,36,36,1.0,11.673430676806802,46.61865965915101,20.997162608637,36,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,round_table,push,36,36,1.0,6.833717100553881,60.82197103272068,18.998111307098018,7,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,round_table,push,36,34,0.9444444444444444,7.37417747887447,58.05435233425203,18.98504794572488,5,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,round_table,push,36,36,1.0,7.183991822661359,60.37777054316014,19.259545931293385,5,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,round_table,push,36,36,1.0,8.217769129535824,48.6695688045329,17.951682890442402,3,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,round_table,pick,54,45,0.8333333333333334,2.44647187335125,25.351602841721924,7.516792441695634,14,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,round_table,pick,55,49,0.8909090909090909,22.46915392314666,64.64300111581856,35.39775414631037,55,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,round_table,pick,56,50,0.8928571428571429,5.34235207189397,32.91887235686915,11.9261265432678,13,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,round_table,pick,54,52,0.9629629629629629,1.881914577569489,19.793848329948005,5.84068424355909,16,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,round_table,pick,64,62,0.96875,4.069255186040931,29.89741513646703,10.048738213334337,14,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,round_table,pick,58,53,0.9137931034482759,4.329954838521657,45.71045603691862,13.47204604590538,13,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,round_table,place,45,38,0.8444444444444444,2.309799533993098,18.001424549065657,5.910084443806228,12,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,round_table,place,49,41,0.8367346938775511,4.444517002429745,52.82332604596202,15.009182211622146,49,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,round_table,place,50,41,0.82,2.7574884430591977,16.76166602434117,6.109821647927431,10,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,round_table,place,52,43,0.8269230769230769,2.185892867610553,9.681458238268373,4.1221845152642285,16,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,round_table,place,62,59,0.9516129032258065,3.07805171500954,27.17864370111266,8.513780455232071,12,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,round_table,place,53,48,0.9056603773584906,4.423955212682056,38.273908012519435,12.078736815185943,12,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,round_table,insert,38,36,0.9473684210526315,1.4264495430557746,7.025643448323416,2.831578232720458,9,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,round_table,insert,42,39,0.9285714285714286,4.1639166947571615,27.83479575517675,9.730875845792513,42,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,round_table,insert,41,39,0.9512195121951219,1.5020789355797795,7.703580941713962,3.0427951239225717,9,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,round_table,insert,43,43,1.0,1.936152487820657,12.02177778131603,4.340508044083863,13,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,round_table,insert,59,57,0.9661016949152542,2.7279301365557047,16.48922173324316,6.025774483204335,10,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,round_table,insert,49,49,1.0,3.697614885830323,33.76160729002627,10.449936343835578,8,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,round_table,screw,36,29,0.8055555555555556,2.3285270302179835,30.168599486750708,8.362246927568126,7,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,round_table,screw,39,31,0.7948717948717948,16.331210777028105,67.57218715500748,29.845648208029598,39,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,round_table,screw,39,32,0.8205128205128205,2.8026923698221218,29.495423575792852,8.70177708498069,5,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,round_table,screw,43,35,0.813953488372093,2.5385039373247724,32.612414108340275,9.060986758992826,8,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,round_table,screw,57,49,0.8596491228070176,3.2458752556433743,55.79832895294259,14.405541046231889,7,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,round_table,screw,49,42,0.8571428571428571,4.978340811494646,37.993871154445785,12.577115042383802,5,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,lamp,push,36,35,0.9722222222222222,6.9166285854049905,73.34615248661495,21.58585908272798,8,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,lamp,push,36,36,1.0,13.173035773459713,50.052889652691874,23.183613703998088,36,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,lamp,push,36,36,1.0,7.404299499076236,74.64991288062129,22.33428207520049,8,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,lamp,push,36,35,0.9722222222222222,8.754806083492635,69.59304702156004,22.673415487804643,8,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,lamp,push,36,36,1.0,7.401555537280231,68.80160816001998,21.161877169284228,7,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,lamp,push,36,35,0.9722222222222222,7.139426384865607,81.43032724511431,23.42549183388847,7,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,lamp,pick,44,43,0.9772727272727273,2.7384648295280574,19.77790590264457,6.69404601005697,9,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,lamp,pick,46,41,0.8913043478260869,16.53504119199728,50.15346028882882,26.565733249763042,46,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,lamp,pick,44,40,0.9090909090909091,1.9350841952795872,13.557039119113583,4.646492019102304,9,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,lamp,pick,50,50,1.0,4.463009912269719,22.188407452569745,8.900691402783666,12,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,lamp,pick,42,40,0.9523809523809523,6.797071432042091,26.572794519676137,12.111630335977317,9,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,lamp,pick,42,36,0.8571428571428571,11.152328309947459,46.48740527754566,20.449809365456588,8,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,lamp,place,43,30,0.6976744186046512,4.941996614060856,56.48835478436277,16.23966757093341,9,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,lamp,place,41,26,0.6341463414634146,17.076500549927836,25.227300379446987,22.12196062581723,41,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,lamp,place,40,26,0.65,3.8980330977471076,51.38350337634424,14.174733773015955,8,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,lamp,place,50,38,0.76,2.231153329741756,43.64466726314664,10.960086782371084,7,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,lamp,place,39,20,0.5128205128205128,7.021346898459359,86.77154162205052,24.37565522286946,7,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,lamp,place,36,25,0.6944444444444444,7.935066596115557,75.35924494340149,23.006915584795852,6,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,lamp,insert,22,22,1.0,1.3527961415242906,25.985896505104883,6.549975442545266,5,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,lamp,insert,17,17,1.0,11.573951645059495,97.69561058796542,31.113073762652583,17,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,lamp,insert,18,18,1.0,1.2917339741831675,25.862366210106348,6.4642072162044375,5,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,lamp,insert,24,24,1.0,1.8644764179825941,40.993823675989496,10.063241153180488,7,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,lamp,insert,15,15,1.0,1.6795383422951462,35.37020939598442,8.75358022149203,4,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,lamp,insert,18,18,1.0,5.699263566635823,53.28891506430081,16.357046579495986,2,True
+rgbd+grasp-part,grasp_part,grasp-part,n0,0mm/0deg,0.0,0.0,lamp,screw,22,18,0.8181818181818182,9.269637865516863,23.80778981589955,14.031195828696772,3,True
+rgbd+grasp-part,grasp_part,grasp-part,shuffle,shuffled-guidance,0.0,0.0,lamp,screw,17,16,0.9411764705882353,26.758800271866612,83.82187712082337,43.52317569603128,17,False
+rgbd+grasp-part,grasp_part,grasp-part,n1,3mm/2.5deg,3.0,2.5,lamp,screw,18,15,0.8333333333333334,10.04737610634896,38.1278713523656,17.67295037682208,2,True
+rgbd+grasp-part,grasp_part,grasp-part,n2,6mm/5deg,6.0,5.0,lamp,screw,24,17,0.7083333333333334,5.696264819875419,18.964408521602596,9.48914652419594,7,True
+rgbd+grasp-part,grasp_part,grasp-part,n3,12mm/10deg,12.0,10.0,lamp,screw,15,12,0.8,4.084522879107784,11.682999666014004,6.421122812310585,2,True
+rgbd+grasp-part,grasp_part,grasp-part,n4,24mm/20deg,24.0,20.0,lamp,screw,18,12,0.6666666666666666,8.724914409873668,23.980202259269504,13.520954861727567,1,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,one_leg,push,36,34,0.9444444444444444,5.07756083321501,21.483957913061552,9.374352415827321,8,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,one_leg,push,36,35,0.9722222222222222,11.792144051777573,40.40155202433721,19.872454456645013,36,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,one_leg,push,36,36,1.0,4.559710224901305,20.721999954117603,8.704110215724825,8,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,one_leg,push,36,35,0.9722222222222222,5.2785847078244075,25.70889100712746,10.4203629092499,8,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,one_leg,push,36,36,1.0,3.757047339411003,19.78146559763918,7.713340458938838,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,one_leg,push,36,35,0.9722222222222222,6.173998885143616,48.521116981685445,15.878222281480708,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,one_leg,pick,70,70,1.0,1.766804905465577,12.765172162407634,4.319839337947104,15,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,one_leg,pick,71,71,1.0,23.31064535403862,104.76610833090477,44.263867020219585,71,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,one_leg,pick,72,71,0.9861111111111112,1.542876208292061,16.69950215276992,4.882776638846044,16,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,one_leg,pick,71,71,1.0,2.286514862273085,15.532189169103056,5.392952696093696,15,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,one_leg,pick,72,72,1.0,4.2577821097270805,19.742538664672384,8.206289842661556,15,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,one_leg,pick,71,71,1.0,4.152747286415143,35.929415744923325,11.338630435399809,11,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,one_leg,place,34,32,0.9411764705882353,0.8759551699731869,10.400556554040644,2.956066480781316,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,one_leg,place,35,33,0.9428571428571428,19.55254734774782,72.09869798744444,33.972286945236704,35,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,one_leg,place,35,30,0.8571428571428571,1.5040887783363992,13.042284550681877,4.112545688472775,8,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,one_leg,place,35,34,0.9714285714285714,1.6752588295346391,12.354232022251464,4.146105233984932,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,one_leg,place,36,33,0.9166666666666666,2.4251018902262937,17.147052935901627,5.85451247740662,8,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,one_leg,place,35,35,1.0,2.831532561067388,27.9899017732403,8.42951291571545,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,one_leg,insert,32,32,1.0,0.5249261242475629,5.322243554816159,1.5893748352107948,6,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,one_leg,insert,33,33,1.0,18.741451463331362,67.89518890809138,32.32048924494964,33,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,one_leg,insert,30,30,1.0,0.7451444007233156,6.81565552436686,2.108275505596688,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,one_leg,insert,34,31,0.9117647058823529,1.4717176635880818,10.789723387150833,3.6296623410182485,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,one_leg,insert,33,30,0.9090909090909091,2.4461996981293432,14.506897036926032,5.347579105514549,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,one_leg,insert,35,35,1.0,3.204512566652994,28.109250682462545,8.826362703145502,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,one_leg,screw,32,32,1.0,1.982095836988703,2.9173664548035023,2.5655691279494035,1,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,one_leg,screw,33,33,1.0,41.688038965228536,44.12090554437198,50.512220074102935,33,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,one_leg,screw,30,30,1.0,2.3625608912590614,7.339565294787107,3.830473950216483,2,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,one_leg,screw,31,31,1.0,2.5045096330750742,54.24220825173635,13.352951283422344,1,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,one_leg,screw,30,29,0.9666666666666667,,,,0,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,one_leg,screw,34,33,0.9705882352941176,6.1253480163847795,29.976684937299183,12.120685003844615,2,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,round_table,push,36,36,1.0,7.153713933970838,68.8065382252897,20.915021579028778,8,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,round_table,push,36,36,1.0,11.549307444951024,46.23237823096973,20.79578309114497,36,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,round_table,push,36,36,1.0,6.994111881911009,65.79922878885297,20.153957639681607,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,round_table,push,36,36,1.0,7.059556197439629,68.25717925915954,20.710992049271532,5,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,round_table,push,36,36,1.0,7.524526705104533,63.540383399491944,20.232603385002925,5,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,round_table,push,36,36,1.0,7.888591115023876,56.74868392692738,19.238327900409352,3,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,round_table,pick,54,49,0.9074074074074074,2.2287861351448086,27.183931841677794,7.665572503480367,14,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,round_table,pick,59,50,0.847457627118644,22.752135946630364,64.77620086945285,35.707376120520934,59,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,round_table,pick,59,56,0.9491525423728814,1.8496730626590707,21.562616273380122,6.162196317335096,14,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,round_table,pick,56,50,0.8928571428571429,3.2869713089806667,46.558855163558036,12.598742341692274,12,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,round_table,pick,59,52,0.8813559322033898,3.1692327880406035,45.51048258869574,12.271329305779751,13,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,round_table,pick,57,46,0.8070175438596491,4.648224571802798,47.84269211056256,14.216762993915312,13,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,round_table,place,49,41,0.8367346938775511,2.9128459596501184,28.96742317603595,8.706330594857308,12,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,round_table,place,50,44,0.88,3.648659551493395,45.31272404106844,12.71120435970708,50,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,round_table,place,56,47,0.8392857142857143,2.60782679025314,13.753997054170403,5.358626201087221,14,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,round_table,place,50,44,0.88,2.361226411571929,29.474544340858106,8.25613527974355,9,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,round_table,place,52,44,0.8461538461538461,4.275324963713275,41.95320927712117,12.665966819137509,12,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,round_table,place,46,41,0.8913043478260869,4.40489805976573,34.21555411413643,11.248008882593014,11,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,round_table,insert,41,41,1.0,1.1753087539701117,11.241271471686735,3.423563048307459,9,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,round_table,insert,44,43,0.9772727272727273,4.4066017902603765,29.698651876042348,10.346332165468846,44,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,round_table,insert,47,47,1.0,1.04224301608261,6.5085481125154905,2.343952638585708,8,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,round_table,insert,44,43,0.9772727272727273,1.1389098819250414,12.479897353971102,3.634889352719262,4,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,round_table,insert,44,44,1.0,2.229168455252384,25.06540052943121,7.242248561138626,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,round_table,insert,41,41,1.0,3.7966415552715964,44.29772206152349,12.65618596757629,9,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,round_table,screw,41,33,0.8048780487804879,2.470621217493622,21.53142727437864,6.77690667236935,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,round_table,screw,43,37,0.8604651162790697,16.425778772231457,52.64072488737104,26.953923749705666,43,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,round_table,screw,47,40,0.851063829787234,2.4544565294894585,49.73618901701412,12.401694332892284,6,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,round_table,screw,43,35,0.813953488372093,3.405446140471481,41.02418407622193,11.610282955715865,4,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,round_table,screw,44,37,0.8409090909090909,3.5447755257070566,33.0201895548792,10.148813436682897,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,round_table,screw,41,35,0.8536585365853658,5.8356494833481705,52.89038280533358,16.413726044414883,6,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,lamp,push,36,35,0.9722222222222222,7.625458849993602,73.7524428099531,22.375947411984217,8,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,lamp,push,36,36,1.0,13.202487108040122,52.59613193026249,23.72171349409261,36,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,lamp,push,36,36,1.0,7.312658677762224,75.75606906280669,22.46387249032356,8,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,lamp,push,36,36,1.0,7.743680724435436,80.08670138982578,23.761021002400593,8,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,lamp,push,36,36,1.0,7.108155501236042,81.08466534068644,23.325088569373328,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,lamp,push,36,36,1.0,7.538012598981263,84.92249307753114,24.522511214487498,7,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,lamp,pick,48,46,0.9583333333333334,2.393707248807351,18.49707020325016,6.0931212894573825,12,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,lamp,pick,50,48,0.96,14.376876474920037,50.030434660346216,24.382963406989283,50,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,lamp,pick,47,47,1.0,2.5239896257031265,20.836103677392533,6.691210361181632,12,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,lamp,pick,51,46,0.9019607843137255,4.912297340146596,16.18254294574727,8.14880592929605,10,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,lamp,pick,43,42,0.9767441860465116,3.4075289599568777,27.25681273856679,8.858891507670235,11,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,lamp,pick,49,46,0.9387755102040817,4.604561922735764,38.82509745415968,12.369581413567703,11,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,lamp,place,46,29,0.6304347826086957,2.7785983875094553,41.87813171050383,11.154224729610222,8,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,lamp,place,48,32,0.6666666666666666,18.66962566531689,32.57639505434568,25.184904676186026,48,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,lamp,place,47,35,0.7446808510638298,4.540994825972665,51.16783073936024,14.77456097384471,10,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,lamp,place,46,34,0.7391304347826086,4.5110740656507105,74.36706580654457,19.384487226959624,6,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,lamp,place,42,19,0.4523809523809524,5.498667490785654,62.577389339367,18.014145358659057,8,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,lamp,place,46,34,0.7391304347826086,7.35571271575943,64.01123938622683,20.1579605930048,8,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,lamp,insert,17,17,1.0,1.6425415136209611,29.67924193669497,7.578389900959955,5,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,lamp,insert,19,19,1.0,10.608465762732996,105.91710153758842,31.791886070250683,19,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,lamp,insert,24,24,1.0,1.6134614953300968,21.522226375616953,5.917906770453487,6,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,lamp,insert,21,21,1.0,1.671653776643315,75.28186298875039,16.728026374393394,4,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,lamp,insert,12,12,1.0,1.4904538343017955,29.953415845882105,7.481137003478217,3,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,lamp,insert,22,22,1.0,3.877830638893779,34.15920723140003,10.709672085173782,5,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n0,0mm/0deg,0.0,0.0,lamp,screw,17,15,0.8823529411764706,9.476475746568783,27.50883162323926,14.978242071216634,4,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,shuffle,shuffled-guidance,0.0,0.0,lamp,screw,19,17,0.8947368421052632,19.692407784895995,74.33312820991549,34.55903342687909,19,False
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n1,3mm/2.5deg,3.0,2.5,lamp,screw,23,20,0.8695652173913043,2.954460294666335,35.869458023323446,10.128351899331024,4,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n2,6mm/5deg,6.0,5.0,lamp,screw,21,21,1.0,9.257598879475708,61.66873901472894,21.59134668242149,3,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n3,12mm/10deg,12.0,10.0,lamp,screw,12,11,0.9166666666666666,7.4534560553831035,31.769237629593004,13.807303581301705,3,True
+rgbd+grasp-part-colored,grasp_part_colored,grasp-part,n4,24mm/20deg,24.0,20.0,lamp,screw,22,21,0.9545454545454546,10.704908820576668,41.213182648040316,18.94754535018473,3,True

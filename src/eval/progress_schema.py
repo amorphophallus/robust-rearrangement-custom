@@ -6,6 +6,32 @@ from typing import Iterable, Optional
 import numpy as np
 
 
+def append_tracking_annotation_histories(
+    *,
+    save_rollouts: bool,
+    collect_skill_stats: bool,
+    histories: tuple[list, ...],
+    current_values: tuple[list, ...],
+) -> bool:
+    """Keep pose targets for every rollout used by tracking statistics."""
+    if not (save_rollouts or collect_skill_stats):
+        return False
+    if len(histories) != len(current_values):
+        raise ValueError("tracking annotation histories and values must align")
+    for history, values in zip(histories, current_values):
+        history.append(values)
+    return True
+
+
+def tracking_histories_are_complete(
+    robot_states: list,
+    skill_states: list,
+    guidance_poses: list,
+) -> bool:
+    n_frames = len(robot_states)
+    return n_frames > 0 and n_frames == len(skill_states) == len(guidance_poses)
+
+
 TASK_PROGRESS_SCHEMA: dict[str, dict[str, list[str]]] = {
     "one_leg": {
         "skill_states": [
@@ -147,6 +173,17 @@ TRACKING_TOTAL_POS_SCALE_M = 0.01
 TRACKING_TOTAL_ORI_SCALE_DEG = 5.0
 TRACKING_METRIC_TYPES = {"position", "pose"}
 
+# Guidance targets are stored in sim-local coordinates. The Panda controller's
+# robot-local XY/Z maxima are shifted by the simulated base origin
+# (-0.3, 0.0, 0.415). Guidance points may lie on the table surface, 5 mm below
+# the minimum EE-origin limit, so the point workspace starts at table height.
+TRACKING_GUIDANCE_WORKSPACE_SIM_LOCAL_M = (
+    (0.0, 0.5),
+    (-0.55, 0.55),
+    (0.415, 0.815),
+)
+TRACKING_WORKSPACE_STATUSES = {"inside", "outside", "invalid"}
+
 
 def _as_float_array(value) -> Optional[np.ndarray]:
     if value is None:
@@ -154,6 +191,48 @@ def _as_float_array(value) -> Optional[np.ndarray]:
     if hasattr(value, "detach"):
         value = value.detach().cpu().numpy()
     return np.asarray(value, dtype=np.float64)
+
+
+def tracking_target_workspace_status(target_pose) -> str:
+    """Classify a displayed guidance target in the Panda point workspace."""
+    target = _as_float_array(target_pose)
+    if target is None or target.shape != (4, 4) or not np.isfinite(target).all():
+        return "invalid"
+
+    target_pos = target[:3, 3]
+    bounds = np.asarray(TRACKING_GUIDANCE_WORKSPACE_SIM_LOCAL_M, dtype=np.float64)
+    inside = np.logical_and(target_pos >= bounds[:, 0], target_pos <= bounds[:, 1])
+    return "inside" if bool(np.all(inside)) else "outside"
+
+
+def new_tracking_workspace_counts() -> dict[str, int]:
+    return {status: 0 for status in sorted(TRACKING_WORKSPACE_STATUSES)}
+
+
+def record_tracking_workspace_status(
+    counts: Optional[dict[str, int]], status: str
+) -> None:
+    if counts is None:
+        return
+    if status not in TRACKING_WORKSPACE_STATUSES:
+        raise ValueError(f"Unsupported tracking workspace status: {status}")
+    counts[status] = int(counts.get(status, 0)) + 1
+
+
+def build_tracking_workspace_filter_summary(
+    counts: Optional[dict[str, int]],
+) -> dict[str, object]:
+    normalized = new_tracking_workspace_counts()
+    for status in normalized:
+        normalized[status] = int((counts or {}).get(status, 0))
+    return {
+        "coordinate_frame": "sim_local_m",
+        "bounds_m": [list(axis) for axis in TRACKING_GUIDANCE_WORKSPACE_SIM_LOCAL_M],
+        "final_segment_count": sum(normalized.values()),
+        "included_segment_count": normalized["inside"],
+        "excluded_outside_workspace_count": normalized["outside"],
+        "missing_or_invalid_target_count": normalized["invalid"],
+    }
 
 
 def _quat_xyzw_to_matrix(quat_xyzw: np.ndarray) -> Optional[np.ndarray]:
@@ -244,6 +323,7 @@ def compute_episode_tracking_errors(
     metric_type: str = "pose",
     pos_scale_m: float = TRACKING_TOTAL_POS_SCALE_M,
     ori_scale_deg: float = TRACKING_TOTAL_ORI_SCALE_DEG,
+    workspace_counts: Optional[dict[str, int]] = None,
 ) -> dict[str, dict[str, float]]:
     """Compute per-skill final-EE error, keeping the best repeated phase."""
     if metric_type not in TRACKING_METRIC_TYPES:
@@ -262,6 +342,10 @@ def compute_episode_tracking_errors(
             return
         final_idx = end_idx_exclusive - 1
         if final_idx < segment_start:
+            return
+        workspace_status = tracking_target_workspace_status(target_poses[final_idx])
+        record_tracking_workspace_status(workspace_counts, workspace_status)
+        if workspace_status != "inside":
             return
         error = _tracking_error_at_frame(
             robot_states[final_idx],

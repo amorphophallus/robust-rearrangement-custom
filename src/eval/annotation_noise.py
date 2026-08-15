@@ -233,17 +233,18 @@ class AnnotationNoisePhaseState:
             if str(record.get("skill_type")) == current_type
             and str(record.get("skill_state")) != current_state
         ]
+        selection_policy = "same_skill_type_different_state"
         if not preferred:
             preferred = [
                 record
                 for record in candidates
-                if str(record.get("skill_state")) == current_state
+                if str(record.get("skill_state")) != current_state
             ]
-        if not preferred:
-            preferred = candidates
+            selection_policy = "any_skill_different_state"
         if not preferred:
             raise ValueError(
-                f"No shuffled guidance donor for task={task} skill_state={current_state}"
+                "No different-state shuffled guidance donor for "
+                f"task={task} skill_state={current_state}"
             )
 
         donor = preferred[int(rng.integers(0, len(preferred)))]
@@ -308,8 +309,10 @@ class AnnotationNoisePhaseState:
             "phase_key": [None if item is None else str(item) for item in phase_key],
             "donor_task": donor.get("task"),
             "donor_skill_state": donor.get("skill_state"),
+            "donor_skill_type": donor.get("skill_type"),
             "donor_source_episode": donor.get("source_episode"),
             "donor_visit_idx": donor.get("visit_idx"),
+            "selection_policy": selection_policy,
             "realized_pos_displacement_m": displacement_m,
             "realized_ori_displacement_deg": orientation_displacement_deg,
             "apply_to": config.apply_to,

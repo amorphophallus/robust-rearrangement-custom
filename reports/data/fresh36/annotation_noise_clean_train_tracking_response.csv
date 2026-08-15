@@ -1,0 +1,10 @@
+condition,metric,n0,n4,delta,slope,pearson_r,r_squared
+rgbd+GP,Position,3.49,4.91,+1.42,0.618 cm/cm,0.945,0.893
+rgbd+colored GP,Position,3.28,5.21,+1.93,0.771 cm/cm,0.921,0.849
+rgbd+GP+skill,Position,3.08,5.70,+2.62,1.132 cm/cm,0.972,0.945
+rgbd+grasp-part,Position,3.22,5.46,+2.24,1.038 cm/cm,0.967,0.935
+rgbd+grasp-part,Orientation,27.55,43.76,+16.21,0.932 deg/deg,0.940,0.883
+rgbd+grasp-part,Total,8.74,14.22,+5.48,0.972 total/unit,0.953,0.907
+rgbd+grasp-part-colored,Position,3.13,5.08,+1.95,0.879 cm/cm,0.962,0.925
+rgbd+grasp-part-colored,Orientation,27.48,44.55,+17.07,0.850 deg/deg,0.931,0.866
+rgbd+grasp-part-colored,Total,8.62,13.99,+5.37,0.861 total/unit,0.947,0.896

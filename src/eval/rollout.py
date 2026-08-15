@@ -49,13 +49,17 @@ from src.eval.skill_annotation_util import (
 from src.eval.annotation_noise import AnnotationNoiseConfig, write_guidance_shuffle_bank
 from src.eval.perturb_util import PerturbContext, PerturbRunner
 from src.eval.progress_schema import (
+    append_tracking_annotation_histories,
     accumulate_episode_skill_stats,
     accumulate_tracking_error_records,
     build_tracking_error_summary,
+    build_tracking_workspace_filter_summary,
     compute_episode_tracking_errors,
     compute_success_rates,
     get_task_progress_labels,
+    new_tracking_workspace_counts,
     normalize_progress_counts,
+    tracking_histories_are_complete,
 )
 from src.eval.vlm_guidance import (
     VLMGuidanceClient,
@@ -1159,6 +1163,24 @@ def rollout(
             robot_states.append(
                 TensorDict(video_obs["robot_state"], batch_size=env.num_envs)
             )
+        append_tracking_annotation_histories(
+            save_rollouts=save_rollouts,
+            collect_skill_stats=collect_skill_stats,
+            histories=(
+                guidance_points,
+                guidance_points_clean,
+                guidance_poses,
+                guidance_poses_clean,
+                guidance_gripper_widths,
+            ),
+            current_values=(
+                current_guidance_points,
+                current_guidance_points_clean,
+                current_guidance_poses,
+                current_guidance_poses_clean,
+                current_guidance_gripper_widths,
+            ),
+        )
         if save_rollouts:
             if "color_image1" in video_obs:
                 imgs1.append(video_obs["color_image1"].cpu())
@@ -1170,11 +1192,6 @@ def rollout(
                 depth_image2.append(video_obs["depth_image2"])
             actions.append(action_pred.cpu())
             parts_poses.append(video_obs["parts_poses"].cpu())
-            guidance_points.append(current_guidance_points)
-            guidance_points_clean.append(current_guidance_points_clean)
-            guidance_poses.append(current_guidance_poses)
-            guidance_poses_clean.append(current_guidance_poses_clean)
-            guidance_gripper_widths.append(current_guidance_gripper_widths)
             guidance_points_2d.append(current_guidance_points_2d)
             grasp_annotations_2d.append(current_grasp_annotations_2d)
             camera_infos.append([bundle.get("camera_info", {}) for bundle in current_annotations])
@@ -1373,11 +1390,14 @@ def calculate_success_rate(
     step_counts: dict[str, int] = {}
     step_completion_counts: dict[str, int] = {}
     tracking_error_records: dict[str, list[dict[str, float]]] = {}
+    tracking_workspace_counts = new_tracking_workspace_counts()
     tracking_metric_type = (
         "pose" if grasp_part_annotate or annotate_grasp else "position"
     )
     vlm_point_error_summaries: list[dict] = []
     vlm_model_revisions: set[str] = set()
+    tracking_episode_count = 0
+    tracking_incomplete_episode_count = 0
     saved_rollouts_count = 0
     guidance_bank_records: list[dict] = []
 
@@ -1534,15 +1554,24 @@ def calculate_success_rate(
                     if rollout_data.guidance_poses
                     else []
                 )
-                accumulate_tracking_error_records(
-                    tracking_error_records,
-                    compute_episode_tracking_errors(
-                        robot_states_for_tracking,
-                        skill_states_for_tracking,
-                        guidance_poses_for_tracking,
-                        metric_type=tracking_metric_type,
-                    ),
-                )
+                if tracking_histories_are_complete(
+                    robot_states_for_tracking,
+                    skill_states_for_tracking,
+                    guidance_poses_for_tracking,
+                ):
+                    tracking_episode_count += 1
+                    accumulate_tracking_error_records(
+                        tracking_error_records,
+                        compute_episode_tracking_errors(
+                            robot_states_for_tracking,
+                            skill_states_for_tracking,
+                            guidance_poses_for_tracking,
+                            metric_type=tracking_metric_type,
+                            workspace_counts=tracking_workspace_counts,
+                        ),
+                    )
+                else:
+                    tracking_incomplete_episode_count += 1
 
         # Save the results from the rollout immediately
         if save_rollouts_this_round:
@@ -1848,10 +1877,22 @@ def calculate_success_rate(
     expected_skill_labels = get_task_progress_labels(
         getattr(env, "furniture_name", None), "skill_states"
     )
+    final_total = n_total_rollouts if use_target_mode else n_rollouts
     tracking_error = build_tracking_error_summary(
         tracking_error_records,
         expected_labels=expected_skill_labels,
         metric_type=tracking_metric_type,
+    )
+    tracking_error["episode_count"] = tracking_episode_count
+    tracking_error["expected_episode_count"] = final_total if collect_skill_stats else 0
+    tracking_error["incomplete_episode_count"] = tracking_incomplete_episode_count
+    tracking_error["complete"] = bool(
+        collect_skill_stats
+        and tracking_episode_count == final_total
+        and tracking_incomplete_episode_count == 0
+    )
+    tracking_error["workspace_filter"] = build_tracking_workspace_filter_summary(
+        tracking_workspace_counts
     )
     vlm_point_error = (
         merge_vlm_point_error_summaries(vlm_point_error_summaries)
@@ -1864,7 +1905,6 @@ def calculate_success_rate(
         )
     vlm_model_revision = next(iter(vlm_model_revisions), None)
 
-    final_total = n_total_rollouts if use_target_mode else n_rollouts
     return RolloutStats(
         success_rate=n_success / max(final_total, 1),
         n_success=n_success,

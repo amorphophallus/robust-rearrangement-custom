@@ -179,7 +179,7 @@ def _classify(sample: dict[str, Any], args: argparse.Namespace) -> tuple[str, li
         warnings.append(f"memory.full.avg10={max(system_psi, user_psi):.2f}%")
     if swap_ratio >= args.critical_swap_ratio and available_gib <= args.warn_available_gib:
         critical.append(f"swap_used={swap_ratio:.1%}")
-    elif swap_ratio >= args.warn_swap_ratio:
+    elif swap_ratio >= args.warn_swap_ratio and available_gib <= args.warn_available_gib:
         warnings.append(f"swap_used={swap_ratio:.1%}")
     if disk_free_gib <= args.critical_disk_free_gib:
         critical.append(f"disk_free={disk_free_gib:.1f}GiB")
@@ -260,21 +260,31 @@ def _stop_for_disk_pressure(
 
 
 def _audit_results(args: argparse.Namespace) -> dict[str, Any]:
-    result = _run(
-        [
-            str(args.conda),
-            "run",
-            "--no-capture-output",
-            "-n",
-            args.conda_env,
-            "python",
-            "-m",
-            "scripts.audit_clean_train_noise_eval",
-            "--manifest",
-            str(args.manifest),
-        ],
-        timeout=300,
-    )
+    command = [
+        str(args.conda),
+        "run",
+        "--no-capture-output",
+        "-n",
+        args.conda_env,
+        "python",
+        "-m",
+        "scripts.audit_clean_train_noise_eval",
+        "--manifest",
+        str(args.manifest),
+        "--n-rollouts",
+        str(args.audit_n_rollouts),
+        "--max-reported-issues",
+        "20",
+    ]
+    if args.audit_include_shuffled:
+        command.extend(
+            [
+                "--include-shuffled",
+                "--shuffled-rollouts",
+                str(args.audit_shuffled_rollouts),
+            ]
+        )
+    result = _run(command, timeout=300)
     audit: dict[str, Any] = {"timestamp": _now(), **result}
     for line in reversed(result["output"].splitlines()):
         try:
@@ -299,6 +309,9 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--audit-log", type=Path, required=True)
     parser.add_argument("--audit-interval", type=float, default=3600.0)
+    parser.add_argument("--audit-n-rollouts", type=int, default=36)
+    parser.add_argument("--audit-include-shuffled", action="store_true")
+    parser.add_argument("--audit-shuffled-rollouts", type=int, default=36)
     parser.add_argument(
         "--conda", type=Path, default=Path.home() / "miniconda3" / "bin" / "conda"
     )

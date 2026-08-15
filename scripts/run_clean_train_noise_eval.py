@@ -38,11 +38,11 @@ class NoiseLevel:
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CHECKPOINT_ROOT = REPO_ROOT / "checkpoints" / "bc" / "one_leg+round_table+lamp" / "low"
 AUTO_EVAL_DEFAULT = Path("/home/huyue/projects/gpu-snatcher/auto_eval.sh")
-MANIFEST_DEFAULT = REPO_ROOT / "logs" / "annotation_noise_clean_train_rgbd_manifest.jsonl"
-REPORT_DEFAULT = REPO_ROOT / "reports" / "annotation_noise_clean_train_rgbd_eval.md"
-FIGURES_DEFAULT = REPO_ROOT / "reports" / "figures"
-DATA_DEFAULT = REPO_ROOT / "reports" / "data"
-GROUP_LOGS_DEFAULT = REPO_ROOT / "logs" / "annotation_noise_clean_train_rgbd_groups"
+MANIFEST_DEFAULT = REPO_ROOT / "logs" / "annotation_noise_clean_train_fresh36_manifest.jsonl"
+REPORT_DEFAULT = REPO_ROOT / "reports" / "annotation_noise_clean_train_fresh36.md"
+FIGURES_DEFAULT = REPO_ROOT / "reports" / "figures" / "fresh36"
+DATA_DEFAULT = REPO_ROOT / "reports" / "data" / "fresh36"
+GROUP_LOGS_DEFAULT = REPO_ROOT / "logs" / "annotation_noise_clean_train_fresh36_groups"
 GUIDANCE_BANK_DEFAULT = REPO_ROOT / "logs" / "annotation_noise_guidance_bank"
 
 CONDITIONS = [
@@ -314,6 +314,33 @@ def _evict_rollout_group_cache(
     return stats
 
 
+def _delete_rollout_group_pickles(
+    *,
+    task_group: str,
+    randomness: str,
+    condition: ConditionConfig,
+    noise: NoiseLevel,
+) -> dict[str, int]:
+    stats = {"files": 0, "bytes": 0, "errors": 0}
+    for rollout_dir in _rollout_group_dirs(
+        task_group=task_group,
+        randomness=randomness,
+        condition=condition,
+        noise=noise,
+    ):
+        if not rollout_dir.exists():
+            continue
+        for path in rollout_dir.rglob("*.pkl"):
+            try:
+                size = path.stat().st_size
+                path.unlink()
+                stats["files"] += 1
+                stats["bytes"] += size
+            except OSError:
+                stats["errors"] += 1
+    return stats
+
+
 def _build_command(
     *,
     auto_eval_path: Path,
@@ -421,6 +448,7 @@ def _validate_summary(
     n_envs: int,
     n_rollouts: int,
     randomness: str,
+    require_tracking: bool = True,
 ) -> list[str]:
     errors: list[str] = []
     if summary_path is None or not summary_path.exists():
@@ -545,22 +573,37 @@ def _validate_summary(
                 f"{task}.eval_randomness={task_payload.get('eval_randomness')!r} "
                 f"expected={randomness!r}"
             )
-        tracking = (task_payload.get("tracking_error") or {}).get("overall") or {}
-        metric_type = (task_payload.get("tracking_error") or {}).get(
-            "metric_type", "pose"
-        )
-        expected_metric_type = "position" if condition.family == "point" else "pose"
-        if metric_type != expected_metric_type:
-            errors.append(
-                f"{task}.tracking_error.metric_type={metric_type!r} "
-                f"expected={expected_metric_type!r}"
-            )
-        if condition.family == "point" and any(
-            key in tracking for key in ("mean_ori_deg", "mean_total")
-        ):
-            errors.append(f"{task}.point tracking contains orientation/total metrics")
-        if int(tracking.get("count", 0)) <= 0:
-            errors.append(f"{task}.tracking_error is missing or empty")
+        if require_tracking:
+            tracking_payload = task_payload.get("tracking_error") or {}
+            tracking = tracking_payload.get("overall") or {}
+            metric_type = tracking_payload.get("metric_type", "pose")
+            expected_metric_type = "position" if condition.family == "point" else "pose"
+            if metric_type != expected_metric_type:
+                errors.append(
+                    f"{task}.tracking_error.metric_type={metric_type!r} "
+                    f"expected={expected_metric_type!r}"
+                )
+            if condition.family == "point" and any(
+                key in tracking for key in ("mean_ori_deg", "mean_total")
+            ):
+                errors.append(f"{task}.point tracking contains orientation/total metrics")
+            if int(tracking.get("count", 0)) <= 0:
+                errors.append(f"{task}.tracking_error is missing or empty")
+            if int(tracking_payload.get("episode_count", -1)) != n_rollouts:
+                errors.append(
+                    f"{task}.tracking_error.episode_count="
+                    f"{tracking_payload.get('episode_count')!r} expected={n_rollouts}"
+                )
+            if int(tracking_payload.get("incomplete_episode_count", -1)) != 0:
+                errors.append(
+                    f"{task}.tracking_error.incomplete_episode_count="
+                    f"{tracking_payload.get('incomplete_episode_count')!r} expected=0"
+                )
+            if tracking_payload.get("complete") is not True:
+                errors.append(
+                    f"{task}.tracking_error.complete="
+                    f"{tracking_payload.get('complete')!r} expected=True"
+                )
 
     return errors
 
@@ -578,10 +621,16 @@ def main() -> None:
     parser.add_argument(
         "--guidance-bank-dir", type=Path, default=GUIDANCE_BANK_DEFAULT
     )
-    parser.add_argument(
+    perturbation_group = parser.add_mutually_exclusive_group()
+    perturbation_group.add_argument(
         "--shuffled-only",
         action="store_true",
         help="Run only the five shuffled-guidance groups.",
+    )
+    perturbation_group.add_argument(
+        "--include-shuffled",
+        action="store_true",
+        help="Run n0-n4 and shuffled guidance serially in one process.",
     )
     parser.add_argument("--randomness", default="low")
     parser.add_argument("--conditions", default=None)
@@ -598,6 +647,14 @@ def main() -> None:
     parser.add_argument("--save-rollouts-count", type=int, default=8)
     parser.add_argument("--keep-rollout-cache", action="store_true")
     parser.add_argument(
+        "--delete-rollout-pickles",
+        action="store_true",
+        help=(
+            "After a group passes summary validation, delete its large rollout "
+            "pickle files while retaining videos and text diagnostics."
+        ),
+    )
+    parser.add_argument(
         "--initial-min-free-disk-gib",
         type=float,
         default=500.0,
@@ -611,13 +668,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.save_rollouts_count <= 0:
+        raise ValueError(
+            "--save-rollouts-count must be positive: auto_eval interprets zero as "
+            "unlimited saving; use 8 to save only the first eight rollouts per task"
+        )
+
     env = os.environ.copy()
     env.setdefault("DATA_DIR_RAW", str(REPO_ROOT / "data"))
     selected_conditions = _resolve_conditions(args.conditions)
     selected_noise_ids = _resolve_noise_ids(args.noise_ids)
     manifest_rows = _read_jsonl(args.manifest)
     manifest_index = _manifest_lookup(manifest_rows)
-    if args.shuffled_only and not args.dry_run:
+    if (args.shuffled_only or args.include_shuffled) and not args.dry_run:
         _validate_guidance_bank(args.guidance_bank_dir, args.task_group.split("+"))
     if not args.dry_run:
         free_disk_gib = shutil.disk_usage(REPO_ROOT).free / (1024**3)
@@ -648,27 +711,42 @@ def main() -> None:
         noise_levels = (
             [SHUFFLED_GUIDANCE]
             if args.shuffled_only
-            else _noise_levels_for_family(condition.family)
+            else _noise_levels_for_family(
+                condition.family,
+                include_shuffled=args.include_shuffled,
+            )
         )
         for noise in noise_levels:
             if selected_noise_ids is not None and noise.noise_id not in selected_noise_ids:
                 continue
             key = (condition.condition_id, noise.noise_id)
             existing = manifest_index.get(key)
-            if (
-                not args.rerun
-                and existing is not None
-                and existing.get("status") == "ok"
-                and int(existing.get("n_rollouts", -1)) == args.n_rollouts
-                and int(existing.get("tracking_rollouts_per_task", -1))
-                == args.n_rollouts
-            ):
+            if not args.rerun and existing is not None and existing.get("status") == "ok":
+                existing_summary_value = str(existing.get("summary_json", "") or "")
+                existing_summary = (
+                    Path(existing_summary_value) if existing_summary_value else None
+                )
+                existing_errors = _validate_summary(
+                    summary_path=existing_summary,
+                    condition=condition,
+                    noise=noise,
+                    task_group=args.task_group,
+                    n_envs=args.n_envs,
+                    n_rollouts=args.n_rollouts,
+                    randomness=args.randomness,
+                )
+                if not existing_errors:
+                    print(
+                        f"[skip] condition={condition.condition_id} "
+                        f"noise={noise.noise_id} summary={existing_summary}",
+                        flush=True,
+                    )
+                    continue
                 print(
-                    f"[skip] condition={condition.condition_id} noise={noise.noise_id} "
-                    f"summary={existing.get('summary_json')}",
+                    f"[rerun-invalid] condition={condition.condition_id} "
+                    f"noise={noise.noise_id} validation={existing_errors}",
                     flush=True,
                 )
-                continue
 
             command = _build_command(
                 auto_eval_path=args.auto_eval_path,
@@ -683,7 +761,9 @@ def main() -> None:
                 apply_to=condition.apply_to,
                 save_rollouts_count=args.save_rollouts_count,
                 guidance_bank_dir=(
-                    args.guidance_bank_dir if args.shuffled_only else None
+                    args.guidance_bank_dir
+                    if args.shuffled_only or args.include_shuffled
+                    else None
                 ),
                 guidance_bank_out_dir=(
                     args.guidance_bank_dir
@@ -725,7 +805,6 @@ def main() -> None:
                 flush=True,
             )
             if args.dry_run:
-                _append_manifest(args.manifest, row)
                 continue
 
             _clean_rollout_group(
@@ -781,6 +860,20 @@ def main() -> None:
                     )
                 else:
                     row["status"] = "ok"
+                    if args.delete_rollout_pickles:
+                        pickle_cleanup = _delete_rollout_group_pickles(
+                            task_group=args.task_group,
+                            randomness=args.randomness,
+                            condition=condition,
+                            noise=noise,
+                        )
+                        row["pickle_cleanup"] = pickle_cleanup
+                        print(
+                            f"[pickle-cleanup] files={pickle_cleanup['files']} "
+                            f"bytes={pickle_cleanup['bytes']} "
+                            f"errors={pickle_cleanup['errors']}",
+                            flush=True,
+                        )
                     print(
                         f"[ok] {condition.condition_id} {noise.noise_id} "
                         f"summary={row['summary_json']} log={group_log}",
@@ -800,7 +893,7 @@ def main() -> None:
                 raise SystemExit(int(row.get("returncode", 1) or 1))
 
     if args.dry_run:
-        print("[dry-run] commands written to manifest; report generation skipped", flush=True)
+        print("[dry-run] commands printed; manifest and report unchanged", flush=True)
         return
 
     generate_report(

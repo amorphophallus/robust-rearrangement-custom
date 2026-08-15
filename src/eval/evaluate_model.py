@@ -395,7 +395,17 @@ def _print_tracking_error_stats(
         return
 
     metric_type = (tracking_error or {}).get("metric_type", "pose")
-    print(f"Tracking error ({task}, {metric_type}):")
+    episode_count = int((tracking_error or {}).get("episode_count", 0))
+    expected_episode_count = int(
+        (tracking_error or {}).get("expected_episode_count", 0)
+    )
+    incomplete_count = int(
+        (tracking_error or {}).get("incomplete_episode_count", 0)
+    )
+    print(
+        f"Tracking error ({task}, {metric_type}, episodes="
+        f"{episode_count}/{expected_episode_count}, incomplete={incomplete_count}):"
+    )
     for state_label, stats in by_skill.items():
         count = int(stats.get("count", 0))
         if count <= 0:

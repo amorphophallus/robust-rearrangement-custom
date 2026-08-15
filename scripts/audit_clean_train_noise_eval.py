@@ -16,6 +16,24 @@ from scripts.run_clean_train_noise_eval import (
 )
 
 
+VIDEO_SUFFIXES = ("_cam1", "_cam2", "_dep1", "_dep2")
+
+
+def _saved_rollout_count(rollout_dir: Path) -> int:
+    """Count rollout basenames whether pickle payloads were retained or cleaned."""
+    if not rollout_dir.exists():
+        return 0
+
+    rollout_ids = {path.stem for path in rollout_dir.rglob("*.pkl")}
+    for path in rollout_dir.rglob("*.mp4"):
+        stem = path.stem
+        for suffix in VIDEO_SUFFIXES:
+            if stem.endswith(suffix):
+                rollout_ids.add(stem[: -len(suffix)])
+                break
+    return len(rollout_ids)
+
+
 def _load_state(path: Path | None) -> set[str]:
     if path is None or not path.exists():
         return set()
@@ -102,6 +120,7 @@ def audit(
                     n_envs=3,
                     n_rollouts=group_rollouts,
                     randomness="low",
+                    require_tracking=noise.perturbation == "shuffle",
                 )
             )
             rollout_dirs = _rollout_group_dirs(
@@ -111,7 +130,7 @@ def audit(
                 noise=noise,
             )
             for rollout_dir in rollout_dirs:
-                saved_count = sum(1 for _ in rollout_dir.rglob("*.pkl")) if rollout_dir.exists() else 0
+                saved_count = _saved_rollout_count(rollout_dir)
                 if saved_count != 8:
                     group_issues.append(
                         f"saved_rollouts={saved_count} expected=8 dir={rollout_dir}"
@@ -145,6 +164,18 @@ def audit(
     return payload, 0
 
 
+def _limit_reported_issues(payload: dict[str, Any], limit: int) -> dict[str, Any]:
+    limited = dict(payload)
+    issues = list(payload.get("issues", []))
+    limited["issue_count"] = len(issues)
+    if limit >= 0 and len(issues) > limit:
+        limited["issues"] = issues[:limit]
+        limited["issues_truncated"] = len(issues) - limit
+    else:
+        limited["issues_truncated"] = 0
+    return limited
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
@@ -153,6 +184,12 @@ def main() -> None:
     parser.add_argument("--n-rollouts", type=int, default=36)
     parser.add_argument("--include-shuffled", action="store_true")
     parser.add_argument("--shuffled-rollouts", type=int, default=36)
+    parser.add_argument(
+        "--max-reported-issues",
+        type=int,
+        default=-1,
+        help="Limit issues printed in JSON; negative keeps all issues.",
+    )
     args = parser.parse_args()
 
     payload, returncode = audit(
@@ -163,7 +200,12 @@ def main() -> None:
         include_shuffled=args.include_shuffled,
         shuffled_rollouts=args.shuffled_rollouts,
     )
-    print(json.dumps(payload, sort_keys=True))
+    print(
+        json.dumps(
+            _limit_reported_issues(payload, args.max_reported_issues),
+            sort_keys=True,
+        )
+    )
     raise SystemExit(returncode)
 
 

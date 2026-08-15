@@ -162,6 +162,70 @@ def test_pose_shuffle_replaces_orientation_and_records_realized_error():
     assert info["realized_ori_displacement_deg"] > 0.0
 
 
+def test_shuffle_falls_back_to_any_skill_but_never_the_current_state():
+    current_state_record = _shuffle_records()[0]
+    current_state_record = {
+        **current_state_record,
+        "skill_state": "leg-top-place",
+        "skill_type": "place",
+    }
+    different_skill_record = _shuffle_records()[1]
+    different_skill_record = {
+        **different_skill_record,
+        "skill_state": "leg-top-screw",
+        "skill_type": "screw",
+    }
+    config = make_annotation_noise_config(
+        mode="shuffle",
+        apply_to="point",
+        shuffle_records=[current_state_record, different_skill_record],
+    )
+
+    _, _, info = apply_annotation_noise(
+        guidance_point=np.zeros(3, dtype=np.float32),
+        guidance_pose=np.eye(4, dtype=np.float32),
+        task="one_leg",
+        skill_state="leg-top-place",
+        skill="place",
+        phase_key=("leg-top-place", 0),
+        state=AnnotationNoisePhaseState(env_idx=0),
+        config=config,
+    )
+
+    assert info["donor_skill_state"] == "leg-top-screw"
+    assert info["donor_skill_type"] == "screw"
+    assert info["selection_policy"] == "any_skill_different_state"
+
+
+def test_shuffle_rejects_bank_without_a_different_semantic_state():
+    record = {
+        **_shuffle_records()[0],
+        "skill_state": "leg-top-place",
+        "skill_type": "place",
+    }
+    config = make_annotation_noise_config(
+        mode="shuffle",
+        apply_to="point",
+        shuffle_records=[record],
+    )
+
+    try:
+        apply_annotation_noise(
+            guidance_point=np.zeros(3, dtype=np.float32),
+            guidance_pose=np.eye(4, dtype=np.float32),
+            task="one_leg",
+            skill_state="leg-top-place",
+            skill="place",
+            phase_key=("leg-top-place", 0),
+            state=AnnotationNoisePhaseState(env_idx=0),
+            config=config,
+        )
+    except ValueError as exc:
+        assert "No different-state shuffled guidance donor" in str(exc)
+    else:
+        raise AssertionError("same-state shuffle donor should have been rejected")
+
+
 def test_guidance_bank_round_trip(tmp_path):
     path = tmp_path / "one_leg.json"
     records = _shuffle_records()
