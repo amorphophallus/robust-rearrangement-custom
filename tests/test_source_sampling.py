@@ -1,14 +1,10 @@
 import unittest
 from collections import Counter
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import numpy as np
 import torch
-import zarr
 
 from src.dataset.base import EpisodeRef
-from src.dataset.zarr import combine_zarr_datasets
 from src.dataset.source_sampling import (
     SourceWeightedSampler,
     allocate_rank_source_quotas,
@@ -16,7 +12,8 @@ from src.dataset.source_sampling import (
     dataset_sample_envs,
     largest_remainder_counts,
     normalize_env_sampling_weights,
-    stratified_random_split,
+    stratified_split_items,
+    validate_env_sampling_mode,
 )
 
 
@@ -32,6 +29,14 @@ class DummySourceDataset(torch.utils.data.Dataset):
 
 
 class SourceWeightValidationTest(unittest.TestCase):
+    def test_requires_multi_rank_ddp_sharding(self):
+        validate_env_sampling_mode(None, ddp_shard_enabled=False)
+        validate_env_sampling_mode({"FurnitureBench": 1.0}, ddp_shard_enabled=True)
+        with self.assertRaisesRegex(ValueError, "only supported by multi-rank"):
+            validate_env_sampling_mode(
+                {"FurnitureBench": 1.0}, ddp_shard_enabled=False
+            )
+
     def test_normalizes_and_requires_an_exact_source_mapping(self):
         self.assertIsNone(normalize_env_sampling_weights(None, [None]))
         weights = normalize_env_sampling_weights(
@@ -62,39 +67,6 @@ class SourceWeightValidationTest(unittest.TestCase):
                 normalize_env_sampling_weights(
                     {"FurnitureBench": invalid_weight}, ["FurnitureBench"]
                 )
-
-
-class ZarrSourceMetadataTest(unittest.TestCase):
-    @staticmethod
-    def _make_dataset(root: Path, env_values=None, env_attr=None):
-        path = root / "one_leg" / "teleop" / "low" / "success.zarr"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        dataset = zarr.open(path, mode="w")
-        dataset.create_dataset("episode_ends", data=np.asarray([2, 5]))
-        dataset.create_dataset("task", data=np.asarray(["one_leg", "one_leg"]))
-        dataset.create_dataset("success", data=np.asarray([1, 1], dtype=np.uint8))
-        dataset.attrs["domain"] = "sim"
-        if env_values is not None:
-            dataset.create_dataset("env", data=np.asarray(env_values))
-        if env_attr is not None:
-            dataset.attrs["env"] = env_attr
-        return path
-
-    def test_full_zarr_combine_preserves_episode_or_dataset_source(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            per_episode_path = self._make_dataset(
-                root / "episode", ["FurnitureBench", "AutoMate"]
-            )
-            combined, _ = combine_zarr_datasets(per_episode_path, keys=[])
-            self.assertEqual(combined["env"], ["FurnitureBench", "AutoMate"])
-
-            attr_path = self._make_dataset(
-                root / "attribute", env_attr="ManiSkill"
-            )
-            combined, _ = combine_zarr_datasets(attr_path, keys=[])
-            self.assertEqual(combined["env"], ["ManiSkill", "ManiSkill"])
-
 
 class SourceWeightedSamplerTest(unittest.TestCase):
     def setUp(self):
@@ -128,26 +100,6 @@ class SourceWeightedSamplerTest(unittest.TestCase):
         self.assertNotEqual(epoch_zero_a, epoch_one)
         self.assertEqual(self._counts(epoch_one), self._counts(epoch_zero_a))
 
-    def test_distributed_global_schedule_has_exact_global_quota(self):
-        rank_samplers = [
-            SourceWeightedSampler(
-                self.dataset,
-                self.weights,
-                samples_per_rank=64,
-                seed=7,
-                num_replicas=2,
-                rank=rank,
-                global_schedule=True,
-            )
-            for rank in range(2)
-        ]
-        combined = list(rank_samplers[0]) + list(rank_samplers[1])
-        self.assertEqual(len(combined), 128)
-        self.assertEqual(
-            self._counts(combined),
-            Counter(largest_remainder_counts(self.weights, 128)),
-        )
-
     def test_rank_quota_allocator_respects_source_availability(self):
         quotas = allocate_rank_source_quotas(
             self.weights,
@@ -175,9 +127,6 @@ class SourceWeightedSamplerTest(unittest.TestCase):
                 self.weights,
                 samples_per_rank=20,
                 seed=9,
-                num_replicas=2,
-                rank=rank,
-                global_schedule=False,
                 source_quotas=quotas[rank],
             )
             self.assertEqual(
@@ -212,40 +161,37 @@ class SourceWeightedSamplerTest(unittest.TestCase):
 
 class StratifiedSourceSplitTest(unittest.TestCase):
     def test_split_preserves_size_and_positive_sources(self):
-        dataset = DummySourceDataset(
-            ["FB"] * 20 + ["AutoMate"] * 20 + ["ManiSkill"] * 20
-        )
+        items = [
+            EpisodeRef(0, idx, idx, idx + 1, 1, "task", 1, "sim", source)
+            for idx, source in enumerate(
+                ["FB"] * 20 + ["AutoMate"] * 20 + ["ManiSkill"] * 20
+            )
+        ]
         weights = {"FB": 0.5, "AutoMate": 0.35, "ManiSkill": 0.15}
-        train, validation = stratified_random_split(
-            dataset, test_split=0.2, seed=42, weights=weights
+        train, validation = stratified_split_items(
+            items, test_split=0.2, seed=42, weights=weights
         )
         self.assertEqual(len(train), 48)
         self.assertEqual(len(validation), 12)
-        self.assertEqual(set(dataset_sample_envs(train)), set(weights))
-        self.assertEqual(set(dataset_sample_envs(validation)), set(weights))
+        self.assertEqual({item.source for item in train}, set(weights))
+        self.assertEqual({item.source for item in validation}, set(weights))
 
-        train_sampler = SourceWeightedSampler(train, weights, 20, seed=11)
-        validation_sampler = SourceWeightedSampler(validation, weights, 20, seed=12)
-        self.assertEqual(
-            Counter(dataset_sample_envs(train)[list(train_sampler)]),
-            Counter({"FB": 10, "AutoMate": 7, "ManiSkill": 3}),
+        train_again, validation_again = stratified_split_items(
+            items, test_split=0.2, seed=42, weights=weights
         )
-        self.assertEqual(
-            Counter(dataset_sample_envs(validation)[list(validation_sampler)]),
-            Counter({"FB": 10, "AutoMate": 7, "ManiSkill": 3}),
-        )
-
-        train_again, validation_again = stratified_random_split(
-            dataset, test_split=0.2, seed=42, weights=weights
-        )
-        self.assertEqual(train.indices, train_again.indices)
-        self.assertEqual(validation.indices, validation_again.indices)
+        self.assertEqual(train, train_again)
+        self.assertEqual(validation, validation_again)
 
     def test_too_small_split_fails_instead_of_dropping_a_source(self):
-        dataset = DummySourceDataset(["FB"] * 10 + ["AutoMate"] * 10 + ["ManiSkill"] * 10)
+        items = [
+            EpisodeRef(0, idx, idx, idx + 1, 1, "task", 1, "sim", source)
+            for idx, source in enumerate(
+                ["FB"] * 10 + ["AutoMate"] * 10 + ["ManiSkill"] * 10
+            )
+        ]
         weights = {"FB": 0.5, "AutoMate": 0.35, "ManiSkill": 0.15}
         with self.assertRaisesRegex(ValueError, "cannot keep every positive-weight source"):
-            stratified_random_split(dataset, test_split=0.01, seed=0, weights=weights)
+            stratified_split_items(items, test_split=0.01, seed=0, weights=weights)
 
 
 if __name__ == "__main__":

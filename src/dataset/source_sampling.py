@@ -1,4 +1,4 @@
-"""Source-aware dataset splitting and deterministic weighted sampling."""
+"""Source-aware splitting and sampling for multi-rank episode-sharded DDP."""
 
 from __future__ import annotations
 
@@ -16,6 +16,15 @@ def _source_label(value) -> Optional[str]:
         return None
     label = str(value)
     return label if label.strip() else None
+
+
+def validate_env_sampling_mode(raw_weights, *, ddp_shard_enabled: bool) -> None:
+    if raw_weights is not None and not ddp_shard_enabled:
+        raise ValueError(
+            "data.env_sampling_weights is only supported by multi-rank "
+            "bc_ddp.py training with data.ddp_shard_enabled=true. Single-GPU "
+            "and non-sharded DDP training must leave it null."
+        )
 
 
 def normalize_env_sampling_weights(
@@ -186,21 +195,6 @@ def stratified_split_indices(
     return train_indices, test_indices
 
 
-def stratified_random_split(
-    dataset,
-    test_split: float,
-    seed: int,
-    weights: Mapping[str, float],
-) -> tuple[Subset, Subset]:
-    train_indices, test_indices = stratified_split_indices(
-        dataset_sample_envs(dataset),
-        test_split,
-        seed,
-        positive_sources={source for source, weight in weights.items() if weight > 0},
-    )
-    return Subset(dataset, train_indices), Subset(dataset, test_indices)
-
-
 def stratified_split_items(
     items: Sequence,
     test_split: float,
@@ -336,23 +330,15 @@ class SourceWeightedSampler(Sampler[int]):
         samples_per_rank: int,
         *,
         seed: int = 0,
-        num_replicas: int = 1,
-        rank: int = 0,
-        global_schedule: bool = True,
         source_quotas: Optional[Mapping[str, int]] = None,
     ):
         if samples_per_rank < 0:
             raise ValueError("samples_per_rank must be non-negative.")
-        if not 0 <= rank < num_replicas:
-            raise ValueError(f"rank {rank} is outside [0, {num_replicas}).")
 
         self.dataset = dataset
         self.weights = dict(weights)
         self.samples_per_rank = int(samples_per_rank)
         self.seed = int(seed)
-        self.num_replicas = int(num_replicas)
-        self.rank = int(rank)
-        self.global_schedule = bool(global_schedule)
         self.source_quotas = dict(source_quotas) if source_quotas is not None else None
         self.epoch = 0
 
@@ -437,11 +423,6 @@ class SourceWeightedSampler(Sampler[int]):
 
         if self.source_quotas is not None:
             schedule = self._build_schedule(self.source_quotas, generator)
-        elif self.global_schedule:
-            global_count = self.samples_per_rank * self.num_replicas
-            global_quotas = largest_remainder_counts(self.weights, global_count)
-            global_schedule = self._build_schedule(global_quotas, generator)
-            schedule = global_schedule[self.rank :: self.num_replicas]
         else:
             local_quotas = largest_remainder_counts(
                 self.weights, self.samples_per_rank

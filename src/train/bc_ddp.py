@@ -60,8 +60,8 @@ from src.dataset.source_sampling import (
     balance_items_by_source_and_size,
     dataset_sample_envs,
     normalize_env_sampling_weights,
-    stratified_random_split,
     stratified_split_items,
+    validate_env_sampling_mode,
 )
 from src.dataset.storage import (
     balance_episode_manifest_by_frames,
@@ -1410,7 +1410,13 @@ def main(cfg: DictConfig):
         if main_process:
             print(f"Using data from {data_path}")
 
-        ddp_shard_enabled = bool(world_size > 1 and cfg.data.get("ddp_shard_enabled", False))
+        ddp_shard_enabled = bool(
+            world_size > 1 and cfg.data.get("ddp_shard_enabled", False)
+        )
+        validate_env_sampling_mode(
+            cfg.data.get("env_sampling_weights", None),
+            ddp_shard_enabled=ddp_shard_enabled,
+        )
         dataset: Union[ImageDataset, StateDataset, RGBDDataset]
         train_dataset = None
         test_dataset = None
@@ -1631,9 +1637,6 @@ def main(cfg: DictConfig):
                     env_sampling_weights,
                     train_samples_per_rank,
                     seed=base_seed,
-                    num_replicas=world_size,
-                    rank=rank,
-                    global_schedule=False,
                     source_quotas=rank_source_quotas[rank],
                 )
             trainloader = build_dataloader(
@@ -1697,41 +1700,15 @@ def main(cfg: DictConfig):
             dataset = build_dataset_for_observation_type(cfg, data_path)
             validate_guidance_point_dataset(cfg, dataset)
 
-            env_sampling_weights = normalize_env_sampling_weights(
-                cfg.data.get("env_sampling_weights", None),
-                dataset.episode_envs,
-            )
-            if env_sampling_weights is not None and cfg.data.get(
-                "minority_class_power", False
-            ):
-                raise ValueError(
-                    "data.minority_class_power cannot be combined with "
-                    "data.env_sampling_weights in non-sharded DDP because it "
-                    "would produce rank-local sequence pools."
-                )
-
             train_size = int(len(dataset) * (1 - cfg.data.test_split))
             test_size = len(dataset) - train_size
             if main_process:
                 print(
                     f"Splitting dataset into {train_size} train and {test_size} test samples."
                 )
-            if env_sampling_weights is None:
-                train_dataset, test_dataset = random_split(
-                    dataset, [train_size, test_size]
-                )
-            else:
-                train_dataset, test_dataset = stratified_random_split(
-                    dataset,
-                    cfg.data.test_split,
-                    base_seed,
-                    env_sampling_weights,
-                )
-                if main_process:
-                    print(
-                        "Using normalized env sampling weights: "
-                        f"{env_sampling_weights}"
-                    )
+            train_dataset, test_dataset = random_split(
+                dataset, [train_size, test_size]
+            )
 
             if cfg.observation_type == "rgbd":
                 depth_normalizer_stats = broadcast_rank0_call(
@@ -1748,29 +1725,13 @@ def main(cfg: DictConfig):
                     "RGBD depth statistics",
                 )
 
-            if env_sampling_weights is None:
-                train_sampler = DistributedSampler(
-                    train_dataset,
-                    num_replicas=world_size,
-                    rank=rank,
-                    shuffle=True,
-                    drop_last=False,
-                )
-            else:
-                train_samples_per_rank = (
-                    int(math.ceil(len(train_dataset) / world_size))
-                    if cfg.training.steps_per_epoch == -1
-                    else cfg.training.steps_per_epoch * per_rank_batch_size
-                )
-                train_sampler = SourceWeightedSampler(
-                    train_dataset,
-                    env_sampling_weights,
-                    train_samples_per_rank,
-                    seed=base_seed,
-                    num_replicas=world_size,
-                    rank=rank,
-                    global_schedule=True,
-                )
+            train_sampler = DistributedSampler(
+                train_dataset,
+                num_replicas=world_size,
+                rank=rank,
+                shuffle=True,
+                drop_last=False,
+            )
             trainloader = build_dataloader(
                 dataset=train_dataset,
                 batch_size=per_rank_batch_size,
@@ -1791,29 +1752,15 @@ def main(cfg: DictConfig):
                     if cfg.training.steps_per_epoch != -1
                     else -1
                 )
-                test_sampler = None
-                if env_sampling_weights is not None:
-                    test_samples_per_epoch = (
-                        len(test_dataset)
-                        if test_steps_per_epoch == -1
-                        else test_steps_per_epoch * per_rank_batch_size
-                    )
-                    test_sampler = SourceWeightedSampler(
-                        test_dataset,
-                        env_sampling_weights,
-                        test_samples_per_epoch,
-                        seed=base_seed + 1_000_000,
-                    )
                 testloader = build_dataloader(
                     dataset=test_dataset,
                     batch_size=per_rank_batch_size,
                     num_workers=cfg.data.dataloader_workers,
-                    shuffle=test_sampler is None,
+                    shuffle=True,
                     pin_memory=True,
                     drop_last=False,
                     persistent_workers=cfg.data.get("persistent_workers", False),
                     prefetch_factor=cfg.data.get("prefetch_factor", None),
-                    sampler=test_sampler,
                     steps_per_epoch=test_steps_per_epoch,
                 )
 

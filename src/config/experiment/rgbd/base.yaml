@@ -4,7 +4,8 @@ defaults:
 
 observation_type: rgbd
 
-# Dataset-backed depth normalization requires LMDB depth-stat metadata.
+# New RGBD datasets use LMDB depth-stat metadata. Legacy FurnitureBench or
+# source-unspecified LMDBs warn and fall back to the old fixed constants.
 data:
   storage_format: lmdb
 

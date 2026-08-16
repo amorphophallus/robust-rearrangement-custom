@@ -933,7 +933,6 @@ def combine_zarr_datasets(
     combined_data = {
         "episode_ends": np.zeros(total_episodes, dtype=np.int64),
         "task": [],
-        "env": [],
         "success": np.zeros(total_episodes, dtype=np.uint8),
         # Domain is 0 for sim, 1 for real
         "domain": np.zeros(total_episodes, dtype=np.uint8),
@@ -981,17 +980,6 @@ def combine_zarr_datasets(
         )
         task = dataset.get("task", dataset.get("furniture"))
         combined_data["task"].extend(task[:max_episodes])
-        episode_envs = dataset.get("env")
-        dataset_env = dataset.attrs.get("env")
-        if episode_envs is not None:
-            combined_data["env"].extend(
-                _coerce_optional_string(value)
-                for value in episode_envs[:max_episodes]
-            )
-        else:
-            combined_data["env"].extend(
-                [_coerce_optional_string(dataset_env)] * len(end_idxs)
-            )
         combined_data["success"][n_episodes : n_episodes + len(end_idxs)] = dataset[
             "success"
         ][:max_episodes]
@@ -1000,7 +988,7 @@ def combine_zarr_datasets(
             "failure_idx", np.full_like(end_idxs, -1)
         )
         combined_data["domain"][n_episodes : n_episodes + len(end_idxs)] = domain_idx[
-            dataset.attrs["domain"]
+            dataset.attrs["domain"][:max_episodes]
         ]
 
         combined_data["zarr_idx"][
