@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import torch
@@ -113,11 +114,6 @@ class SpatialSoftmaxEncoder(VisionEncoder):
 
 
 class ResnetEncoder(VisionEncoder):
-    depth_stats = {
-        "wrist": (0.107, 0.05),
-        "front": (1.03, 0.493),
-    }
-
     def __init__(
         self,
         model_name,
@@ -141,18 +137,31 @@ class ResnetEncoder(VisionEncoder):
         self.encoding_dim = self.model.encoding_dim
 
         if self.is_rgbd:
-            if camera_name not in self.depth_stats:
+            camera_names = ("wrist", "front")
+            if camera_name not in camera_names:
                 raise ValueError(
-                    f"RGBD resnet requires camera_name in {tuple(self.depth_stats.keys())}, got {camera_name}"
+                    "RGBD resnet requires camera_name in "
+                    f"{camera_names}, got {camera_name}"
                 )
             self.normalize_rgb = torchvision.transforms.Normalize(
                 mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
             )
-            depth_mean, depth_std = self.depth_stats[camera_name]
-            self.normalize_depth = torchvision.transforms.Normalize(
-                mean=[depth_mean], std=[depth_std]
+            # Invalid sentinels until populated from LMDB metadata or restored
+            # from a checkpoint. They can never be used as a normalizer.
+            self.register_buffer(
+                "depth_mean",
+                torch.full((1, 1, 1), float("nan"), dtype=torch.float64),
+            )
+            self.register_buffer(
+                "depth_std",
+                torch.full((1, 1, 1), float("nan"), dtype=torch.float64),
+            )
+            self.register_buffer(
+                "depth_count",
+                torch.tensor(0, dtype=torch.int64),
             )
             self.camera_name = camera_name
+            self._depth_stats_initialized = False
         else:
             self.camera_name = None
 
@@ -170,15 +179,102 @@ class ResnetEncoder(VisionEncoder):
         if freeze:
             self.freeze()
 
+    def set_depth_normalizer_stats(self, stats):
+        if not self.is_rgbd:
+            raise RuntimeError("Depth statistics can only be set on an RGBD encoder.")
+
+        count = int(stats["count"])
+        mean = float(stats["mean"])
+        std = float(stats["std"])
+        if count <= 0 or not math.isfinite(mean):
+            raise ValueError(
+                f"Invalid depth stats for {self.camera_name}: count={count}, mean={mean}."
+            )
+        if not math.isfinite(std) or std <= 0:
+            raise ValueError(
+                f"Invalid depth std for {self.camera_name}: {std}."
+            )
+
+        self.depth_mean.fill_(mean)
+        self.depth_std.fill_(std)
+        self.depth_count.fill_(count)
+        self._depth_stats_initialized = True
+
+    def _require_depth_normalizer_stats(self):
+        if self._depth_stats_initialized:
+            return
+
+        count = int(self.depth_count.detach().cpu().item())
+        mean = float(self.depth_mean.detach().cpu().item())
+        std = float(self.depth_std.detach().cpu().item())
+        if count <= 0 or not math.isfinite(mean) or not math.isfinite(std) or std <= 0:
+            raise RuntimeError(
+                f"RGBD depth normalizer statistics for {self.camera_name} are not "
+                "initialized. Inject LMDB statistics or load a checkpoint that "
+                "contains depth_mean/depth_std/depth_count buffers."
+            )
+        self._depth_stats_initialized = True
+
+    def get_depth_normalizer_stats(self):
+        if not self.is_rgbd:
+            return None
+        self._require_depth_normalizer_stats()
+        count = int(self.depth_count.detach().cpu().item())
+        std = float(self.depth_std.detach().cpu().item())
+        return {
+            "count": count,
+            "mean": float(self.depth_mean.detach().cpu().item()),
+            "std": std,
+            "M2": std * std * count,
+        }
+
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        if self.is_rgbd:
+            buffer_names = ("depth_mean", "depth_std", "depth_count")
+            present = [prefix + name in state_dict for name in buffer_names]
+            if any(present) and not all(present):
+                error_msgs.append(
+                    f"Partially missing RGBD depth statistics under {prefix!r}; "
+                    f"expected all of {buffer_names}."
+                )
+            elif not any(present):
+                error_msgs.append(
+                    "RGBD checkpoint is missing required dataset-backed depth "
+                    f"normalizer buffers under {prefix!r}."
+                )
+            else:
+                self._depth_stats_initialized = False
+
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+
     # Expect input to be a batch of images of shape (batch_size, 3, 224, 224) in range [0, 1]
     # or RGBD images of shape (batch_size, 4, 224, 224)
-    # Depth values are negative and in range [-2.0, 0]
     def forward(self, x):
         if self.is_rgbd:
+            self._require_depth_normalizer_stats()
             rgb = x[:, :3, :, :]
             depth = x[:, 3:, :, :]
             rgb = self.normalize_rgb(rgb)
-            depth = self.normalize_depth(depth)
+            depth_mean = self.depth_mean.to(device=depth.device, dtype=depth.dtype)
+            depth_std = self.depth_std.to(device=depth.device, dtype=depth.dtype)
+            depth = (depth - depth_mean) / depth_std
             x = torch.cat([rgb, depth], dim=1)
         else:
             x = self.normalize(x)

@@ -135,6 +135,28 @@ def compute_global_minmax_stats(
     )
 
 
+def compute_global_depth_stats(
+    dataset_paths,
+    episode_refs=None,
+    progress_desc: Optional[str] = None,
+    progress_position: int = 0,
+    progress_disable: bool = False,
+):
+    dataset_format = ensure_homogeneous_dataset_format(dataset_paths)
+    if dataset_format != "lmdb":
+        raise ValueError(
+            "Dataset-backed RGBD depth normalization currently requires LMDB "
+            "datasets produced by process_pickles_to_lmdb.py."
+        )
+    return lmdb_backend.compute_global_depth_stats(
+        dataset_paths,
+        episode_refs=episode_refs,
+        progress_desc=progress_desc,
+        progress_position=progress_position,
+        progress_disable=progress_disable,
+    )
+
+
 def read_dataset_attrs(path: Union[str, Path]) -> dict:
     dataset_format = detect_dataset_format(path)
     if dataset_format == "zarr":

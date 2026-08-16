@@ -4,6 +4,10 @@ defaults:
 
 observation_type: rgbd
 
+# Dataset-backed depth normalization requires LMDB depth-stat metadata.
+data:
+  storage_format: lmdb
+
 control:
   controller: diffik
 

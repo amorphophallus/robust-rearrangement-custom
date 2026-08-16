@@ -224,6 +224,7 @@ def save_raw_rollout(
         )
 
     data: Trajectory = {
+        "env": "FurnitureBench",
         "observations": observations,
         "actions": actions.tolist(),
         "rewards": rewards.tolist(),

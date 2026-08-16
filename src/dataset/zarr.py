@@ -69,6 +69,13 @@ def _coerce_scalar(value):
     return value
 
 
+def _coerce_optional_string(value) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(_coerce_scalar(value))
+    return normalized if normalized.strip() else None
+
+
 def _feature_min_max(array: np.ndarray):
     if array.ndim == 1:
         return np.min(array, axis=0), np.max(array, axis=0)
@@ -422,6 +429,8 @@ def build_episode_manifest(
         task = dataset.get("task", dataset.get("furniture"))
         success = dataset["success"][:max_ep]
         domain = str(dataset.attrs["domain"])
+        episode_envs = dataset.get("env")
+        dataset_env = dataset.attrs.get("env")
 
         start_idx = 0
         for episode_idx, end_idx in enumerate(episode_ends):
@@ -436,6 +445,11 @@ def build_episode_manifest(
                     task=str(_coerce_scalar(task[episode_idx])),
                     success=int(_coerce_scalar(success[episode_idx])),
                     domain=domain,
+                    source=_coerce_optional_string(
+                        episode_envs[episode_idx]
+                        if episode_envs is not None
+                        else dataset_env
+                    ),
                 )
             )
             start_idx = end_idx
@@ -510,6 +524,7 @@ def combine_zarr_episode_subset(
     combined_data = {
         "episode_ends": np.zeros(total_episodes, dtype=np.int64),
         "task": [],
+        "env": [],
         "success": np.zeros(total_episodes, dtype=np.uint8),
         "domain": np.zeros(total_episodes, dtype=np.uint8),
         "zarr_idx": np.zeros(total_frames, dtype=np.int64),
@@ -540,6 +555,7 @@ def combine_zarr_episode_subset(
 
         combined_data["episode_ends"][episode_cursor] = frame_cursor + frame_count
         combined_data["task"].append(ref.task)
+        combined_data["env"].append(ref.source)
         combined_data["success"][episode_cursor] = ref.success
         combined_data["domain"][episode_cursor] = domain_idx[ref.domain]
         combined_data["zarr_idx"][frame_cursor : frame_cursor + frame_count] = ref.path_idx
@@ -917,6 +933,7 @@ def combine_zarr_datasets(
     combined_data = {
         "episode_ends": np.zeros(total_episodes, dtype=np.int64),
         "task": [],
+        "env": [],
         "success": np.zeros(total_episodes, dtype=np.uint8),
         # Domain is 0 for sim, 1 for real
         "domain": np.zeros(total_episodes, dtype=np.uint8),
@@ -964,6 +981,17 @@ def combine_zarr_datasets(
         )
         task = dataset.get("task", dataset.get("furniture"))
         combined_data["task"].extend(task[:max_episodes])
+        episode_envs = dataset.get("env")
+        dataset_env = dataset.attrs.get("env")
+        if episode_envs is not None:
+            combined_data["env"].extend(
+                _coerce_optional_string(value)
+                for value in episode_envs[:max_episodes]
+            )
+        else:
+            combined_data["env"].extend(
+                [_coerce_optional_string(dataset_env)] * len(end_idxs)
+            )
         combined_data["success"][n_episodes : n_episodes + len(end_idxs)] = dataset[
             "success"
         ][:max_episodes]
@@ -972,7 +1000,7 @@ def combine_zarr_datasets(
             "failure_idx", np.full_like(end_idxs, -1)
         )
         combined_data["domain"][n_episodes : n_episodes + len(end_idxs)] = domain_idx[
-            dataset.attrs["domain"][:max_episodes]
+            dataset.attrs["domain"]
         ]
 
         combined_data["zarr_idx"][

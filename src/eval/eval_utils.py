@@ -25,7 +25,10 @@ def load_bc_actor(run_id: str, wt_type="best_success_rate", device="cuda"):
         cfg.actor.predict_past_actions = False
 
     bc_actor: Actor = get_actor(cfg, device=device)
-    bc_actor.load_state_dict(torch.load(model_path))
+    checkpoint_payload = torch.load(model_path, map_location=device)
+    if isinstance(checkpoint_payload, dict) and "model_state_dict" in checkpoint_payload:
+        checkpoint_payload = checkpoint_payload["model_state_dict"]
+    bc_actor.load_state_dict(checkpoint_payload)
     bc_actor.eval()
     bc_actor.to(device)
 

@@ -241,6 +241,7 @@ def process_pickle_file(
     calculate_pos_action_from_delta: bool = False,
     resize_image: bool = False,
     image_annotation_mode: str = "none",
+    include_env_metadata: bool = False,
 ):
     """
     Process a single pickle file and return processed data.
@@ -416,6 +417,8 @@ def process_pickle_file(
         "success": 1 if data["success"] == "partial_success" else int(data["success"]),
         "pickle_file": pickle_file,
     }
+    if include_env_metadata:
+        processed_data["env"] = data.get("env")
 
     return processed_data
 

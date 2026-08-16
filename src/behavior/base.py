@@ -1,4 +1,5 @@
 import random
+import warnings
 from typing import Dict, Optional, Tuple, Union
 from collections import deque
 from omegaconf import DictConfig, OmegaConf
@@ -9,6 +10,11 @@ from src.models.vision import VisionEncoder
 import torch
 import torch.nn as nn
 from src.dataset.normalizer import LinearNormalizer
+from src.dataset.depth_stats import (
+    DEPTH_CAMERA_KEYS,
+    LEGACY_DEPTH_NORMALIZER_STATS,
+    validate_usable_depth_stats,
+)
 from src.models import get_encoder
 
 from ipdb import set_trace as bp  # noqa
@@ -340,7 +346,70 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
     def set_normalizer(self, normalizer: LinearNormalizer):
         self.normalizer.load_state_dict(normalizer.state_dict())
 
+    def set_depth_normalizer_stats(self, stats):
+        if self.observation_type != "rgbd":
+            raise RuntimeError(
+                "Depth normalizer statistics can only be set on an RGBD actor."
+            )
+        validate_usable_depth_stats(stats)
+        encoders = {
+            "wrist": self.encoder1,
+            "front": self.encoder2,
+        }
+        for camera_name in DEPTH_CAMERA_KEYS:
+            encoder = encoders[camera_name]
+            if not hasattr(encoder, "set_depth_normalizer_stats"):
+                raise TypeError(
+                    f"Encoder {type(encoder).__name__} does not support dataset-backed "
+                    "depth normalization."
+                )
+            encoder.set_depth_normalizer_stats(stats[camera_name])
+
+    def get_depth_normalizer_stats(self):
+        if self.observation_type != "rgbd":
+            return None
+        return {
+            "wrist": self.encoder1.get_depth_normalizer_stats(),
+            "front": self.encoder2.get_depth_normalizer_stats(),
+        }
+
     def load_state_dict(self, state_dict):
+        if self.observation_type == "rgbd":
+            depth_buffer_suffixes = ("depth_mean", "depth_std", "depth_count")
+            camera_presence = []
+            for encoder_name in ("encoder1", "encoder2"):
+                present = [
+                    f"{encoder_name}.{suffix}" in state_dict
+                    for suffix in depth_buffer_suffixes
+                ]
+                if any(present) and not all(present):
+                    raise RuntimeError(
+                        f"Partially missing RGBD depth statistics for {encoder_name}; "
+                        f"expected all of {depth_buffer_suffixes}."
+                    )
+                camera_presence.append(all(present))
+            if camera_presence[0] != camera_presence[1]:
+                raise RuntimeError(
+                    "Checkpoint contains depth statistics for only one RGBD camera; "
+                    "wrist and front buffers must both be present."
+                )
+            if not any(camera_presence):
+                warnings.warn(
+                    "Loading a legacy RGBD checkpoint without dataset-backed depth "
+                    "normalizer buffers; restoring the fixed normalization constants "
+                    "used when that checkpoint was trained.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self.set_depth_normalizer_stats(LEGACY_DEPTH_NORMALIZER_STATS)
+                state_dict = state_dict.copy()
+                for encoder_name in ("encoder1", "encoder2"):
+                    encoder = getattr(self, encoder_name)
+                    for suffix in depth_buffer_suffixes:
+                        state_dict[f"{encoder_name}.{suffix}"] = (
+                            getattr(encoder, suffix).detach().clone()
+                        )
+
         # Extract the normalizer state dict from the overall state dict
         normalizer_state_dict = {
             key[len("normalizer.") :]: value

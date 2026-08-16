@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import struct
@@ -11,6 +13,15 @@ import torch.distributed as dist
 from tqdm import tqdm
 
 from src.dataset.base import EpisodeRef
+from src.dataset.depth_stats import (
+    DEPTH_CAMERA_KEYS,
+    DEPTH_NORMALIZER_STATS_ATTR,
+    deserialize_depth_moments,
+    empty_depth_moments,
+    finalize_depth_moments,
+    merge_depth_moments,
+    update_depth_moments,
+)
 
 try:
     import lmdb
@@ -60,6 +71,13 @@ def _coerce_scalar(value):
     if isinstance(value, np.generic):
         return value.item()
     return value
+
+
+def _coerce_optional_string(value) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(_coerce_scalar(value))
+    return normalized if normalized.strip() else None
 
 
 def _feature_min_max(array: np.ndarray):
@@ -381,6 +399,7 @@ def build_episode_manifest(
                     task=str(_coerce_scalar(episode_meta["task"])),
                     success=int(_coerce_scalar(episode_meta["success"])),
                     domain=domain,
+                    source=_coerce_optional_string(episode_meta.get("env")),
                 )
             )
 
@@ -393,6 +412,7 @@ def _init_combined_data(first_meta, total_frames: int, total_episodes: int, keys
     combined_data = {
         "episode_ends": np.zeros(total_episodes, dtype=np.int64),
         "task": [],
+        "env": [],
         "success": np.zeros(total_episodes, dtype=np.uint8),
         "domain": np.zeros(total_episodes, dtype=np.uint8),
         "zarr_idx": np.zeros(total_frames, dtype=np.int64),
@@ -506,6 +526,7 @@ def combine_lmdb_episode_subset(
 
         combined_data["episode_ends"][episode_cursor] = frame_cursor + frame_count
         combined_data["task"].append(ref.task)
+        combined_data["env"].append(ref.source)
         combined_data["success"][episode_cursor] = ref.success
         combined_data["domain"][episode_cursor] = domain_idx[ref.domain]
         combined_data["zarr_idx"][frame_cursor : frame_cursor + frame_count] = ref.path_idx
@@ -673,3 +694,97 @@ def compute_global_minmax_stats(
         }
 
     return reduced_stats
+
+
+def _is_complete_path_selection(meta, episode_refs: List[EpisodeRef]) -> bool:
+    total_episodes = int(meta["attrs"]["n_episodes"])
+    episode_indices = sorted(ref.episode_idx for ref in episode_refs)
+    return (
+        len(episode_indices) == total_episodes
+        and episode_indices == list(range(total_episodes))
+    )
+
+
+def compute_global_depth_stats(
+    lmdb_paths: Union[List[Path], Path],
+    episode_refs: Optional[List[EpisodeRef]] = None,
+    progress_desc: Optional[str] = None,
+    progress_position: int = 0,
+    progress_disable: bool = False,
+) -> Dict[str, Dict[str, float | int]]:
+    """Return exact population depth statistics for the selected episodes.
+
+    Full LMDB shards are merged from conversion-time metadata.  A selected
+    episode subset is scanned so that excluded episodes do not leak into its
+    normalizer.  The metadata attribute is still required: its presence marks a
+    dataset produced by the new RGB-D conversion pipeline.
+    """
+
+    if not isinstance(lmdb_paths, list):
+        lmdb_paths = [lmdb_paths]
+    if len(lmdb_paths) == 0:
+        raise ValueError("compute_global_depth_stats requires at least one LMDB path.")
+
+    if episode_refs is None:
+        episode_refs = build_episode_manifest(lmdb_paths)
+
+    refs_by_path = defaultdict(list)
+    for ref in episode_refs:
+        refs_by_path[ref.path_idx].append(ref)
+
+    combined_moments = empty_depth_moments()
+    path_iterator = tqdm(
+        sorted(refs_by_path.items()),
+        desc=progress_desc or "LMDB depth stats",
+        position=progress_position,
+        leave=False,
+        disable=progress_disable,
+        unit="path",
+    )
+
+    for path_idx, path_refs in path_iterator:
+        path = lmdb_paths[path_idx]
+        meta = read_lmdb_meta(path)
+        raw_stats = meta["attrs"].get(DEPTH_NORMALIZER_STATS_ATTR)
+        if raw_stats is None:
+            raise ValueError(
+                f"LMDB dataset {path} does not contain "
+                f"{DEPTH_NORMALIZER_STATS_ATTR!r}. Rebuild it with "
+                "process_pickles_to_lmdb.py before RGBD training."
+            )
+
+        # Deserializing up front also validates the metadata schema for subset
+        # scans, even though the subset moments must be recomputed.
+        stored_moments = deserialize_depth_moments(raw_stats)
+        if _is_complete_path_selection(meta, path_refs):
+            merge_depth_moments(combined_moments, stored_moments)
+            continue
+
+        depth_keys = list(DEPTH_CAMERA_KEYS.values())
+        frame_specs = meta["frame_specs"]
+        missing_keys = set(depth_keys) - set(frame_specs["specs"])
+        if missing_keys:
+            raise ValueError(
+                f"LMDB dataset {path} is missing depth frame keys "
+                f"{sorted(missing_keys)}."
+            )
+
+        env = open_lmdb_env(path, readonly=True)
+        try:
+            with env.begin(write=False) as txn:
+                for ref in path_refs:
+                    for frame_idx in range(ref.frame_start, ref.frame_end):
+                        raw_frame = txn.get(frame_key(frame_idx))
+                        if raw_frame is None:
+                            raise KeyError(f"{path}: missing frame {frame_idx}.")
+                        decoded = unpack_frame(raw_frame, frame_specs, keys=depth_keys)
+                        for camera_name, depth_key in DEPTH_CAMERA_KEYS.items():
+                            update_depth_moments(
+                                combined_moments,
+                                camera_name,
+                                decoded[depth_key],
+                            )
+        finally:
+            env.close()
+
+    return finalize_depth_moments(combined_moments)

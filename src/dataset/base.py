@@ -19,6 +19,7 @@ class EpisodeRef:
     task: str
     success: int
     domain: str
+    source: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,10 @@ class BaseSequenceDataset(torch.utils.data.Dataset):
         self.domain = combined_data.get(
             "domain", np.zeros(len(self.episode_ends), dtype=np.uint8)
         )
+        self.episode_envs = np.asarray(
+            combined_data.get("env", [None] * len(self.episode_ends)),
+            dtype=object,
+        )
 
     def _build_indices(self, create_sample_indices_fn):
         self.indices = create_sample_indices_fn(
@@ -199,6 +204,13 @@ class BaseSequenceDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.indices)
+
+    @property
+    def sample_envs(self):
+        if len(self.indices) == 0:
+            return np.empty(0, dtype=object)
+        episode_indices = np.asarray(self.indices[:, 4], dtype=np.int64)
+        return self.episode_envs[episode_indices]
 
     def train(self):
         pass
