@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import struct
+import warnings
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
@@ -16,6 +17,7 @@ from src.dataset.base import EpisodeRef
 from src.dataset.depth_stats import (
     DEPTH_CAMERA_KEYS,
     DEPTH_NORMALIZER_STATS_ATTR,
+    LEGACY_DEPTH_NORMALIZER_STATS,
     deserialize_depth_moments,
     empty_depth_moments,
     finalize_depth_moments,
@@ -716,8 +718,8 @@ def compute_global_depth_stats(
 
     Full LMDB shards are merged from conversion-time metadata.  A selected
     episode subset is scanned so that excluded episodes do not leak into its
-    normalizer.  The metadata attribute is still required: its presence marks a
-    dataset produced by the new RGB-D conversion pipeline.
+    normalizer. Legacy single-source FurnitureBench datasets may fall back to
+    the fixed constants used before dataset-backed normalization was introduced.
     """
 
     if not isinstance(lmdb_paths, list):
@@ -732,6 +734,44 @@ def compute_global_depth_stats(
     for ref in episode_refs:
         refs_by_path[ref.path_idx].append(ref)
 
+    meta_by_path = {}
+    missing_stats_paths = []
+    for path_idx, _ in sorted(refs_by_path.items()):
+        path = lmdb_paths[path_idx]
+        meta = read_lmdb_meta(path)
+        meta_by_path[path_idx] = meta
+        if meta["attrs"].get(DEPTH_NORMALIZER_STATS_ATTR) is None:
+            missing_stats_paths.append(path)
+
+    if missing_stats_paths:
+        known_sources = {
+            source
+            for ref in episode_refs
+            if (source := _coerce_optional_string(ref.source)) is not None
+        }
+        if known_sources.issubset({"FurnitureBench"}):
+            warnings.warn(
+                "RGBD LMDB depth statistics are missing for a legacy "
+                "FurnitureBench or source-unspecified dataset; falling back to "
+                "the fixed depth normalization constants used by the old pipeline. "
+                f"Rebuild these LMDB datasets to use dataset-backed statistics: "
+                f"{[str(path) for path in missing_stats_paths]}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return {
+                camera_name: dict(camera_stats)
+                for camera_name, camera_stats in LEGACY_DEPTH_NORMALIZER_STATS.items()
+            }
+
+        raise ValueError(
+            "LMDB depth statistics are missing, and legacy fixed normalization is "
+            "only valid for a single FurnitureBench or source-unspecified dataset. "
+            f"Selected sources={sorted(known_sources)}; rebuild these LMDB datasets "
+            f"with process_pickles_to_lmdb.py: "
+            f"{[str(path) for path in missing_stats_paths]}"
+        )
+
     combined_moments = empty_depth_moments()
     path_iterator = tqdm(
         sorted(refs_by_path.items()),
@@ -744,14 +784,8 @@ def compute_global_depth_stats(
 
     for path_idx, path_refs in path_iterator:
         path = lmdb_paths[path_idx]
-        meta = read_lmdb_meta(path)
+        meta = meta_by_path[path_idx]
         raw_stats = meta["attrs"].get(DEPTH_NORMALIZER_STATS_ATTR)
-        if raw_stats is None:
-            raise ValueError(
-                f"LMDB dataset {path} does not contain "
-                f"{DEPTH_NORMALIZER_STATS_ATTR!r}. Rebuild it with "
-                "process_pickles_to_lmdb.py before RGBD training."
-            )
 
         # Deserializing up front also validates the metadata schema for subset
         # scans, even though the subset moments must be recomputed.

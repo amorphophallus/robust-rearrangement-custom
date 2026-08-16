@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +8,7 @@ import numpy as np
 from src.dataset.depth_stats import (
     DEPTH_CAMERA_KEYS,
     DEPTH_NORMALIZER_STATS_ATTR,
+    LEGACY_DEPTH_NORMALIZER_STATS,
     deserialize_depth_moments,
     empty_depth_moments,
     finalize_depth_moments,
@@ -62,16 +64,16 @@ def _write_depth_lmdb(path: Path, episodes, include_stats=True):
                             frame_specs,
                         ),
                     )
-                episode_index.append(
-                    {
-                        "episode_idx": episode_idx,
-                        "frame_start": frame_cursor,
-                        "frame_end": frame_cursor + len(wrist),
-                        "task": "test_task",
-                        "success": 1,
-                        "env": episode["env"],
-                    }
-                )
+                episode_meta = {
+                    "episode_idx": episode_idx,
+                    "frame_start": frame_cursor,
+                    "frame_end": frame_cursor + len(wrist),
+                    "task": "test_task",
+                    "success": 1,
+                }
+                if "env" in episode:
+                    episode_meta["env"] = episode["env"]
+                episode_index.append(episode_meta)
                 update_depth_moments(moments, "wrist", wrist)
                 update_depth_moments(moments, "front", front)
                 frame_cursor += len(wrist)
@@ -199,22 +201,44 @@ class LMDBDepthStatsTest(unittest.TestCase):
             self.assertAlmostEqual(first_episode_only["wrist"]["mean"], -1.5)
             self.assertAlmostEqual(first_episode_only["front"]["mean"], 1.5)
 
-    def test_old_lmdb_without_metadata_is_rejected(self):
+    def test_old_furniturebench_or_unspecified_lmdb_uses_legacy_constants(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "old.lmdb"
-            _write_depth_lmdb(
-                path,
-                [
+            for env_name in ("FurnitureBench", None):
+                path = Path(tmpdir) / f"old-{env_name or 'unspecified'}.lmdb"
+                episode = {
+                    "wrist": [[[1.0]]],
+                    "front": [[[2.0]]],
+                }
+                if env_name is not None:
+                    episode["env"] = env_name
+                _write_depth_lmdb(path, [episode], include_stats=False)
+
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always")
+                    stats = compute_global_depth_stats(path)
+                self.assertEqual(stats, LEGACY_DEPTH_NORMALIZER_STATS)
+                self.assertTrue(
+                    any(
+                        "fixed depth normalization constants" in str(item.message)
+                        for item in caught
+                    )
+                )
+
+    def test_old_non_furniturebench_or_mixed_lmdb_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for sources in (("AutoMate",), ("FurnitureBench", "AutoMate")):
+                path = Path(tmpdir) / f"old-{'-'.join(sources)}.lmdb"
+                episodes = [
                     {
-                        "env": "FurnitureBench",
+                        "env": source,
                         "wrist": [[[1.0]]],
                         "front": [[[2.0]]],
                     }
-                ],
-                include_stats=False,
-            )
-            with self.assertRaisesRegex(ValueError, "does not contain"):
-                compute_global_depth_stats(path)
+                    for source in sources
+                ]
+                _write_depth_lmdb(path, episodes, include_stats=False)
+                with self.assertRaisesRegex(ValueError, "only valid for a single"):
+                    compute_global_depth_stats(path)
 
 
 if __name__ == "__main__":
