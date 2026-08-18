@@ -120,6 +120,14 @@ def ensure_float32(array: np.ndarray) -> np.ndarray:
     return array
 
 
+def normalize_depth_meters(array: np.ndarray) -> np.ndarray:
+    """Return depth in positive meters for legacy simulation and real data."""
+    depth = ensure_float32(np.asarray(array))
+    if not np.all(np.isfinite(depth)):
+        raise ValueError("Depth images contain NaN or infinite values.")
+    return np.abs(depth)
+
+
 def pickle_source_identity(pickle_path: Path) -> str:
     """Return the legacy raw-relative identity, or an absolute external path."""
     pickle_path = Path(pickle_path).expanduser()
@@ -281,8 +289,12 @@ def process_pickle_file(
     sample_depth2 = obs[0].get("depth_image2", None)
     default_depth_shape = color_image1.shape[1:3]
     if sample_depth1 is not None and sample_depth2 is not None:
-        depth_image1 = np.array([o["depth_image1"] for o in obs], dtype=np.float32)
-        depth_image2 = np.array([o["depth_image2"] for o in obs], dtype=np.float32)
+        depth_image1 = normalize_depth_meters(
+            np.array([o["depth_image1"] for o in obs], dtype=np.float32)
+        )
+        depth_image2 = normalize_depth_meters(
+            np.array([o["depth_image2"] for o in obs], dtype=np.float32)
+        )
     else:
         print(f"[WARN] Missing depth images in {pickle_path}, filling zeros for depth_image1/2.")
         depth_image1 = np.zeros((len(obs),) + default_depth_shape, dtype=np.float32)

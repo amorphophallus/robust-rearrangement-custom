@@ -345,6 +345,21 @@ Please see [our notes on using Isaac Sim to re-render trajectories in service of
 ## Notes on real world evaluation (in development)
 Please see [our notes on running on the real world Franka Panda robot](src/real/readme.md). Our steps for reproducing the identical real world setup are still being developed, but in the `src/real` folder, we provide the scripts that we used along with some notes on the general process of getting set up to use the same tools.
 
+### Deoxys raw trajectories
+
+The paired Deoxys collector stores real one-leg demonstrations under
+`$DATA_DIR_RAW/raw/osc/real/one_leg/teleop/low/{success,failure}`. Each pickle
+uses the FurnitureBench raw convention: `N+1` observations, `N` 8D delta
+actions, 240x320 wrist/front RGB-D, a 42D `parts_poses` vector in the
+FurnitureBench AprilTag frame, and an explicit success label.
+
+RealSense depth is stored as positive meters. Historical simulation pickles in
+this repository may use negative metric depth; `src/data_processing/process_pickles.py`
+normalizes both conventions to non-negative `float32` meters before writing
+Zarr. Process the new raw directory with the same CLI as simulation data, using
+the processor's existing delta-to-position-action conversion because Deoxys
+records delta actions.
+
 
 
 ## Citation
@@ -358,4 +373,3 @@ If you find the paper or the code useful, please consider citing the paper:
   journal={arXiv preprint arXiv:2407.16677},
   year={2024}
 }```
-
