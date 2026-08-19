@@ -65,7 +65,6 @@ load_server_env() {
     set +a
     local required
     for required in \
-        VLM_BASE_MODEL_DIR \
         VLM_CHECKPOINT_DIR \
         VLM_MANIFEST_PATH \
         VLM_API_TOKEN; do

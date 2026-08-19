@@ -11,19 +11,20 @@ import torch
 from fastapi import FastAPI, HTTPException, Request
 from PIL import Image
 
-from services.vlm_guidance import POINT_POLICY_VERSION
 from services.vlm_guidance.engine import FurnitureInferenceEngine
 
 
 def _engine_from_env() -> FurnitureInferenceEngine:
     return FurnitureInferenceEngine(
-        base_model_dir=os.environ["VLM_BASE_MODEL_DIR"],
+        base_model_dir=os.getenv("VLM_BASE_MODEL_DIR"),
         checkpoint_dir=os.environ["VLM_CHECKPOINT_DIR"],
+        model_mode=os.getenv("VLM_MODEL_MODE", "auto"),
         device=os.getenv("VLM_DEVICE", "cuda:0"),
         attention_backend=os.getenv("VLM_ATTENTION_BACKEND", "sdpa"),
         max_length=int(os.getenv("VLM_MAX_LENGTH", "4096")),
         image_max_pixels=int(os.getenv("VLM_IMAGE_MAX_PIXELS", "262144")),
         max_micro_batch_size=int(os.getenv("VLM_MAX_MICRO_BATCH_SIZE", "8")),
+        max_new_tokens=int(os.getenv("VLM_MAX_NEW_TOKENS", "256")),
         model_revision=os.getenv("VLM_MODEL_REVISION", "unknown"),
         manifest_path=os.getenv("VLM_MANIFEST_PATH"),
     )
@@ -64,7 +65,8 @@ def ready(request: Request):
     return {
         "status": "ready",
         "model_revision": engine.model_revision,
-        "policy_version": POINT_POLICY_VERSION,
+        "policy_version": engine.policy_version,
+        "model_mode": engine.model_mode,
         "device": str(engine.device),
         "attention_backend": engine.attention_backend,
     }

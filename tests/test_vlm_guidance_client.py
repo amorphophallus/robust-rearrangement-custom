@@ -19,6 +19,11 @@ class FakeResponse:
         return self.payload
 
 
+class ErrorResponse(FakeResponse):
+    def raise_for_status(self):
+        raise RuntimeError("422 Unprocessable Entity")
+
+
 class FakeSession:
     def __init__(self):
         self.last_files = None
@@ -32,22 +37,17 @@ class FakeSession:
                 {
                     "request_id": item["request_id"],
                     "skill": "place",
-                    "skill_confidence": 0.8,
-                    "skill_probabilities": {
-                        "push": 0.0,
-                        "pick": 0.0,
-                        "place": 0.8,
-                        "insert": 0.1,
-                        "screw": 0.1,
-                    },
+                    "skill_confidence": None,
+                    "skill_probabilities": None,
                     "point_1000": [500.0, 500.0],
                     "point_px": [159.5, 119.5],
+                    "generated_text": '{"skill":"place","target_point_2d":[159.5,119.5]}',
                 }
             )
         return FakeResponse(
             {
                 "model_revision": "revision",
-                "policy_version": 2,
+                "policy_version": 3,
                 "predictions": rows,
                 "timing_ms": {"total": 12.0},
             }
@@ -58,8 +58,17 @@ class FakeSession:
             {
                 "status": "ready",
                 "model_revision": "revision",
-                "policy_version": 2,
+                "policy_version": 3,
                 "device": "cuda:0",
+            }
+        )
+
+
+class ErrorSession(FakeSession):
+    def post(self, url, *, files, headers, timeout):
+        return ErrorResponse(
+            {
+                "detail": "env0-step495: target_point_2d is outside the front image"
             }
         )
 
@@ -89,8 +98,29 @@ def test_client_validates_ready_policy_version():
     client = VLMGuidanceClient("http://vlm", session=FakeSession())
     readiness = client.check_ready()
 
-    assert readiness["policy_version"] == 2
+    assert readiness["policy_version"] == 3
     assert client.ready_model_revision == "revision"
+
+
+def test_client_preserves_server_error_detail():
+    client = VLMGuidanceClient("http://vlm", session=ErrorSession())
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+
+    try:
+        client.predict(
+            task="round_table",
+            front_images=[image],
+            wrist_images=[image],
+            state_infos=[{"base": {}}],
+            step_idx=495,
+        )
+    except Exception as error:
+        message = str(error)
+    else:
+        raise AssertionError("expected prediction failure")
+
+    assert "outside the front image" in message
+    assert "env0-step495" in message
 
 
 def test_policy_bundle_preserves_oracle_diagnostics_but_uses_vlm_outputs():
@@ -118,3 +148,5 @@ def test_policy_bundle_preserves_oracle_diagnostics_but_uses_vlm_outputs():
         bundle["oracle_guidance_point_2d"]["color_image2"], [10.0, 20.0]
     )
     assert bundle["vlm_annotation"]["cache_age_steps"] == 3
+    assert bundle["vlm_annotation"]["skill_confidence"] is None
+    assert "target_point_2d" in bundle["vlm_annotation"]["generated_text"]

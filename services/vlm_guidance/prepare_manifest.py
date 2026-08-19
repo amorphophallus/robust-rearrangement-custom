@@ -8,7 +8,11 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from services.vlm_guidance import POINT_POLICY_VERSION, SKILL_NAMES
+from services.vlm_guidance import (
+    ORIGINAL_SFT_POLICY_VERSION,
+    POINT_POLICY_VERSION,
+    SKILL_NAMES,
+)
 
 
 REQUIRED_FILES = {
@@ -51,16 +55,35 @@ def _sha256(path: Path) -> str:
 
 
 def build_manifest(args) -> dict:
-    roots = {
-        "base_model": Path(args.base_model_dir).resolve(),
-        "checkpoint": Path(args.checkpoint_dir).resolve(),
-    }
+    checkpoint = Path(args.checkpoint_dir).resolve()
+    roots = {"checkpoint": checkpoint}
+    base_model_dir = getattr(args, "base_model_dir", None)
+    if base_model_dir:
+        roots["base_model"] = Path(base_model_dir).resolve()
     with (roots["checkpoint"] / "config.json").open() as stream:
-        policy = json.load(stream).get("hy_furniture_policy", {})
-    if policy.get("version") != POINT_POLICY_VERSION:
-        raise RuntimeError(f"unexpected point policy: {policy}")
-    if tuple(policy.get("skill_names", ())) != SKILL_NAMES:
-        raise RuntimeError("unexpected skill order")
+        checkpoint_config = json.load(stream)
+    policy = checkpoint_config.get("hy_furniture_policy", {})
+    detected_mode = "structured" if policy else "original_sft"
+    requested_mode = getattr(args, "model_mode", "auto")
+    model_mode = detected_mode if requested_mode == "auto" else requested_mode
+    if model_mode != detected_mode:
+        raise RuntimeError(
+            f"checkpoint looks like {detected_mode}, not requested {model_mode}"
+        )
+    if model_mode == "structured":
+        if "base_model" not in roots:
+            raise RuntimeError("structured mode requires --base-model-dir")
+        if policy.get("version") != POINT_POLICY_VERSION:
+            raise RuntimeError(f"unexpected point policy: {policy}")
+        if tuple(policy.get("skill_names", ())) != SKILL_NAMES:
+            raise RuntimeError("unexpected skill order")
+        policy_version = POINT_POLICY_VERSION
+    else:
+        if "Qwen3_5ForConditionalGeneration" not in tuple(
+            checkpoint_config.get("architectures", ())
+        ):
+            raise RuntimeError("original_sft checkpoint is not native Qwen3.5")
+        policy_version = ORIGINAL_SFT_POLICY_VERSION
     files = {}
     for root_name, root in roots.items():
         for name in _artifact_files(root_name, root):
@@ -73,9 +96,10 @@ def build_manifest(args) -> dict:
             }
     return {
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "base_revision": args.base_revision,
+        "model_mode": model_mode,
+        "base_revision": getattr(args, "base_revision", None),
         "checkpoint_revision": args.checkpoint_revision,
-        "point_policy_version": POINT_POLICY_VERSION,
+        "policy_version": policy_version,
         "skill_names": list(SKILL_NAMES),
         "files": files,
     }
@@ -83,9 +107,12 @@ def build_manifest(args) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-model-dir", required=True)
+    parser.add_argument("--base-model-dir")
     parser.add_argument("--checkpoint-dir", required=True)
-    parser.add_argument("--base-revision", required=True)
+    parser.add_argument(
+        "--model-mode", choices=("auto", "structured", "original_sft"), default="auto"
+    )
+    parser.add_argument("--base-revision")
     parser.add_argument("--checkpoint-revision", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()

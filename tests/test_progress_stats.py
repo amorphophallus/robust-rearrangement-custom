@@ -236,6 +236,8 @@ def test_tracking_error_summary_includes_expected_empty_labels_and_overall():
     assert summary["by_skill"]["top-leg-pick"]["count"] == 1
     assert summary["by_skill"]["leg-top-place"]["count"] == 0
     assert summary["overall"]["mean_total"] == 2.0
+    assert summary["overall"]["median_total"] == 2.0
+    assert summary["overall"]["p90_total"] == 2.0
 
 
 def test_position_tracking_summary_omits_orientation_and_total():
@@ -247,6 +249,8 @@ def test_position_tracking_summary_omits_orientation_and_total():
 
     assert summary["metric_type"] == "position"
     assert summary["overall"]["mean_pos_m"] == 0.01
+    assert summary["overall"]["median_pos_m"] == 0.01
+    assert summary["overall"]["p90_pos_m"] == 0.01
     assert "mean_ori_deg" not in summary["overall"]
     assert "mean_total" not in summary["overall"]
 

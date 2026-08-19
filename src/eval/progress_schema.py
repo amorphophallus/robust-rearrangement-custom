@@ -393,6 +393,8 @@ def _summarize_tracking_error_list(
     if not errors:
         for _, output_name in fields:
             summary[f"mean_{output_name}"] = 0.0
+            summary[f"median_{output_name}"] = 0.0
+            summary[f"p90_{output_name}"] = 0.0
             summary[f"min_{output_name}"] = 0.0
             summary[f"max_{output_name}"] = 0.0
         return summary
@@ -400,6 +402,8 @@ def _summarize_tracking_error_list(
     for field, output_name in fields:
         values = np.asarray([float(error[field]) for error in errors], dtype=np.float64)
         summary[f"mean_{output_name}"] = float(values.mean())
+        summary[f"median_{output_name}"] = float(np.median(values))
+        summary[f"p90_{output_name}"] = float(np.percentile(values, 90))
         summary[f"min_{output_name}"] = float(values.min())
         summary[f"max_{output_name}"] = float(values.max())
     return summary

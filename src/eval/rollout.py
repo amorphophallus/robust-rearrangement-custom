@@ -68,6 +68,7 @@ from src.eval.vlm_guidance import (
     state_info_for_env,
 )
 from src.eval.vlm_point_metrics import (
+    DEFAULT_MONTE_CARLO_SAMPLES_PER_PAIR,
     build_vlm_point_error_summary,
     make_point_error_record,
     merge_vlm_point_error_summaries,
@@ -698,18 +699,32 @@ def _record_vlm_point_errors(
     active_mask,
     *,
     step_idx: int,
+    episode_offset: int = 0,
+    noise_projection_samples: int = DEFAULT_MONTE_CARLO_SAMPLES_PER_PAIR,
 ) -> None:
     for env_idx, (oracle, prediction) in enumerate(zip(oracle_bundles, predictions)):
         if not active_mask[env_idx]:
             continue
         oracle_point = oracle.get("guidance_point_2d", {}).get("color_image2")
+        oracle_point_3d = oracle.get("guidance_point")
+        front_camera_info = oracle.get("camera_info", {}).get("color_image2")
+        noise_seed = (
+            int(episode_offset + env_idx) * 1_000_003
+            + int(step_idx) * 97_409
+            + int(prediction.query_step) * 9_176
+        )
         records_per_env[env_idx].append(
             make_point_error_record(
                 step_idx=step_idx,
                 oracle_skill=oracle.get("skill"),
+                vlm_skill=prediction.skill,
                 oracle_point=oracle_point,
                 vlm_point=prediction.point_px,
                 query_step=prediction.query_step,
+                oracle_point_3d=oracle_point_3d,
+                camera_info=front_camera_info,
+                noise_seed=noise_seed,
+                noise_projection_samples=noise_projection_samples,
             )
         )
 
@@ -746,6 +761,8 @@ def rollout(
     annotation_source: str = "scripted",
     vlm_client: Optional[VLMGuidanceClient] = None,
     vlm_query_interval: Optional[int] = None,
+    vlm_metric_episode_offset: int = 0,
+    vlm_noise_projection_samples: int = DEFAULT_MONTE_CARLO_SAMPLES_PER_PAIR,
 ) -> Optional[RolloutSaveValues]:
     use_vlm = annotation_source == "vlm"
     if annotation_source not in {"scripted", "vlm"}:
@@ -980,6 +997,8 @@ def rollout(
                 vlm_predictions,
                 vlm_metric_active,
                 step_idx=step_idx,
+                episode_offset=vlm_metric_episode_offset,
+                noise_projection_samples=vlm_noise_projection_samples,
             )
         raw_robot_state = obs.get("robot_state") if isinstance(obs, dict) else None
         ee_pos_vel = (
@@ -1349,6 +1368,7 @@ def calculate_success_rate(
     annotation_noise_config: Optional[AnnotationNoiseConfig] = None,
     full_length_rollout: bool = False,
     output_only_pickle: bool = False,
+    output_only_video: bool = False,
     perturb_runner: Optional[PerturbRunner] = None,
     target_successes: Optional[int] = None,
     init_states: Optional[List[dict]] = None,
@@ -1357,6 +1377,8 @@ def calculate_success_rate(
     annotation_source: str = "scripted",
     vlm_client: Optional[VLMGuidanceClient] = None,
     vlm_query_interval: Optional[int] = None,
+    tracking_metric_type: Optional[str] = None,
+    vlm_noise_projection_samples: int = DEFAULT_MONTE_CARLO_SAMPLES_PER_PAIR,
 ) -> RolloutStats:
 
     use_target_mode = target_successes is not None and target_successes > 0
@@ -1391,9 +1413,12 @@ def calculate_success_rate(
     step_completion_counts: dict[str, int] = {}
     tracking_error_records: dict[str, list[dict[str, float]]] = {}
     tracking_workspace_counts = new_tracking_workspace_counts()
-    tracking_metric_type = (
-        "pose" if grasp_part_annotate or annotate_grasp else "position"
-    )
+    if tracking_metric_type is None:
+        tracking_metric_type = (
+            "pose" if grasp_part_annotate or annotate_grasp else "position"
+        )
+    if tracking_metric_type not in {"position", "pose"}:
+        raise ValueError(f"Unsupported tracking metric type: {tracking_metric_type}")
     vlm_point_error_summaries: list[dict] = []
     vlm_model_revisions: set[str] = set()
     tracking_episode_count = 0
@@ -1465,6 +1490,8 @@ def calculate_success_rate(
             annotation_source=annotation_source,
             vlm_client=vlm_client,
             vlm_query_interval=vlm_query_interval,
+            vlm_metric_episode_offset=n_total_rollouts,
+            vlm_noise_projection_samples=vlm_noise_projection_samples,
         )
 
         # Calculate the success rate
@@ -1550,8 +1577,8 @@ def calculate_success_rate(
                     else []
                 )
                 guidance_poses_for_tracking = (
-                    rollout_data.guidance_poses[env_idx]
-                    if rollout_data.guidance_poses
+                    rollout_data.guidance_poses_clean[env_idx]
+                    if rollout_data.guidance_poses_clean
                     else []
                 )
                 if tracking_histories_are_complete(
@@ -1789,6 +1816,7 @@ def calculate_success_rate(
                         pcs=pcs_trimmed,
                         skill_on_image=skill_on_image,
                         output_only_pickle=output_only_pickle,
+                        output_only_video=output_only_video,
                         oracle_skills=(
                             oracle_skills_for_rollout[trim_start_steps : n_steps + 1]
                             if annotation_source == "vlm"

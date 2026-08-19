@@ -236,6 +236,11 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
         self.subdivide_ratio: float = 1.0
 
         self.observation_type = cfg.observation_type
+        # A depth-less RGBD observation previously fell back to all-zero depth
+        # silently.  That makes an evaluation look healthy while changing the
+        # policy input distribution completely.  Record the real tensors once
+        # and fail fast if either camera depth is absent.
+        self._rgbd_observation_contract_logged = False
         self.requires_skill_input = model_requires_skill_input(cfg)
         self.skill_dim = model_skill_dim(cfg) if self.requires_skill_input else None
 
@@ -611,7 +616,24 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
         elif self.observation_type == "rgbd":
             skill = self._inference_skill(obs, nrobot_state)
             img_size = obs[0]["color_image1"].shape[-3:]
-            has_depth = obs[0].get("depth_image1") is not None
+            missing_depth = [
+                key
+                for key in ("depth_image1", "depth_image2")
+                if obs[0].get(key) is None
+            ]
+            if missing_depth:
+                raise RuntimeError(
+                    "RGBD observation contract violated; missing actual env fields: "
+                    + ", ".join(missing_depth)
+                )
+            if not self._rgbd_observation_contract_logged:
+                print(
+                    "RGBD observation contract: "
+                    f"depth_image1={tuple(obs[0]['depth_image1'].shape)} "
+                    f"depth_image2={tuple(obs[0]['depth_image2'].shape)}",
+                    flush=True,
+                )
+                self._rgbd_observation_contract_logged = True
 
             image1 = torch.cat(
                 [o["color_image1"].unsqueeze(1) for o in obs], dim=1
@@ -619,19 +641,13 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
             image2 = torch.cat(
                 [o["color_image2"].unsqueeze(1) for o in obs], dim=1
             ).reshape(B * self.obs_horizon, *img_size)
-            if has_depth:
-                depth_size = obs[0]["depth_image1"].shape[-2:]
-                depth1 = torch.cat(
-                    [o["depth_image1"].unsqueeze(1) for o in obs], dim=1
-                ).reshape(B * self.obs_horizon, *depth_size).unsqueeze(1)
-                depth2 = torch.cat(
-                    [o["depth_image2"].unsqueeze(1) for o in obs], dim=1
-                ).reshape(B * self.obs_horizon, *depth_size).unsqueeze(1)
-            else:
-                # img_size from obs[0]["color_image1"].shape[-3:] is (H, W, C)
-                H_img, W_img = img_size[0], img_size[1]
-                depth1 = torch.zeros(B * self.obs_horizon, 1, H_img, W_img, device=self.device)
-                depth2 = torch.zeros(B * self.obs_horizon, 1, H_img, W_img, device=self.device)
+            depth_size = obs[0]["depth_image1"].shape[-2:]
+            depth1 = torch.cat(
+                [o["depth_image1"].unsqueeze(1) for o in obs], dim=1
+            ).reshape(B * self.obs_horizon, *depth_size).unsqueeze(1)
+            depth2 = torch.cat(
+                [o["depth_image2"].unsqueeze(1) for o in obs], dim=1
+            ).reshape(B * self.obs_horizon, *depth_size).unsqueeze(1)
 
             image1 = image1.permute(0, 3, 1, 2)
             image2 = image2.permute(0, 3, 1, 2)

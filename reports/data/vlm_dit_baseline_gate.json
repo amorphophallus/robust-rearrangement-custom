@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "status": "invalid",
+  "updated_at": "2026-08-17T09:45:00+08:00",
+  "task": "one_leg",
+  "protocol": {
+    "annotation_source": "scripted",
+    "randomness": "low",
+    "n_envs": 3,
+    "max_rollout_steps": 1000,
+    "required_rollouts_per_condition": 12,
+    "minimum_successes_per_condition": 8,
+    "minimum_success_rate": 0.6666666667,
+    "additional_requirement": "任何 skill transition 都不能出现系统性的 0% completion collapse。"
+  },
+  "reason": "旧 324 个 VLM rollout 和旧 scripted-GT 对照均缺少 --save-depth-image；当前 evaluate_model.py 会因此不把 depth_image1/depth_image2 加入 RGBD policy observation，所以旧结果不能用于判断 checkpoint、VLM 或 condition 优劣。",
+  "invalid_reasons": [
+    "旧 VLM 和 scripted-GT 命令缺少 --save-depth-image，RGBD checkpoint 实际收到零 depth fallback。",
+    "旧 one_leg VLM 评测实际使用 700-step 上限，而新协议固定为 1000。",
+    "旧 rgbd+GP VLM 矩阵使用 autumn-dust-13，而噪声参考和本轮协议使用 icy-vortex-9。",
+    "跨机器 matched A/B 已验证：不带 depth 时 base=0/3、r218=0/3；带 depth 时 base=3/3、r218=3/3。"
+  ],
+  "corrected_conclusion": "此前‘checkpoint 错误/损坏’的结论无效；旧文件仅保留作故障溯源，不得 resume、拼接或排名。",
+  "historical_references": [
+    {
+      "checkpoint_label": "icy-vortex-9 curated latest-3000",
+      "successes": 31,
+      "rollouts": 36,
+      "success_rate": 0.8611111111,
+      "source": "reports/multi_task_condition_eval_0610.md"
+    },
+    {
+      "checkpoint_label": "autumn-dust-13 curated latest-3000",
+      "successes": 28,
+      "rollouts": 36,
+      "success_rate": 0.7777777778,
+      "source": "reports/multi_task_condition_eval_0610.md"
+    },
+    {
+      "checkpoint_label": "rgbd+GP noise n0",
+      "successes": 11,
+      "rollouts": 12,
+      "success_rate": 0.9166666667,
+      "source": "reports/annotation_noise_clean_train_rgbd_eval.md"
+    },
+    {
+      "checkpoint_label": "rgbd+GP+skill noise n0",
+      "successes": 12,
+      "rollouts": 12,
+      "success_rate": 1.0,
+      "source": "reports/annotation_noise_clean_train_rgbd_eval.md"
+    }
+  ],
+  "diagnostic_runs": [
+    {
+      "label": "icy-3000 current code, local 3060",
+      "checkpoint": "actor_chkpt_latest_3000.pt",
+      "code": "371a783 plus VLM worktree changes",
+      "n_envs": 2,
+      "max_rollout_steps": 1000,
+      "successes": 0,
+      "rollouts": 10,
+      "last_completed_skill": "leg-top-pick",
+      "failed_skill": "leg-top-place",
+      "summary": "logs/icy_one_leg_scripted_1000_diagnostic_20260814/rgbd_gp__one_leg.json"
+    },
+    {
+      "label": "icy-3000 clean HEAD, remote 4090",
+      "checkpoint": "actor_chkpt_latest_3000.pt",
+      "code": "371a783",
+      "n_envs": 3,
+      "max_rollout_steps": 1000,
+      "successes": 0,
+      "rollouts": 3,
+      "last_completed_skill": "leg-top-pick",
+      "failed_skill": "leg-top-place"
+    },
+    {
+      "label": "icy-2500 clean HEAD, remote 4090",
+      "checkpoint": "actor_chkpt_latest_2500.pt",
+      "code": "371a783",
+      "n_envs": 3,
+      "max_rollout_steps": 1000,
+      "successes": 0,
+      "rollouts": 3,
+      "last_completed_skill": "leg-top-pick",
+      "failed_skill": "leg-top-place"
+    },
+    {
+      "label": "icy-3000 June-15 stack, remote 4090",
+      "checkpoint": "actor_chkpt_latest_3000.pt",
+      "code": "5554145 with furniture-bench 71392f3",
+      "n_envs": 3,
+      "max_rollout_steps": 1000,
+      "successes": 0,
+      "rollouts": 3,
+      "last_completed_skill": "leg-top-pick",
+      "failed_skill": "leg-top-place"
+    },
+    {
+      "label": "autumn latest-3000 clean HEAD, remote 4090",
+      "checkpoint": "actor_chkpt_latest_3000.pt",
+      "checkpoint_sha256": "ad5d1bf0556c61e8b44bb6c37bf710707d5e5ee2e2ccfec978cf27fa1d8cb258",
+      "code": "371a783",
+      "n_envs": 3,
+      "max_rollout_steps": 1000,
+      "successes": 1,
+      "rollouts": 12,
+      "last_completed_skill": "leg-top-screw for one rollout",
+      "failed_skill": "leg-top-place for eleven rollouts"
+    },
+    {
+      "label": "autumn best-val-3000 clean HEAD, remote 4090",
+      "checkpoint": "actor_chkpt_best_val_action_mse_error_3000.pt",
+      "checkpoint_sha256": "4dbcfd39f3db4f8db1d6672564ad36d796ada21aab6bf032ee3b79a35089073f",
+      "code": "371a783",
+      "n_envs": 3,
+      "max_rollout_steps": 1000,
+      "successes": 0,
+      "rollouts": 3,
+      "last_completed_skill": "leg-top-pick",
+      "failed_skill": "leg-top-place"
+    },
+    {
+      "label": "fresh-tree latest-3000 clean HEAD, remote 4090",
+      "checkpoint": "actor_chkpt_latest_3000.pt",
+      "code": "371a783",
+      "n_envs": 3,
+      "max_rollout_steps": 1000,
+      "successes": 1,
+      "rollouts": 3,
+      "last_completed_skill": "leg-top-screw for one rollout",
+      "failed_skill": "leg-top-place for two rollouts"
+    }
+  ],
+  "ruled_out": [],
+  "invalidated_diagnostic_note": "上列旧诊断缺少 RGBD depth contract，因此不能用于排除 checkpoint、并行度、机器、代码版本或状态机因素。",
+  "checkpoint_search": {
+    "wanted": "multi-task-rgbd-skill-low-0610_icy-vortex-9_latest_3000.pt",
+    "nas_found": false,
+    "nas_recycle_bin_found": false,
+    "wandb_checkpoint_artifact_found": false,
+    "wandb_logged_artifacts": [
+      "run-e0sjapm9-events:v0",
+      "run-e0sjapm9-history:v3"
+    ]
+  },
+  "next_action": "2026-08-20 用户已审查 original_sft 三任务 preview，指定不再运行 27-rollout smoke。工作区与启动命令分别审批后，只使用 gpu-snatcher/auto_eval.sh 的 depth-fixed 入口直接运行全新 324-rollout formal 矩阵；manifest 必须记录 explicit_user_approved_bypass。"
+}

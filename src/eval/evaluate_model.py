@@ -154,6 +154,12 @@ def validate_args(args: argparse.Namespace):
     assert not args.leaderboard, "Leaderboard mode is not supported as of now"
 
     assert not args.store_video_wandb or args.wandb, "store-video-wandb requires wandb"
+    assert not (args.output_only_pickle and args.output_only_video), (
+        "--output-only-pickle and --output-only-video are mutually exclusive"
+    )
+    assert not args.output_only_video or args.save_rollouts, (
+        "--output-only-video requires --save-rollouts"
+    )
     assert not args.skill_on_image or args.annotate_skill, (
         "--skill-on-image requires --annotate-skill"
     )
@@ -206,6 +212,7 @@ def validate_args(args: argparse.Namespace):
         assert not unsupported, f"VLM guidance does not support tasks: {unsupported}"
         assert args.vlm_timeout_seconds > 0
         assert args.vlm_query_interval >= 0
+        assert args.vlm_noise_projection_samples > 0
 
 
 def resolve_rollout_after_success_by_task(
@@ -569,11 +576,13 @@ def _resolve_eval_annotation_settings(
         "policy_grasp_part_annotate": uses_grasp_part,
         "policy_guidance_point_colored": uses_guidance_point_colored,
         "policy_grasp_annotation_colored": uses_grasp_colored,
-        "guidance_point_on_image": uses_guidance_point,
-        "grasp_annotation_on_image": uses_grasp,
-        "grasp_part_annotate": uses_grasp_part,
-        "guidance_point_colored": uses_guidance_point_colored,
-        "grasp_annotation_colored": uses_grasp_colored,
+        # These five values control images persisted in the rollout pickle.
+        # They intentionally come only from the CLI.
+        "guidance_point_on_image": bool(args.guidance_point_on_image),
+        "grasp_annotation_on_image": bool(args.grasp_annotation_on_image),
+        "grasp_part_annotate": bool(args.grasp_part_annotate),
+        "guidance_point_colored": bool(args.guidance_point_colored),
+        "grasp_annotation_colored": bool(args.grasp_annotation_colored),
         "requested_guidance_point_on_image": bool(args.guidance_point_on_image),
         "requested_grasp_annotation_on_image": bool(args.grasp_annotation_on_image),
         "requested_grasp_part_annotate": bool(args.grasp_part_annotate),
@@ -584,29 +593,21 @@ def _resolve_eval_annotation_settings(
 
 def _print_eval_annotation_resolution(resolved: Dict[str, Any]) -> None:
     print(
-        "Resolved eval annotations from checkpoint config: "
+        "Policy input annotations (checkpoint config): "
+        f"guidance_point={resolved['policy_annotate_guidance_point']} "
+        f"grasp={resolved['policy_annotate_grasp']} "
+        f"grasp_part={resolved['policy_grasp_part_annotate']} "
+        f"guidance_point_colored={resolved['policy_guidance_point_colored']} "
+        f"grasp_colored={resolved['policy_grasp_annotation_colored']}"
+    )
+    print(
+        "Saved pickle image annotations (CLI flags): "
         f"guidance_point_on_image={resolved['guidance_point_on_image']} "
         f"grasp_annotation_on_image={resolved['grasp_annotation_on_image']} "
         f"grasp_part_annotate={resolved['grasp_part_annotate']} "
         f"guidance_point_colored={resolved['guidance_point_colored']} "
         f"grasp_annotation_colored={resolved['grasp_annotation_colored']}"
     )
-    mismatches = []
-    for key in (
-        "guidance_point_on_image",
-        "grasp_annotation_on_image",
-        "grasp_part_annotate",
-        "guidance_point_colored",
-        "grasp_annotation_colored",
-    ):
-        requested = resolved[f"requested_{key}"]
-        actual = resolved[key]
-        if requested != actual:
-            mismatches.append(f"{key}: cli={requested} -> checkpoint={actual}")
-    if mismatches:
-        print("Checkpoint config overrides CLI annotation flags:")
-        for line in mismatches:
-            print(f"  - {line}")
 
 
 def _write_eval_stats_log(
@@ -721,6 +722,11 @@ if __name__ == "__main__":
         action="store_true",
         help="When saving rollouts locally, only write pickle files and skip txt/mp4 side outputs.",
     )
+    parser.add_argument(
+        "--output-only-video",
+        action="store_true",
+        help="When saving rollouts locally, write MP4 files without the large trajectory pickle.",
+    )
     parser.add_argument("--max-rollouts", type=int, default=None)
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument(
@@ -787,6 +793,15 @@ if __name__ == "__main__":
         help="Source for policy skill and 2-D guidance point annotations.",
     )
     parser.add_argument(
+        "--tracking-metric-type",
+        choices=["auto", "position", "pose"],
+        default="auto",
+        help=(
+            "Tracking target metric. Use pose to reproduce the P/O/T table "
+            "definition used by the annotation-noise report."
+        ),
+    )
+    parser.add_argument(
         "--vlm-base-url",
         default=os.environ.get("VLM_GUIDANCE_URL"),
         help="Base URL of the remote VLM guidance service.",
@@ -797,6 +812,15 @@ if __name__ == "__main__":
         type=int,
         default=0,
         help="Environment steps between VLM queries; 0 follows actor.action_horizon.",
+    )
+    parser.add_argument(
+        "--vlm-noise-projection-samples",
+        type=int,
+        default=200,
+        help=(
+            "Per valid control-step GT/VLM pair, number of clipped standard-Gaussian "
+            "3-D samples projected for every n0--n4 reference level."
+        ),
     )
     parser.add_argument("--annotation-noise-pos-std-m", type=float, default=0.0)
     parser.add_argument("--annotation-noise-ori-std-deg", type=float, default=0.0)
@@ -1278,7 +1302,8 @@ if __name__ == "__main__":
                             )
                             how_update = "append"
 
-                    suffix = args.save_rollouts_suffix
+                    explicit_rollout_suffix = args.save_rollouts_suffix.strip()
+                    suffix = explicit_rollout_suffix
                     if actor_name == "dp3":
                         suffix = "dp3"
                     if args.save_pc_for_dp3:
@@ -1304,7 +1329,12 @@ if __name__ == "__main__":
                             point_token += "-colored"
                         image_annotation_tokens.append(point_token)
 
-                    if image_annotation_tokens:
+                    if explicit_rollout_suffix:
+                        # The caller owns the dataset namespace.  This is
+                        # required when several independent rollout campaigns
+                        # use the same checkpoint with different annotations.
+                        pass
+                    elif image_annotation_tokens:
                         suffix = "-".join([image_mode, *image_annotation_tokens])
                     elif args.annotate_skill:
                         if args.skill_on_image:
@@ -1316,7 +1346,7 @@ if __name__ == "__main__":
                             suffix = f"{image_mode}-only-skill"
                     elif args.save_depth_image:
                         suffix = image_mode
-                    if args.annotation_source == "vlm":
+                    if args.annotation_source == "vlm" and not explicit_rollout_suffix:
                         suffix = f"{suffix}-vlm" if suffix else "vlm"
                     if task_group:
                         suffix = f"{suffix}/{task_group}" if suffix else task_group
@@ -1501,9 +1531,17 @@ if __name__ == "__main__":
                         model_grasp_annotation_colored=resolved_eval_annotations["policy_grasp_annotation_colored"],
                         skill_on_image=resolved_eval_annotations["skill_on_image"],
                         provide_skill_input=requires_skill_input,
-                        collect_skill_stats=resolved_eval_annotations["annotate_skill"],
+                        # Skill/tracking statistics are data products, not video
+                        # annotations.  In particular, RGBD+GP checkpoints do not
+                        # draw skill text, but a task summary must still contain
+                        # their per-skill progress and pose-tracking metrics.
+                        collect_skill_stats=bool(
+                            args.task_summary_out
+                            or resolved_eval_annotations["annotate_skill"]
+                        ),
                         annotation_noise_config=annotation_noise_config,
                         output_only_pickle=args.output_only_pickle,
+                        output_only_video=args.output_only_video,
                         perturb_runner=perturb_runner,
                         init_states=task_init_states,
                         max_saved_rollouts=(
@@ -1522,6 +1560,14 @@ if __name__ == "__main__":
                             args.vlm_query_interval
                             if args.vlm_query_interval > 0
                             else None
+                        ),
+                        tracking_metric_type=(
+                            None
+                            if args.tracking_metric_type == "auto"
+                            else args.tracking_metric_type
+                        ),
+                        vlm_noise_projection_samples=(
+                            args.vlm_noise_projection_samples
                         ),
                     )
 

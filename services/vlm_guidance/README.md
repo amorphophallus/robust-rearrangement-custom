@@ -26,10 +26,10 @@
              ▼
 zju_4090_240:8000
   FastAPI /v1/guidance/predict
-    └─ FurniturePolicyModel
-         ├─ Qwen3.5-2B backbone
-         ├─ 5 类 skill head
-         └─ 2-D point regression head
+    └─ Qwen3_5ForConditionalGeneration（original_sft）
+         └─ greedy generate assistant JSON
+              ├─ skill
+              └─ target_point_2d（raw 320×240 pixel）
 ```
 
 VLM 返回：
@@ -37,22 +37,25 @@ VLM 返回：
 - `skill`：`push/pick/place/insert/screw`；
 - `point_1000`：Qwen `[0,1000]` 坐标；
 - `point_px`：front camera 的 `320x240` 像素坐标；
-- skill 概率、模型 revision 和服务端耗时。
+- 原始生成文本、模型 revision 和服务端耗时。
+
+`original_sft` 没有独立的 skill classification head，因此 `skill_confidence` 和
+`skill_probabilities` 为 `null`，客户端不得伪造概率。
 
 ## 2. 为什么不直接使用 vLLM
 
-这个 checkpoint 不是标准的自回归文本生成 checkpoint。训练代码丢弃了 Qwen 的
-language-model head，新增了一个五分类 head 和一个二维回归 head。推理时必须取得最后
-一个有效 token 的 hidden state，再执行这两个自定义 head。
+当前 checkpoint 是标准原生 Qwen text-generation checkpoint，理论上已经具备评估
+vLLM 的前提；旧版“自定义 point head 无法由 vLLM 执行”的限制不再适用。
 
-vLLM 的标准生成接口或 OpenAI-compatible API 不会自动执行项目里的
-`FurniturePolicyModel.forward`，也不能把二维回归结果作为标准生成结果返回。即使底层
-vLLM 支持 Qwen3.5 backbone，直接指向这个 checkpoint 仍会遇到输出 head 和 state-dict
-不匹配。因此当前可靠方案是按照模型仓库的 `visualize_inference.py`，用 Transformers
-重建 backbone + heads，并用 `strict=True` 加载 checkpoint。
+本轮仍先使用 Transformers，是为了逐项复现 GitHub commit `7430c97b...` 中
+`visualize_inference.sh` 的参考路径：`AutoModelForImageTextToText`、greedy generation、
+相同 chat template 和 JSON parser。在离线 point/skill 指标确认前切换推理后端，会同时
+改变 checkpoint 与 runtime，无法判断 regress-to-mean 是否真的修复。vLLM 可以在
+Transformers 基线通过后作为单独的吞吐/一致性实验。
 
-不要通过 `strict=False`、补一个临时 LM head 或把 point 转成文本来绕开，这些做法会
-改变模型语义或隐藏 checkpoint 不匹配。
+参考 visualizer 每次只推理一条样本；服务端支持 batch，因此在 `original_sft` 模式显式
+设置 tokenizer `padding_side=left`。decoder-only generation 使用 right padding 会从 pad
+token 后继续生成，可能得到空或损坏的 JSON。
 
 ## 3. 本次部署使用的固定路径和版本
 
@@ -68,20 +71,19 @@ ssh zju_4090_240
 export RR_REPO=/mnt/nas/share/home/hy/robust-rearrangement-custom
 export VLM_ENV=/mnt/nas/share/home/hy/miniconda3/envs/rr-vlm-guidance-runtime
 export VLM_ROOT=/mnt/nas/share/home/hy/vlm-guidance
-export VLM_BASE_MODEL_DIR="$VLM_ROOT/Qwen3.5-2B"
-export VLM_CHECKPOINT_DIR=/mnt/nas/share/home/hy/zhouhangzhu--hy_furniture/snapshots/master/ckpt
-export VLM_MANIFEST_PATH="$VLM_ROOT/manifest.json"
+export VLM_CHECKPOINT_DIR="$VLM_ROOT/original_sft/ckpts"
+export VLM_MANIFEST_PATH="$VLM_ROOT/manifest.original_sft.json"
 export VLM_SERVER_ENV_FILE="$VLM_ROOT/server.env"
 ```
 
 固定 revision：
 
 ```text
-Qwen/Qwen3.5-2B:
-c00cc5fd7803c60b7788e053dcce33d0d26b11ef
+Superviro/hy_furniture inference code:
+7430c97b2861a6f9da5b7487a501f5745c573555
 
-zhouhangzhu/hy_furniture:
-933f15ce0ed0bc7108ec1f42074bf94d985a4cbf
+zhouhangzhu/hy_furniture_weights original_sft:
+75dc7b8a4a1dcdf6ec77398494724c7b7b3fe63e
 ```
 
 服务器驱动 `550.120` 不适合 CUDA 12.8，所以本机实际使用：
@@ -197,7 +199,7 @@ PY
 
 `torch file` 必须位于 `$VLM_ENV` 下，不能位于 `/home/hy/.local`。
 
-## 6. 下载 base model 和 checkpoint
+## 6. 下载 original_sft checkpoint
 
 创建模型目录：
 
@@ -205,45 +207,27 @@ PY
 mkdir -p "$VLM_ROOT"
 ```
 
-下载并固定 Qwen3.5-2B：
+该仓库包含完整 Qwen 权重和 processor，不再需要另外下载 base model：
 
 ```bash
-"$VLM_ENV/bin/ms-hub" download Qwen/Qwen3.5-2B \
-  --revision c00cc5fd7803c60b7788e053dcce33d0d26b11ef \
-  --local-dir "$VLM_BASE_MODEL_DIR"
-```
+git clone https://www.modelscope.cn/zhouhangzhu/hy_furniture_weights.git \
+  "$VLM_ROOT/original_sft"
 
-下载器支持断点续传。超时时重新执行同一条命令即可。
-
-本次服务器已经有 HY Furniture checkpoint：
-
-```text
-/mnt/nas/share/home/hy/zhouhangzhu--hy_furniture/snapshots/master/ckpt
-```
-
-如果将来需要从零下载，可执行：
-
-```bash
-"$VLM_ENV/bin/ms-hub" download zhouhangzhu/hy_furniture \
-  --revision 933f15ce0ed0bc7108ec1f42074bf94d985a4cbf \
-  --local-dir "$VLM_ROOT/hy_furniture_source"
-
-export VLM_CHECKPOINT_DIR="$VLM_ROOT/hy_furniture_source/ckpt"
+git -c safe.directory="$VLM_ROOT/original_sft" \
+  -C "$VLM_ROOT/original_sft" rev-parse HEAD
 ```
 
 检查模型文件：
 
 ```bash
-test -f "$VLM_BASE_MODEL_DIR/config.json"
-find "$VLM_BASE_MODEL_DIR" -maxdepth 1 -name '*.safetensors' -print
-
 test -f "$VLM_CHECKPOINT_DIR/config.json"
 test -f "$VLM_CHECKPOINT_DIR/model.safetensors"
 test -f "$VLM_CHECKPOINT_DIR/processor_config.json"
 test -f "$VLM_CHECKPOINT_DIR/tokenizer.json"
 ```
 
-base model 的 `find` 至少应打印一个权重文件。
+revision 必须是 `75dc7b8a...`。`config.json` 的 architecture 必须是
+`Qwen3_5ForConditionalGeneration`，且不应包含 `hy_furniture_policy`。
 
 ## 7. 生成并校验 manifest
 
@@ -253,17 +237,16 @@ manifest 会固定文件大小和 SHA256，防止误用旧输出头或被修改�
 cd "$RR_REPO"
 env PYTHONNOUSERSITE=1 PYTHONPATH="$RR_REPO" \
   "$VLM_ENV/bin/python" -m services.vlm_guidance.prepare_manifest \
-  --base-model-dir "$VLM_BASE_MODEL_DIR" \
   --checkpoint-dir "$VLM_CHECKPOINT_DIR" \
-  --base-revision c00cc5fd7803c60b7788e053dcce33d0d26b11ef \
-  --checkpoint-revision 933f15ce0ed0bc7108ec1f42074bf94d985a4cbf \
+  --model-mode original_sft \
+  --checkpoint-revision 75dc7b8a4a1dcdf6ec77398494724c7b7b3fe63e \
   --output "$VLM_MANIFEST_PATH"
 
 test -s "$VLM_MANIFEST_PATH"
 ```
 
-计算两个大权重文件的 SHA256 需要几分钟。如果出现 `unexpected point policy` 或
-`unexpected skill order`，说明 checkpoint 不是当前新版输出头，必须停止部署。
+计算大权重文件的 SHA256 需要几分钟。如果 architecture 或 model mode 校验失败，必须
+停止部署，不能 fallback 到旧 point head。
 
 ## 8. 创建服务配置和 Token
 
@@ -274,15 +257,16 @@ VLM_NEW_TOKEN="$(openssl rand -hex 32)"
 
 {
   printf '%s\n' \
-    "VLM_BASE_MODEL_DIR=$VLM_BASE_MODEL_DIR" \
     "VLM_CHECKPOINT_DIR=$VLM_CHECKPOINT_DIR" \
     "VLM_MANIFEST_PATH=$VLM_MANIFEST_PATH" \
-    'VLM_MODEL_REVISION=933f15ce0ed0bc7108ec1f42074bf94d985a4cbf' \
+    'VLM_MODEL_MODE=original_sft' \
+    'VLM_MODEL_REVISION=75dc7b8a4a1dcdf6ec77398494724c7b7b3fe63e' \
     'VLM_DEVICE=cuda:0' \
     'VLM_ATTENTION_BACKEND=sdpa' \
     'VLM_MAX_LENGTH=4096' \
     'VLM_IMAGE_MAX_PIXELS=262144' \
     'VLM_MAX_MICRO_BATCH_SIZE=4' \
+    'VLM_MAX_NEW_TOKENS=256' \
     "VLM_API_TOKEN=$VLM_NEW_TOKEN"
 } > "$VLM_SERVER_ENV_FILE"
 
@@ -335,7 +319,7 @@ export VLM_GPU_ID=0
 ./services/vlm_guidance/conda_server.sh logs
 ```
 
-模型启动依次执行 manifest SHA256 校验、base model 加载、checkpoint strict load 和一次
+模型启动依次执行 manifest SHA256 校验、原生 checkpoint 加载和一次 greedy-generation
 warmup，可能需要几分钟。
 
 ## 10. 检查 readiness
@@ -354,7 +338,7 @@ export VLM_GPU_ID=0
 成功时最后一行类似：
 
 ```json
-{"status":"ready","model_revision":"933f15ce0ed0bc7108ec1f42074bf94d985a4cbf","policy_version":2,"device":"cuda:0","attention_backend":"sdpa"}
+{"status":"ready","model_revision":"75dc7b8a4a1dcdf6ec77398494724c7b7b3fe63e","policy_version":3,"model_mode":"original_sft","device":"cuda:0","attention_backend":"sdpa"}
 ```
 
 只要不是 `status=ready`，就不要启动本地 rollout。
@@ -395,7 +379,7 @@ curl --fail --show-error \
   http://127.0.0.1:8000/v1/guidance/predict
 ```
 
-黑图预测没有业务意义；这里只验证双图预处理、GPU forward、自定义 heads 和 HTTP schema。
+黑图预测没有业务意义；这里只验证双图预处理、greedy generation、JSON parsing 和 HTTP schema。
 
 ## 12. 从 3060 本地机器访问
 
@@ -427,54 +411,113 @@ Isaac Gym 还需要显式找到 rr 环境里的 `libpython3.8.so.1.0`：
 export LD_LIBRARY_PATH="/home/hy/anaconda3/envs/rr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 ```
 
-在原有评测命令后增加：
+### 13.1 真实 VLM + DiT policy 正式评测命令
 
-```bash
---annotation-source vlm \
---vlm-base-url "$VLM_GUIDANCE_URL" \
---vlm-timeout-seconds 30 \
---vlm-query-interval 0
-```
+所有 scripted/VLM eval 必须由最新版 `gpu-snatcher/auto_eval.sh` 启动，不要手工调用
+`python -m src.eval.evaluate_model`。`auto_eval.sh` 会统一添加 RGBD 所需的
+`--save-depth-image`、rollout 保存参数和 observation/action 配置。
 
-示例骨架：
+下面是 `rgbd+GP` 在 `one_leg` 上的完整 36-rollout 命令：
 
 ```bash
 cd /data/hy/robust-rearrangement
 
+export LD_LIBRARY_PATH="/home/hy/anaconda3/envs/rr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export VLM_GUIDANCE_URL=http://10.71.106.240:8000
 export VLM_API_TOKEN="$(
   sed -n 's/^VLM_API_TOKEN=//p' \
     /mnt/nas/share/home/hy/vlm-guidance/server.env
 )"
+test -n "$VLM_API_TOKEN"
 
-python -m src.eval.evaluate_model \
-  <保留原有 checkpoint、task、n-envs、n-rollouts 等参数> \
+mkdir -p logs/vlm_dit_single/summaries
+
+/data/hy/gpu-snatcher/auto_eval.sh \
+  --steps eval \
+  --local-path /data/hy/robust-rearrangement \
+  --overwrite-wt-path /mnt/nas/share/home/hy/robust-rearrangement-custom/outputs/2026-06-13/13-02-04.275134/models/icy-vortex-9_2026-06-13_13-02-27.880769/actor_chkpt_latest_3000.pt \
+  --task one_leg \
+  --n-envs 3 \
+  --n-rollouts 36 \
+  --randomness low \
+  --max-rollout-steps 1000 \
   --annotation-source vlm \
+  --tracking-metric-type pose \
   --vlm-base-url "$VLM_GUIDANCE_URL" \
   --vlm-timeout-seconds 30 \
-  --vlm-query-interval 0
+  --vlm-query-interval 0 \
+  --vlm-noise-projection-samples 200 \
+  --task-summary-out /data/hy/robust-rearrangement/logs/vlm_dit_single/summaries/rgbd_gp__one_leg.json \
+  --rollout-suffix-model-name vlm_dit_single/rgbd_gp/one_leg \
+  --guidance-point-on-image
 ```
 
-本机现有 checkpoint 可用下面的 16-step 命令做 VLM+DP 冒烟；它确实使用 VLM point
-作为 diffusion policy 的 guidance point：
+关键参数的实际含义：
+
+- `--n-envs 3 --n-rollouts 36`：每轮并行 3 个仿真环境，共收集 36 个 episode；
+- `--task one_leg`：当前评测任务。三个正式任务为 `one_leg`、`round_table`、`lamp`；
+- `--max-rollout-steps 1000`：one_leg 的 episode 上限，与项目默认
+  `task_timeout(one_leg)` 以及噪声基线保持一致；round_table 和 lamp 也使用 1000；
+- `--randomness low`：使用与 clean-train/noise 实验相同的 low-randomness 仿真设置；
+- `--overwrite-wt-path`：强制使用给定的本地 DiT checkpoint，不从 W&B 下载；
+- `--tracking-metric-type pose`：强制输出 position/orientation/total tracking，便于生成
+  P/O/T 表；
+- `--annotation-source vlm`：policy 的 skill 和 2D point 都来自远端 VLM；自动机只作为
+  shadow GT，不控制 policy，也不会在 VLM 失败时静默 fallback；
+- `--vlm-base-url`：远端 FastAPI 服务地址；
+- `--vlm-timeout-seconds 30`：单次 HTTP batch 请求最多等待 30 秒；
+- `--vlm-query-interval 0`：跟随 checkpoint 的 `actor.action_horizon`。这三个 checkpoint
+  都是 8，所以每 8 个 environment step 重新 query 一次，其间复用缓存；
+- `--vlm-noise-projection-samples 200`：每个有效控制 step 的 GT/VLM 点对、每个 n0--n4 档位投影
+  200 个 3D Monte Carlo 偏移样本，用于 3D 噪声与 2D VLM error 的同坐标系比较；
+- `--task-summary-out`：保存 success、tracking、step-average point error、per-skill point
+  error 和 projected-noise distribution 的完整 JSON。
+
+三个 condition 只需要替换 checkpoint：
+
+```text
+rgbd+GP:
+/mnt/nas/share/home/hy/robust-rearrangement-custom/outputs/2026-06-13/13-02-04.275134/models/icy-vortex-9_2026-06-13_13-02-27.880769/actor_chkpt_latest_3000.pt
+
+rgbd+colored GP:
+/mnt/nas/share/home/hy/robust-rearrangement-custom/outputs/2026-06-18/14-59-28.908152/models/absurd-voice-2_2026-06-18_14-59-48.700671/actor_chkpt_latest_3000.pt
+
+rgbd+GP+skill:
+/mnt/nas/share/home/hy/robust-rearrangement-custom/outputs/2026-06-13/12-55-43.621615/models/fresh-tree-11_2026-06-13_12-56-10.422936/actor_chkpt_latest_3000.pt
+```
+
+完整的 3 condition × 3 task × 36 rollout 矩阵由可续跑启动器执行：
 
 ```bash
-/home/hy/anaconda3/bin/conda run --no-capture-output -n rr \
-  python -m src.eval.evaluate_model \
-  --gpu 0 \
+python scripts/run_vlm_dit_eval.py
+```
+
+启动器生成 9 个 task-level cell，并让每个 cell 经过同一个 `auto_eval.sh` 入口；正式运行前
+先使用 `--print-command` 检查展开后的最终命令。
+
+### 13.2 16-step 链路 smoke
+
+链路 smoke 也使用同一个入口，只缩小 rollout 数和最大步数：
+
+```bash
+/data/hy/gpu-snatcher/auto_eval.sh \
+  --steps eval \
+  --local-path /data/hy/robust-rearrangement \
+  --overwrite-wt-path /mnt/nas/share/home/hy/robust-rearrangement-custom/outputs/2026-06-13/13-02-04.275134/models/icy-vortex-9_2026-06-13_13-02-27.880769/actor_chkpt_latest_3000.pt \
+  --task one_leg \
   --n-envs 1 \
   --n-rollouts 1 \
-  -f round_table \
-  --if-exists overwrite \
   --max-rollout-steps 16 \
-  --action-type pos \
-  --observation-space image \
   --randomness low \
-  --wt-path checkpoints/bc/round_table/low/rgbd_guidance_dit_200traj_last_.pt \
   --annotation-source vlm \
+  --tracking-metric-type pose \
   --vlm-base-url "$VLM_GUIDANCE_URL" \
   --vlm-timeout-seconds 30 \
-  --vlm-query-interval 0
+  --vlm-query-interval 0 \
+  --vlm-noise-projection-samples 200 \
+  --task-summary-out /data/hy/robust-rearrangement/logs/vlm_dit_single/summaries/smoke.json \
+  --rollout-suffix-model-name vlm_dit_single/smoke \
+  --guidance-point-on-image
 ```
 
 16 step 通常不足以完成装配，因此这个命令的成功率没有实验意义；它用于检查仿真、
@@ -496,6 +539,10 @@ VLM 模式下：
 - 同一 VLM query 在 action horizon 内复用时，每个控制 step 都会计入 step-average；
 - 输出 overall 和按 oracle skill 分组的 mean/RMSE/coverage；
 - 同时输出 success-only 与 failure-only 统计；
+- 每个有效控制 step 都在当步 3D GT point 周围生成 200 个 clipped-standard-Gaussian
+  Monte Carlo 样本，并把 n0--n4 缩放后的点通过同一 front camera 投到 2D；
+- projected-noise 的 mean/covariance/RMSE 使用全部 Monte Carlo 样本精确累计；SWD、W1、
+  KS 和分位数使用有界 reference reservoir，避免 summary JSON 随 rollout 数量失控；
 - rollout pickle 保存逐 step 的 VLM point、oracle point、误差、query step 和 cache age。
 
 聚合 JSON/W&B 中的主字段是：
@@ -504,6 +551,10 @@ VLM 模式下：
 vlm_point_error/all/overall/mean_error_px
 vlm_point_error/all/overall/rmse_px
 vlm_point_error/all/by_skill/<skill>/mean_error_px
+vlm_point_error/all/step_distribution/projection_reference/...
+vlm_point_error/all/step_distribution/noise_levels/<n0-n4>/projected/...
+vlm_point_error/all/step_distribution/magnitude_equivalent_bracket
+vlm_point_error/all/step_distribution/magnitude_equivalent_std_mm
 vlm_point_error/success_only/...
 vlm_point_error/failure_only/...
 ```

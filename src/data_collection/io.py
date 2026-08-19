@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 from datetime import datetime
 from typing import List
 from pathlib import Path
 
+import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
@@ -16,6 +19,143 @@ from src.visualization.render_mp4 import (
     analyze_depth_smoothness,
 )
 from src.eval.skill_annotation_util import draw_skill_on_image
+
+
+def _front_point(point_mapping) -> np.ndarray | None:
+    """Return a finite front-camera point from an annotation mapping."""
+    if not isinstance(point_mapping, dict):
+        return None
+    point = point_mapping.get("color_image2")
+    if point is None:
+        return None
+    point = np.asarray(point, dtype=np.float32)
+    if point.shape != (2,) or not np.isfinite(point).all():
+        return None
+    return point
+
+
+def draw_vlm_rollout_debug_frames(
+    frames: np.ndarray,
+    vlm_skills: List[str],
+    vlm_points_2d: List[dict],
+    oracle_skills: List[str],
+    oracle_points_2d: List[dict],
+    vlm_annotations: List[dict],
+) -> np.ndarray:
+    """Overlay VLM/GT points and their pixel error on front-camera frames.
+
+    Images in this project are RGB arrays.  OpenCV is only used as a drawing
+    primitive here, so the color tuples below intentionally use RGB ordering.
+    """
+    annotated_frames = np.asarray(frames).copy()
+    n_frames = min(
+        len(annotated_frames),
+        len(vlm_skills),
+        len(vlm_points_2d),
+        len(oracle_skills),
+        len(oracle_points_2d),
+        len(vlm_annotations),
+    )
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    vlm_color = (255, 32, 32)
+    gt_color = (32, 255, 32)
+    link_color = (255, 255, 32)
+
+    for frame_idx in range(n_frames):
+        frame = annotated_frames[frame_idx]
+        if frame.ndim != 3 or frame.shape[-1] != 3:
+            continue
+        height, width = frame.shape[:2]
+        vlm_point = _front_point(vlm_points_2d[frame_idx])
+        gt_point = _front_point(oracle_points_2d[frame_idx])
+
+        def visible(point: np.ndarray | None) -> bool:
+            return bool(
+                point is not None
+                and 0 <= point[0] < width
+                and 0 <= point[1] < height
+            )
+
+        vlm_xy = tuple(np.rint(vlm_point).astype(int)) if visible(vlm_point) else None
+        gt_xy = tuple(np.rint(gt_point).astype(int)) if visible(gt_point) else None
+        error_px = (
+            float(np.linalg.norm(vlm_point - gt_point))
+            if vlm_point is not None and gt_point is not None
+            else None
+        )
+
+        if vlm_xy is not None and gt_xy is not None:
+            cv2.line(frame, vlm_xy, gt_xy, link_color, 1, cv2.LINE_AA)
+        if vlm_xy is not None:
+            cv2.circle(frame, vlm_xy, 6, vlm_color, 2, cv2.LINE_AA)
+            cv2.putText(
+                frame,
+                "V",
+                (min(vlm_xy[0] + 7, width - 12), max(vlm_xy[1] - 5, 12)),
+                font,
+                0.38,
+                vlm_color,
+                1,
+                cv2.LINE_AA,
+            )
+        if gt_xy is not None:
+            cv2.drawMarker(
+                frame,
+                gt_xy,
+                gt_color,
+                cv2.MARKER_CROSS,
+                13,
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                frame,
+                "G",
+                (min(gt_xy[0] + 7, width - 12), max(gt_xy[1] - 5, 12)),
+                font,
+                0.38,
+                gt_color,
+                1,
+                cv2.LINE_AA,
+            )
+
+        metadata = vlm_annotations[frame_idx]
+        metadata = metadata if isinstance(metadata, dict) else {}
+        confidence = metadata.get("skill_confidence")
+        age = metadata.get("cache_age_steps")
+        confidence_text = (
+            f"{float(confidence):.2f}" if confidence is not None else "n/a"
+        )
+        error_text = f"{error_px:.1f}px" if error_px is not None else "n/a"
+        vlm_skill = vlm_skills[frame_idx] or "n/a"
+        oracle_skill = oracle_skills[frame_idx] or "n/a"
+        age_text = str(age) if age is not None else "n/a"
+        cv2.rectangle(frame, (0, 0), (width - 1, 40), (0, 0, 0), -1)
+        cv2.putText(
+            frame,
+            (
+                f"step {frame_idx:04d}  VLM={vlm_skill}({confidence_text})  "
+                f"GT={oracle_skill}"
+            ),
+            (5, 15),
+            font,
+            0.38,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            f"error={error_text}  cache_age={age_text}  V=red G=green",
+            (5, 33),
+            font,
+            0.38,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+
+    return annotated_frames
 
 
 def _write_depth_smoothness_report(report_path: Path, camera_name: str, smoothness: dict):
@@ -65,6 +205,7 @@ def save_raw_rollout(
     pcs: List[np.ndarray] = None,
     skill_on_image: bool = False,
     output_only_pickle: bool = False,
+    output_only_video: bool = False,
     guidance_points_clean: List[np.ndarray] = None,
     guidance_poses_clean: List[np.ndarray] = None,
     oracle_skills: List[str] = None,
@@ -246,7 +387,8 @@ def save_raw_rollout(
     if compress_pickles:
         output_path = output_path.with_suffix(".pkl.xz")
 
-    pickle_data(data, output_path)
+    if not output_only_video:
+        pickle_data(data, output_path)
 
     if output_only_pickle:
         return
@@ -271,16 +413,35 @@ def save_raw_rollout(
         # Create MP4 bytes for each camera stream
         mp4_cam1 = create_in_memory_mp4(imgs1, fps=20)
         mp4_cam2 = create_in_memory_mp4(imgs2_for_video, fps=20)
+        mp4_cam2_vlm_debug = None
+        if annotation_source == "vlm":
+            vlm_debug_frames = draw_vlm_rollout_debug_frames(
+                imgs2,
+                skills,
+                guidance_points_2d,
+                oracle_skills,
+                oracle_guidance_points_2d,
+                vlm_annotations,
+            )
+            mp4_cam2_vlm_debug = create_in_memory_mp4(vlm_debug_frames, fps=20)
 
         # Build filenames
         cam1_path = status_dir / f"{timestamp}_cam1.mp4"
         cam2_path = status_dir / f"{timestamp}_cam2.mp4"
+        cam2_vlm_debug_path = status_dir / f"{timestamp}_cam2_vlm_debug.mp4"
 
         # Write files
         with open(cam1_path, "wb") as f1:
             f1.write(mp4_cam1.getvalue() if hasattr(mp4_cam1, "getvalue") else mp4_cam1)
         with open(cam2_path, "wb") as f2:
             f2.write(mp4_cam2.getvalue() if hasattr(mp4_cam2, "getvalue") else mp4_cam2)
+        if mp4_cam2_vlm_debug is not None:
+            with open(cam2_vlm_debug_path, "wb") as f2_debug:
+                f2_debug.write(
+                    mp4_cam2_vlm_debug.getvalue()
+                    if hasattr(mp4_cam2_vlm_debug, "getvalue")
+                    else mp4_cam2_vlm_debug
+                )
 
     # Additionally save depth videos as MP4 for video1 and video2
     if have_depth_obs:

@@ -27,7 +27,7 @@ STATE_INFO_BASE_KEYS = (
     "gripper_width",
 )
 VALID_SKILLS = {"push", "pick", "place", "insert", "screw"}
-EXPECTED_POLICY_VERSION = 2
+EXPECTED_POLICY_VERSION = 3
 
 
 class VLMGuidanceError(RuntimeError):
@@ -38,12 +38,13 @@ class VLMGuidanceError(RuntimeError):
 class VLMPrediction:
     request_id: str
     skill: str
-    skill_confidence: float
-    skill_probabilities: dict[str, float]
+    skill_confidence: float | None
+    skill_probabilities: dict[str, float] | None
     point_1000: np.ndarray
     point_px: np.ndarray
     model_revision: str
     query_step: int
+    generated_text: str | None = None
 
 
 def _json_value(value: Any, env_idx: int):
@@ -178,10 +179,26 @@ class VLMGuidanceClient:
                 headers=self.headers,
                 timeout=self.timeout_seconds,
             )
-            response.raise_for_status()
-            payload = response.json()
         except Exception as exc:
             raise VLMGuidanceError(f"VLM prediction request failed: {exc}") from exc
+        try:
+            response.raise_for_status()
+        except Exception as exc:
+            try:
+                response_detail = json.dumps(response.json(), ensure_ascii=False)
+            except Exception:
+                response_detail = str(getattr(response, "text", ""))
+            response_detail = response_detail[:2048]
+            suffix = f"; response={response_detail}" if response_detail else ""
+            raise VLMGuidanceError(
+                f"VLM prediction request failed: {exc}{suffix}"
+            ) from exc
+        try:
+            payload = response.json()
+        except Exception as exc:
+            raise VLMGuidanceError(
+                f"VLM prediction response is not valid JSON: {exc}"
+            ) from exc
 
         rows = payload.get("predictions")
         if payload.get("policy_version") != EXPECTED_POLICY_VERSION:
@@ -217,20 +234,26 @@ class VLMGuidanceClient:
                 raise VLMGuidanceError("VLM returned non-finite point")
             if not (0 <= point_px[0] <= 319 and 0 <= point_px[1] <= 239):
                 raise VLMGuidanceError(f"VLM point is outside front image: {point_px}")
-            probabilities = {
-                str(key): float(value)
-                for key, value in dict(row.get("skill_probabilities", {})).items()
-            }
-            if set(probabilities) != VALID_SKILLS or not all(
-                math.isfinite(value) and 0.0 <= value <= 1.0
-                for value in probabilities.values()
-            ):
-                raise VLMGuidanceError("VLM returned invalid skill probabilities")
-            if not math.isclose(sum(probabilities.values()), 1.0, abs_tol=1e-3):
-                raise VLMGuidanceError("VLM skill probabilities do not sum to one")
-            confidence = float(row.get("skill_confidence", float("nan")))
-            if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
-                raise VLMGuidanceError("VLM returned invalid skill confidence")
+            raw_probabilities = row.get("skill_probabilities")
+            raw_confidence = row.get("skill_confidence")
+            if raw_probabilities is None and raw_confidence is None:
+                probabilities = None
+                confidence = None
+            else:
+                probabilities = {
+                    str(key): float(value)
+                    for key, value in dict(raw_probabilities or {}).items()
+                }
+                if set(probabilities) != VALID_SKILLS or not all(
+                    math.isfinite(value) and 0.0 <= value <= 1.0
+                    for value in probabilities.values()
+                ):
+                    raise VLMGuidanceError("VLM returned invalid skill probabilities")
+                if not math.isclose(sum(probabilities.values()), 1.0, abs_tol=1e-3):
+                    raise VLMGuidanceError("VLM skill probabilities do not sum to one")
+                confidence = float(raw_confidence)
+                if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+                    raise VLMGuidanceError("VLM returned invalid skill confidence")
             predictions.append(
                 VLMPrediction(
                     request_id=item["request_id"],
@@ -241,6 +264,11 @@ class VLMGuidanceClient:
                     point_px=point_px,
                     model_revision=revision,
                     query_step=step_idx,
+                    generated_text=(
+                        str(row["generated_text"])
+                        if row.get("generated_text") is not None
+                        else None
+                    ),
                 )
             )
         timing = {
@@ -273,6 +301,7 @@ def policy_bundles_from_vlm(
             "skill_confidence": prediction.skill_confidence,
             "skill_probabilities": prediction.skill_probabilities,
             "point_1000": prediction.point_1000.copy(),
+            "generated_text": prediction.generated_text,
             "query_step": prediction.query_step,
             "cache_age_steps": step_idx - prediction.query_step,
         }
