@@ -19,10 +19,13 @@ import sys
 from typing import Any, Iterable
 from urllib.request import Request, urlopen
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from src.eval.vlm_content_audit import audit_manifest_rollouts
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 AUTO_EVAL_DEFAULT = Path("/data/hy/gpu-snatcher/auto_eval.sh")
 EXPECTED_GPU_SNATCHER_COMMIT = "ebfea2d9f27bfdcea3a30791ebd6e70a05757799"
 EXPECTED_VLM_REVISION = "75dc7b8a4a1dcdf6ec77398494724c7b7b3fe63e"
