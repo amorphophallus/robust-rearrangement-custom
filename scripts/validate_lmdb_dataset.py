@@ -32,6 +32,8 @@ NORMALIZER_STATS_KEYS = (
     "parts_poses",
 )
 
+VARIABLE_TRAILING_SHAPE_KEYS = {"parts_poses"}
+
 
 def as_stats(raw_stats):
     return {
@@ -43,8 +45,10 @@ def as_stats(raw_stats):
     }
 
 
-def update_stats(stats, key, array):
+def update_stats(stats, incompatible_stats_keys, key, array):
     if key not in NORMALIZER_STATS_KEYS or array.size == 0 or array.shape[0] == 0:
+        return
+    if key in incompatible_stats_keys:
         return
 
     local_min = np.min(array, axis=0).astype(np.float32, copy=False)
@@ -53,11 +57,25 @@ def update_stats(stats, key, array):
         stats[key] = {"min": local_min.copy(), "max": local_max.copy()}
         return
 
+    if stats[key]["min"].shape != local_min.shape:
+        stats.pop(key)
+        incompatible_stats_keys.add(key)
+        return
+
     stats[key]["min"] = np.minimum(stats[key]["min"], local_min)
     stats[key]["max"] = np.maximum(stats[key]["max"], local_max)
 
 
-def check_array_specs(path, episode_idx, frame_count, arrays, lowdim_specs, stats):
+def check_array_specs(
+    path,
+    episode_idx,
+    frame_count,
+    arrays,
+    lowdim_specs,
+    stats,
+    incompatible_stats_keys,
+    observed_shapes,
+):
     errors = []
 
     for key, spec in lowdim_specs.items():
@@ -68,14 +86,22 @@ def check_array_specs(path, episode_idx, frame_count, arrays, lowdim_specs, stat
         array = arrays[key]
         expected_dtype = np.dtype(spec["dtype"])
         expected_trailing_shape = tuple(spec["shape"][1:])
+        actual_trailing_shape = array.shape[1:]
+        observed_shapes.setdefault(key, set()).add(actual_trailing_shape)
 
         if array.dtype != expected_dtype:
             errors.append(
                 f"episode {episode_idx} key {key}: dtype {array.dtype} != {expected_dtype}"
             )
-        if array.shape[1:] != expected_trailing_shape:
+        if key in VARIABLE_TRAILING_SHAPE_KEYS:
+            if len(actual_trailing_shape) != 1 or actual_trailing_shape[0] % 7 != 0:
+                errors.append(
+                    f"episode {episode_idx} key {key}: trailing shape "
+                    f"{actual_trailing_shape} is not a flat sequence of 7D part poses"
+                )
+        elif actual_trailing_shape != expected_trailing_shape:
             errors.append(
-                f"episode {episode_idx} key {key}: trailing shape {array.shape[1:]} "
+                f"episode {episode_idx} key {key}: trailing shape {actual_trailing_shape} "
                 f"!= {expected_trailing_shape}"
             )
 
@@ -85,7 +111,7 @@ def check_array_specs(path, episode_idx, frame_count, arrays, lowdim_specs, stat
                 f"!= frame_count {frame_count}"
             )
 
-        update_stats(stats, key, array)
+        update_stats(stats, incompatible_stats_keys, key, array)
 
     if errors:
         joined = "\n  ".join(errors)
@@ -116,8 +142,22 @@ def check_frame_specs(path, txn, frame_indices, frame_specs):
                 )
 
 
-def compare_full_stats(path, computed_stats, stored_stats, atol):
+def compare_full_stats(path, computed_stats, stored_stats, incompatible_stats_keys, atol):
+    if not stored_stats and incompatible_stats_keys:
+        keys = ", ".join(sorted(incompatible_stats_keys))
+        print(
+            f"[INFO] {path}: stored normalizer stats are empty because multi-task "
+            f"feature shapes vary for: {keys}; training will recompute stable-key stats."
+        )
+        return
+
     for key in NORMALIZER_STATS_KEYS:
+        if key in incompatible_stats_keys:
+            if key in stored_stats:
+                raise ValueError(
+                    f"{path}: stored stats contain variable-shape key {key}"
+                )
+            continue
         if key not in computed_stats and key not in stored_stats:
             continue
         if key not in computed_stats:
@@ -227,6 +267,8 @@ def validate_path(path: Path, sample_episodes: int, full_stats: bool, atol: floa
 
     computed_stats = {}
     computed_depth_moments = empty_depth_moments()
+    incompatible_stats_keys = set()
+    observed_shapes = {}
     checked_frames = 0
     env = open_lmdb_env(path, readonly=True)
     try:
@@ -248,6 +290,8 @@ def validate_path(path: Path, sample_episodes: int, full_stats: bool, atol: floa
                     arrays,
                     lowdim_specs,
                     computed_stats,
+                    incompatible_stats_keys,
+                    observed_shapes,
                 )
 
                 frame_candidates = {
@@ -277,7 +321,13 @@ def validate_path(path: Path, sample_episodes: int, full_stats: bool, atol: floa
         env.close()
 
     if full_stats:
-        compare_full_stats(path, computed_stats, stored_stats, atol)
+        compare_full_stats(
+            path,
+            computed_stats,
+            stored_stats,
+            incompatible_stats_keys,
+            atol,
+        )
         compare_depth_stats(
             path,
             finalize_depth_moments(computed_depth_moments),
@@ -285,10 +335,17 @@ def validate_path(path: Path, sample_episodes: int, full_stats: bool, atol: floa
             atol,
         )
 
+    variable_shapes = {
+        key: sorted(shapes)
+        for key, shapes in observed_shapes.items()
+        if len(shapes) > 1
+    }
+
     print(
         f"[OK] {path}: episodes_checked={selected_count}, "
         f"frames_checked={checked_frames}, lowdim_keys={len(lowdim_specs)}, "
-        f"frame_keys={len(frame_specs['ordered_keys'])}, full_stats={full_stats}"
+        f"frame_keys={len(frame_specs['ordered_keys'])}, full_stats={full_stats}, "
+        f"variable_shapes={variable_shapes}"
     )
 
 

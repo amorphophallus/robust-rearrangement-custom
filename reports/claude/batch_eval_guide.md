@@ -1,288 +1,176 @@
-# 批量 Eval 实验操作手册
+# Multi-task RGBD Skill 批量 Eval Agent 手册
 
-## 1. 实验名称、数据集 Suffix 与 Eval 超参对照表
+本文档不是某一批 low/med/high 实验的参数快照。Agent 读完后，应先向用户确认本次 eval 配置，得到审批，再启动、监控并记录结果。训练和数据准备见 `reports/claude/batch_train_guide.md`。
 
-**每个实验的差异参数**：
+## 1. 完成定义
 
-| # | 实验 | 数据集 suffix | RUN_ID | ANNOTATE_SKILL | GP_ON_IMAGE | GRASP_ON_IMAGE | GRASP_PART | GP_COLORED | GRASP_COLORED | SKILL_ON_IMAGE |
-|---|------|---------------|--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| 1 | rgbd | `rgbd` |  | true | false | false | false | false | false | true |
-| 2 | rgbd+GP | `rgbd-skill-point` |  | true | true | false | false | false | false | true |
-| 3 | rgbd+colored GP | `rgbd-skill-point-colored` |  | true | true | false | false | true | false | true |
-| 4 | rgbd+only skill | `rgbd-only-skill` |  | true | false | false | false | false | false | true |
-| 5 | rgbd+GP+skill | `rgbd-skill-point` |  | true | true | false | false | false | false | true |
-| 6 | rgb | `rgbd` |  | true | false | false | false | false | false | true |
-| 7 | rgbd+grasp-part | `rgbd-skill-grasp-part` |  | true | false | false | true | false | false | true |
-| 8 | rgbd+colored grasp-part | `rgbd-skill-grasp-part-colored` |  | true | false | false | true | true | true | true |
+只有同时满足以下条件，batch eval 才算完成：
 
-RUN_ID 的对应要求用户输入。
+1. 用户确认 eval 矩阵、checkpoint 来源、任务、随机度、rollout 数与资源策略。
+2. 每个 checkpoint 的运行时配置和 eval 参数经过核对。
+3. 全部实验完成，或明确记录失败原因和可恢复状态。
+4. 每个任务及总计的成功率、assembly step 指标、日志和产物位置已入账。
+5. 临时 rollout 的保留或删除严格执行用户批准的策略。
 
-**rollout / 数据集 suffix 规则**：
-- `rgbd`：无 skill 元信息，无图像 annotation。
-- `rgbd-only-skill`：有 skill 元信息，不画 point / grasp。
-- `rgbd-skill-point`：有 skill 元信息，图像画 point。
-- `rgbd-skill-point-colored`：有 skill 元信息，图像画 colored point。
-- `rgbd-skill-grasp`：有 skill 元信息，图像画 grasp。
-- `rgbd-skill-grasp-colored`：有 skill 元信息，图像画 colored grasp。
-- `rgbd-skill-grasp-part`：`pick/place` 画 grasp，其余 skill 画 point。
-- `rgbd-skill-grasp-part-colored`：同上，但 point / grasp 都走 colored 模式。
+不要把“脚本已启动”或“进程仍存在”当作完成。
 
-## 2. auto_eval.sh 参数说明
+## 2. 启动前必须询问
 
-脚本位置：`~/projects/gpu-snatcher/auto_eval.sh`
+Agent 先从仓库、launcher、checkpoint 和现有日志中发现可推断项，只向用户补问无法可靠推断的配置。至少形成以下配置表并请求一次审批：
+
+| 类别 | 必填配置 |
+|---|---|
+| 实验标识 | batch 名、结果文档路径、W&B project（若使用） |
+| 模型来源 | 每个实验的 W&B run ID 或本地 checkpoint 绝对路径 |
+| 任务 | 例如 `one_leg, round_table, lamp` |
+| 环境 | controller、domain、action type、observation space |
+| 难度 | `low` / `med` / `high` 及 perturb 设置 |
+| 评估量 | 每任务 rollout 数或目标成功数、并行 env 数、最大步数 |
+| annotation | skill debug、skill text、guidance point、grasp、part、colored |
+| 资源 | 允许使用的服务器/GPU、是否串行、磁盘最低余量 |
+| 产物 | 是否保存 pickle、depth、video；保留数量和清理审批规则 |
+
+默认值必须标注为“建议值”，不能冒充用户决定。run ID、任务集、randomness、rollout 数和删除策略不得从历史批次静默继承。
+
+## 3. Eval 矩阵
+
+每行对应一个实际运行，建议使用下表提交审批：
+
+| # | 名称 | checkpoint/run | experiment module | task | randomness | observation | rollout | annotation flags | save flags |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 待确认 | 待确认 | 待核对 | 待确认 | 待确认 | 待确认 | 待确认 | 待确认 | 待确认 |
+
+常见 annotation 语义如下；实际可用 flag 必须以当前代码 `--help` 和 launcher 为准：
+
+| 语义 | 典型开关 | 约束 |
+|---|---|---|
+| skill 状态/统计 | `annotate_skill` | image annotation 通常要求 image observation |
+| skill 文字 | `skill_on_image` | 通常依赖 skill annotation |
+| guidance point | `guidance_point_on_image` | 与 always-grasp/part 模式的互斥关系以代码为准 |
+| colored point | `guidance_point_colored` | 只是配色，不应被当作启用 point 的替代 |
+| always grasp | `grasp_annotation_on_image` | 所有适用 skill 绘制 grasp |
+| part grasp | `grasp_part_annotate` | pick/place 绘 grasp，其余绘 point |
+| colored grasp | `grasp_annotation_colored` | part-colored 通常同时要求 point/grasp colored |
+
+数据集 suffix 是训练数据资产的标识，不应直接推导 eval annotation。eval flag 应由批准矩阵或 checkpoint 目标语义决定。
+
+### 3.1 Checkpoint 输入与 pickle 输出必须分离
+
+rollout 同时有两套 annotation 开关，不能混用：
+
+- policy 输入图像：严格使用 checkpoint config 中的 `data.annotate_guidance_point`、`annotate_grasp`、`annotate_grasp_part` 及对应 colored 字段。它们改变 actor 的 observation contract。
+- 保存到最终 pickle 的图像：严格使用本次命令行的 `--guidance-point-on-image`、`--grasp-annotation-on-image`、`--grasp-part-annotate`、`--guidance-point-colored`、`--grasp-annotation-colored`。checkpoint 的同名 policy 设置不得泄漏到保存结果。
+
+因此，普通 state teacher 可以在不改变 policy 输入的情况下，用 CLI 选择独立 rollout campaign 的保存标注；但每个 campaign 仍必须重新 rollout，不能从已有 pickle 离线补标注。
+
+## 4. 基础设施审计
+
+启动前动态确认，不能照抄历史机器状态：
 
 ```bash
-# 核心参数
-RUN_ID="xxx"                  # wandb run_name，决定下载哪个 checkpoint
-EVAL_ANNOTATE_SKILL=true/false       # 启用 skill 标注 (需 image obs)
-EVAL_GUIDANCE_POINT_ON_IMAGE=true/false  # guidance point 可视化
-EVAL_GRASP_ANNOTATION_ON_IMAGE=true/false  # 始终绘制 grasp rectangle
-EVAL_GRASP_PART_ANNOTATE=true/false  # pick/place 画 grasp，其余画 point
-EVAL_SKILL_ON_IMAGE=true/false       # skill 文字覆盖在 rollout 视频上
-EVAL_GUIDANCE_POINT_COLORED=true/false   # 按 skill 着色 guidance point
-EVAL_GRASP_ANNOTATION_COLORED=true/false # 按 skill 分组着色 grasp rectangle
-
-# 跳过下载直接用本地 checkpoint
-OVERWRITE_WT_PATH="/path/to/local.pt"   # 设置后自动跳过 download 步骤
-STEPS=(eval)                            # 注释掉 download，只跑 eval
-
-# 正常下载+eval
-OVERWRITE_WT_PATH=""                    # 清空，恢复自动拼接路径
-STEPS=(download eval)                   # 恢复下载步骤
+date
+git status --short
+git rev-parse HEAD
+conda run -n rr python -m src.eval.evaluate_model --help
+df -h / /home /data 2>/dev/null
+nvidia-smi
 ```
 
-EVAL flag 组合规则：
-- `ANNOTATE_SKILL=false` → 无 step 级成功率统计，rollout 视频无标注
-- `ANNOTATE_SKILL=true` → 有 `[skill-debug]` stdout 日志 + assembly step 统计
-- `SKILL_ON_IMAGE=true` → 需要 `ANNOTATE_SKILL=true`，在视频画面上叠加 skill 文字
-- `GUIDANCE_POINT_ON_IMAGE=true` → 在视频上画 guidance point 圆点
-- `GUIDANCE_POINT_COLORED=true` → guidance point 按 skill 颜色编码（pick=黄, place=红）
-- `GRASP_ANNOTATION_ON_IMAGE=true` → 在视频上画 grasp rectangle
-- `GRASP_ANNOTATION_COLORED=true` → grasp rectangle 按 skill 分组着色
-- `GRASP_PART_ANNOTATE=true` → `pick/place` 画 grasp，其他 skill 画 point
-- `GRASP_PART_ANNOTATE=true` 时，不能再同时开启 `GUIDANCE_POINT_ON_IMAGE` 或 `GRASP_ANNOTATION_ON_IMAGE`
-- `GRASP_PART_ANNOTATE=true` 且使用 colored 模式时，`GUIDANCE_POINT_COLORED` 与 `GRASP_ANNOTATION_COLORED` 必须同时开或同时关
+远端运行还需记录：hostname、代码目录和 commit、checkpoint 路径及 SHA256、GPU 型号/空闲显存、输出所在文件系统与剩余空间。快速盘与 HDD/NAS 要明确区分。
 
-**注意**：
-- `--observation-space state` 时不支持 skill annotation（env 无 camera 属性）
-- `--observation-space image` 才能用 EVAL flag
-- image eval 每个实验产生 ~60G rollout 数据，需定期清理
+若保存 image rollout，先做小规模 smoke，再根据实测单轨迹大小估算全批次磁盘。历史上的“每实验约 60 GB”只能作旧批次参考，不能作为容量结论。
 
-## 3. 批量 Eval 执行流程
+## 5. Checkpoint 核对
 
-### 3.1 准备
+checkpoint 内嵌 config 是训练启动时的运行时快照，是重要证据，但仍需与 checkpoint 文件、训练日志、W&B run 和目标矩阵交叉核对；旧 checkpoint 可能缺字段，或来自错误启动。
 
 ```bash
-# 确认环境
-conda activate rr
-cd ~/projects/gpu-snatcher
-# 确认 SSH 可达
-ssh -o ConnectTimeout=5 zju_4090_228 echo ok
-# 检查磁盘（每个实验需 ~60G）
-df -h /
-```
-
-### 3.2 验证 Checkpoint 配置（eval 前必做）
-
-**严重教训**: 训练启动时的配置错误（如 guidance_point_colored 误设为 false）会导致 checkpoint 内部 config 与实际实验不符。eval 前必须验证每个 checkpoint 的真实配置。
-
-**方法**: 从 checkpoint 的 `.pt` 文件中读取 Hydra config:
-```bash
-conda activate rr
-python3 -c "
+conda run -n rr python - <<'PY'
+import sys
 import torch
-sd = torch.load('/path/to/actor_chkpt_last.pt', map_location='cpu', weights_only=False)
-cfg = sd.get('config', {}).get('data', {})
-print(f'GP={cfg.get(\"annotate_guidance_point\")}')
-print(f'colored={cfg.get(\"annotate_guidance_point_colored\")}')
-print(f'grasp={cfg.get(\"annotate_grasp\")}')
-print(f'grasp_colored={cfg.get(\"annotate_grasp_colored\")}')
-print(f'grasp_part={cfg.get(\"annotate_grasp_part\")}')
-print(f'skill={cfg.get(\"annotate_skill_one_hot\")}')
-print(f'suffix={cfg.get(\"suffix\")}')
-print(f'experiment={sd.get(\"config\",{}).get(\"experiment_module\",\"?\")}')
-"
+
+path = sys.argv[1] if len(sys.argv) > 1 else "/absolute/path/to/checkpoint.pt"
+state = torch.load(path, map_location="cpu")
+config = state.get("config", {})
+data = config.get("data", {})
+for key in (
+    "suffix",
+    "annotate_guidance_point",
+    "annotate_guidance_point_colored",
+    "annotate_grasp",
+    "annotate_grasp_colored",
+    "annotate_grasp_part",
+    "annotate_skill_one_hot",
+):
+    print(f"{key}={data.get(key, '<missing>')}")
+print(f"experiment_module={config.get('experiment_module', '<missing>')}")
+PY
 ```
 
-**对照实验参数表**（§1），确认:
-- `annotate_guidance_point` / `annotate_skill_one_hot` / `annotate_guidance_point_colored` / `annotate_grasp` / `annotate_grasp_colored` / `annotate_grasp_part` 与预期一致
-- `suffix` 与预期数据后缀一致
-- `experiment_module` 与预期模型架构一致
+如果 checkpoint config 与批准矩阵冲突，停止该行 eval 并向用户报告；不要擅自把目标矩阵改成 checkpoint 的错误配置。
 
-**注意**: checkpoint config **绝对可信**——它是 Hydra 在训练启动时写入的运行时配置快照，不会被后续 restart 修改。
-> 如果 checkpoint config 与原定实验参数不符 → 该 run 的实际配置以 checkpoint 为准，更新 §1 实验参数表标注实际配置。
+## 6. Smoke 与正式启动
 
-### 3.3 串行执行（手动）
+先对每种不同 observation/annotation 组合做最小 smoke：
 
-对每个实验，依次：
+1. 单任务、单 rollout 或少量 target success。
+2. 确认 checkpoint 可加载、环境可创建、图像/深度字段存在。
+3. 若保存 annotation，抽查视频或 pickle 中标注确实出现且语义正确。
+4. 记录耗时、显存和单轨迹磁盘占用。
+
+正式命令必须由当前 launcher 的 CLI 参数构造。若 launcher 只能靠编辑 shell 常量切换实验，应先增加参数化 CLI 和 `--print-command`，再逐行打印并与批准矩阵比对。不要在共享脚本中反复手改常量后并发运行。
+
+每个运行至少保存：
+
+- 展开的最终命令；
+- hostname、GPU ID、PID/session；
+- checkpoint 路径与哈希；
+- stdout/stderr 日志路径；
+- 开始时间、完成时间和退出码。
+
+## 7. 监控与判定
+
+监控必须同时检查进程、日志进展、GPU 和磁盘：
 
 ```bash
-# 1. 修改 auto_eval.sh 中的 RUN_ID 和 EVAL flag
-vim auto_eval.sh
-
-# 2. 运行
-bash auto_eval.sh 2>&1 | tee /tmp/exp<N>_<name>.log
-
-# 3. 提取结果
-grep -E "Success rate \((one_leg|round_table|lamp|all tasks)\)" /tmp/exp<N>_<name>.log
-grep -A10 "Assembly step success rates" /tmp/exp<N>_<name>.log
+pgrep -af 'src.eval.evaluate_model'
+nvidia-smi
+df -h / /home /data 2>/dev/null
+rg -n 'Success rate|Assembly step success rates|Traceback|CUDA out of memory|No space left' /path/to/eval.log
 ```
 
-### 3.3 串行执行（Claude Code 自动化）
+判定规则：
 
-告诉 Claude Code：
+| 状态 | 条件 |
+|---|---|
+| running | 进程存在，日志/计数持续推进，GPU 状态合理 |
+| complete | 退出码为 0，预期任务都有最终统计，产物数量通过验收 |
+| failed | 非零退出，或出现 OOM/ENOSPC/未处理 traceback |
+| stale | 进程存在但超过合理窗口无日志、GPU 或文件进展；需诊断后才能重启 |
 
+OOM 后不要直接并发补跑；先确认旧进程是否仍存活。append 模式重试前先数清已有 rollout，避免超采和重复。
+
+## 8. 结果与资产记录
+
+每个实验记录：
+
+| 字段 | 内容 |
+|---|---|
+| identity | batch/experiment/run/checkpoint SHA |
+| config | task、randomness、rollout 数、完整 annotation/save flags |
+| runtime | host、GPU、开始/结束、退出码、日志 |
+| metrics | 每任务成功率、all tasks、assembly step 分项 |
+| artifacts | pickle/video/depth 的绝对路径、数量、字节数 |
+| retention | 保留、归档或待审批删除 |
+
+删除任何旧数据或本批 rollout 前，先列出绝对路径、owner、文件数、字节数和所在文件系统，得到用户明确批准后再执行。权限不足的残留要如实记录，不得用不相关账号绕过。
+
+## 9. Agent 执行模板
+
+用户可直接提供：
+
+```text
+请按 reports/claude/batch_eval_guide.md 执行 multi-task-rgbd-skill batch eval。
+先审计当前仓库、launcher、checkpoint、GPU 和磁盘，然后把仍需我决定的配置及 eval 矩阵列给我审批。
+未经审批不要删除数据或正式启动。审批后完成 smoke、逐项启动、持续监控、结果汇总和资产记录；遇到失败先确认旧进程状态和已有产物，再恢复。
 ```
-我要批量跑 eval 实验，项目路径 ~/projects/gpu-snatcher，
-实验参数见 ~/projects/robust-rearrangement-custom/reports/claude/batch_eval_guide.md。
-请串行执行，每个完成后自动推进下一个，每 10 分钟自检汇报进度。
-```
-
-Claude Code 会自动：
-1. 读取参数表
-2. 依次修改 `auto_eval.sh`
-3. 启动后台任务（`run_in_background: true`）
-4. 设 Monitor 捕捉成功率 + 错误
-5. Cron 每 10 分钟检查进度 + 磁盘 + 成功率
-6. 全部完成后汇总到 `eval_summary.md`
-
-### 3.4 磁盘清理
-
-每个 image-based 实验产生 ~50-60G rollout pickle 数据在：
-```
-~/projects/robust-rearrangement-custom/data/raw/diffik/sim/{task}/rollout/low/{suffix}/
-```
-
-清理策略（每实验每 task 保留 10 个 pkl）：
-```bash
-BASE="$HOME/projects/robust-rearrangement-custom/data/raw/diffik/sim"
-for suffix in \
-    rgbd \
-    rgbd-only-skill \
-    rgbd-skill-point \
-    rgbd-skill-point-colored \
-    rgbd-skill-grasp-part \
-    rgbd-skill-grasp-part-colored; do
-    for task in one_leg round_table lamp; do
-        dir="$BASE/$task/rollout/low/$suffix"
-        [ -d "$dir" ] || continue
-        mapfile -t files < <(find "$dir" -name "*.pkl" -type f | sort)
-        if [ ${#files[@]} -gt 10 ]; then
-            for ((i=10; i<${#files[@]}; i++)); do rm -f "${files[$i]}"; done
-        fi
-    done
-done
-```
-
-## 4. 监控自检流程
-
-### 4.1 Cron 检查脚本模式
-
-```bash
-echo "=== $(date) disk: $(df -h / | awk 'NR==2{print $5,$4}') procs: $(pgrep -c evaluate_model) ==="
-
-if grep -q "Evaluation finished successfully" /tmp/exp<N>.log 2>/dev/null; then
-    echo "EXP: COMPLETED"
-    grep -E "Success rate \((one_leg|round_table|lamp|all tasks)\)" /tmp/exp<N>.log | tail -4
-else
-    echo "EXP: RUNNING"
-    echo "task: $(tail -5 /tmp/exp<N>.log | grep -oP '\([a-z_]+\):' | tail -1)"
-    echo "latest: $(grep -oP 'success: \d+/\d+ \(\d+\.?\d*%\)' /tmp/exp<N>.log | tail -1)"
-fi
-```
-
-### 4.2 关键监控指标
-
-| 指标 | 命令 |
-|------|------|
-| 磁盘剩余 | `df -h /` |
-| eval 进程数 | `pgrep -c evaluate_model` |
-| 当前任务 | `tail -5 log \| grep -oP '\([a-z_]+\):'` |
-| 当前轮次成功率 | `grep -oP 'success: \d+/\d+ \(\d+\.?\d*%\)' log \| tail -1` |
-| 是否完成 | `grep -q "Evaluation finished successfully" log` |
-| 是否有错误 | `grep -c "ERROR\|Traceback" log` |
-
-### 4.3 典型异常处理
-
-| 异常 | 现象 | 处理 |
-|------|------|------|
-| SCP 超时 | 日志卡在 "Downloading checkpoint via scp" | kill 进程，检查 SSH，重跑或设 OVERWRITE_WT_PATH |
-| 磁盘满 | 返回 ENOSPC 或磁盘 >95% | 执行清理脚本（见 3.4） |
-| `front_cam_pos` 错误 | `--observation-space state` + `--annotate-skill` | 改用 `image` observation space |
-| 进程僵死 | pgrep 返回 0 但无报错 | 检查 Bash 超时，改用 `run_in_background: true` |
-
-## 5. 需要收集的结果
-
-每个实验完成后需提取以下数据：
-
-### 5.1 总体/单任务成功率
-
-从 stdout 日志提取：
-```bash
-grep -E "Success rate \((one_leg|round_table|lamp|all tasks)\)" /tmp/exp<N>.log
-```
-
-格式：`Success rate (lamp): 25.00% (9/36)`
-
-### 5.2 Assembly Step 成功率（需启用 annotate-skill）
-
-从 stdout 日志提取：
-```bash
-grep -A10 "Assembly step success rates" /tmp/exp<N>.log
-```
-
-每个 task 输出类似：
-```
-Assembly step success rates (lamp):
-  base-bulb: 25.00% (9/36)
-  base-hood: 100.00% (5/5)
-```
-
-**各任务 sub-step 列表**：
-| 任务 | sub-steps |
-|------|-----------|
-| one_leg | top-leg |
-| round_table | top-leg, leg-base |
-| lamp | base-bulb, base-hood |
-
-### 5.3 stdout 日志保留
-
-每个实验保留完整日志以备查：
-```bash
-tee /tmp/exp<N>_<name>.log
-```
-
-## 6. 结果汇总模板
-
-参考 `~/projects/robust-rearrangement-custom/reports/multi_task_condition_eval.md`，需包含：
-
-### 6.1 总览表
-
-| # | 实验 | RUN_ID | one_leg | round_table | lamp | **Overall** |
-|---|------|--------|:---:|:---:|:---:|:---:|
-| 1 | ... | ... | X% (n/36) | X% (n/36) | X% (n/36) | **X% (n/108)** |
-
-### 6.2 Assembly Step 表（仅 enable annotate-skill 的实验）
-
-**one_leg**：top-leg 成功率
-**round_table**：top-leg → leg-base 级联成功率
-**lamp**：base-bulb → base-hood 级联成功率
-
-### 6.3 结论
-
-- one_leg / round_table / lamp 三个任务的难度排序
-- 各 condition 对比（best/worst overall）
-- 关键子步骤发现（如 base-hood 100%）
-- 关于 guidance point / skill / colored / depth 的消融结论
-
-完整示例见：`~/projects/robust-rearrangement-custom/reports/multi_task_condition_eval.md`
-
-```markdown
-| # | 实验 | RUN_ID | one_leg | round_table | lamp | Overall |
-|---|------|--------|:---:|:---:|:---:|:---:|
-| 1 | rgbd+only skill | iconic-surf-2 | 0.00% (0/36) | 0.00% (0/36) | 11.11% (4/36) | 3.70% (4/108) |
-| 2 | rgbd | unique-durian-3 | 0.00% (0/36) | 0.00% (0/36) | 22.22% (8/36) | 7.41% (8/108) |
-| ... | ... | ... | ... | ... | ... | ... |
-```
-
-结果写入：`~/projects/robust-rearrangement-custom/reports/`，Notion 同步更新。
