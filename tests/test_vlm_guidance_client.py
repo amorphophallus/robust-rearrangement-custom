@@ -27,10 +27,12 @@ class ErrorResponse(FakeResponse):
 class FakeSession:
     def __init__(self):
         self.last_files = None
+        self.posted_metadata = []
 
     def post(self, url, *, files, headers, timeout):
         self.last_files = files
         metadata = json.loads(files["metadata"][1])
+        self.posted_metadata.append(metadata)
         rows = []
         for item in reversed(metadata["items"]):
             rows.append(
@@ -48,6 +50,7 @@ class FakeSession:
             {
                 "model_revision": "revision",
                 "policy_version": 3,
+                "model_mode": "original_sft",
                 "predictions": rows,
                 "timing_ms": {"total": 12.0},
             }
@@ -59,6 +62,7 @@ class FakeSession:
                 "status": "ready",
                 "model_revision": "revision",
                 "policy_version": 3,
+                "model_mode": "original_sft",
                 "device": "cuda:0",
             }
         )
@@ -71,6 +75,13 @@ class ErrorSession(FakeSession):
                 "detail": "env0-step495: target_point_2d is outside the front image"
             }
         )
+
+
+class StructuredSession(FakeSession):
+    def get(self, url, *, headers, timeout):
+        response = super().get(url, headers=headers, timeout=timeout)
+        response.payload["model_mode"] = "structured"
+        return response
 
 
 def test_client_batches_images_and_restores_request_order():
@@ -100,6 +111,47 @@ def test_client_validates_ready_policy_version():
 
     assert readiness["policy_version"] == 3
     assert client.ready_model_revision == "revision"
+    assert client.ready_model_mode == "original_sft"
+
+
+def test_original_sft_uses_singleton_requests_after_readiness_check():
+    session = FakeSession()
+    client = VLMGuidanceClient("http://vlm", session=session)
+    client.check_ready()
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+
+    predictions, timing = client.predict(
+        task="one_leg",
+        front_images=[image, image, image],
+        wrist_images=[image, image, image],
+        state_infos=[{"base": {}}, {"base": {}}, {"base": {}}],
+        step_idx=48,
+    )
+
+    assert [len(metadata["items"]) for metadata in session.posted_metadata] == [1, 1, 1]
+    assert [prediction.request_id for prediction in predictions] == [
+        "env0-step48",
+        "env1-step48",
+        "env2-step48",
+    ]
+    assert timing["total"] == 36.0
+
+
+def test_structured_model_keeps_batched_request_after_readiness_check():
+    session = StructuredSession()
+    client = VLMGuidanceClient("http://vlm", session=session)
+    client.check_ready()
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+
+    client.predict(
+        task="lamp",
+        front_images=[image, image, image],
+        wrist_images=[image, image, image],
+        state_infos=[{"base": {}}, {"base": {}}, {"base": {}}],
+        step_idx=8,
+    )
+
+    assert [len(metadata["items"]) for metadata in session.posted_metadata] == [3]
 
 
 def test_client_preserves_server_error_detail():

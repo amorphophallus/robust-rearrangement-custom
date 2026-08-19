@@ -53,9 +53,14 @@ vLLM 的前提；旧版“自定义 point head 无法由 vLLM 执行”的限制
 改变 checkpoint 与 runtime，无法判断 regress-to-mean 是否真的修复。vLLM 可以在
 Transformers 基线通过后作为单独的吞吐/一致性实验。
 
-参考 visualizer 每次只推理一条样本；服务端支持 batch，因此在 `original_sft` 模式显式
-设置 tokenizer `padding_side=left`。decoder-only generation 使用 right padding 会从 pad
-token 后继续生成，可能得到空或损坏的 JSON。
+参考 visualizer 每次只推理一条样本。2026-08-20 的线上对照进一步确认：即使 tokenizer
+已经设置 `padding_side=left`，这个 checkpoint 的 greedy generation 在 batch-3 和
+singleton 之间仍可能跨 token 分叉；同一 one_leg 首帧曾从 singleton 的
+`pick [157,153]` 变成 batch-3 的 `push [200,156]`，另一次 batch-3 还生成了损坏的 JSON。
+因此 RR client 在 readiness 声明 `model_mode=original_sft` 时，会保留 `n_envs=3` 的仿真
+并行，但把一次三环境 VLM query 串行拆成三个 singleton HTTP 请求，严格复现参考
+visualizer。任何 singleton 的无效生成仍直接终止评测，不修补 JSON，也不 fallback 到
+scripted GT。服务端保留 batch API，供 structured checkpoint 或单独的吞吐实验使用。
 
 ## 3. 本次部署使用的固定路径和版本
 
@@ -454,7 +459,8 @@ mkdir -p logs/vlm_dit_single/summaries
 
 关键参数的实际含义：
 
-- `--n-envs 3 --n-rollouts 36`：每轮并行 3 个仿真环境，共收集 36 个 episode；
+- `--n-envs 3 --n-rollouts 36`：每轮并行 3 个仿真环境，共收集 36 个 episode；仿真仍然
+  并行，但 `original_sft` 的三条 VLM generation 会由 client 串行发成 singleton 请求；
 - `--task one_leg`：当前评测任务。三个正式任务为 `one_leg`、`round_table`、`lamp`；
 - `--max-rollout-steps 1000`：one_leg 的 episode 上限，与项目默认
   `task_timeout(one_leg)` 以及噪声基线保持一致；round_table 和 lamp 也使用 1000；
@@ -465,7 +471,7 @@ mkdir -p logs/vlm_dit_single/summaries
 - `--annotation-source vlm`：policy 的 skill 和 2D point 都来自远端 VLM；自动机只作为
   shadow GT，不控制 policy，也不会在 VLM 失败时静默 fallback；
 - `--vlm-base-url`：远端 FastAPI 服务地址；
-- `--vlm-timeout-seconds 30`：单次 HTTP batch 请求最多等待 30 秒；
+- `--vlm-timeout-seconds 30`：每个 singleton HTTP 请求最多等待 30 秒；
 - `--vlm-query-interval 0`：跟随 checkpoint 的 `actor.action_horizon`。这三个 checkpoint
   都是 8，所以每 8 个 environment step 重新 query 一次，其间复用缓存；
 - `--vlm-noise-projection-samples 200`：每个有效控制 step 的 GT/VLM 点对、每个 n0--n4 档位投影

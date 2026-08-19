@@ -1087,7 +1087,8 @@ if __name__ == "__main__":
         print(
             "VLM guidance ready: "
             f"url={args.vlm_base_url} revision={readiness.get('model_revision')} "
-            f"device={readiness.get('device')}"
+            f"device={readiness.get('device')} "
+            f"request_mode={'singleton' if readiness.get('model_mode') == 'original_sft' else 'batch'}"
         )
 
     # Get the environment(s)

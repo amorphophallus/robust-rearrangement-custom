@@ -107,6 +107,7 @@ class VLMGuidanceClient:
         self.api_token = api_token if api_token is not None else os.getenv("VLM_API_TOKEN")
         self.session = session or requests.Session()
         self.ready_model_revision: str | None = None
+        self.ready_model_mode: str | None = None
 
     @property
     def headers(self) -> dict[str, str]:
@@ -133,43 +134,34 @@ class VLMGuidanceClient:
                 f"expected {EXPECTED_POLICY_VERSION}, got {payload.get('policy_version')}"
             )
         self.ready_model_revision = str(payload.get("model_revision", "unknown"))
+        self.ready_model_mode = str(payload.get("model_mode", "unknown"))
         return payload
 
-    def predict(
+    def _post_prediction_batch(
         self,
         *,
         task: str,
+        items: Sequence[dict[str, Any]],
         front_images: Sequence[Any],
         wrist_images: Sequence[Any],
-        state_infos: Sequence[dict[str, Any]],
-        step_idx: int,
-    ) -> tuple[list[VLMPrediction], dict[str, float]]:
-        batch_size = len(front_images)
-        if not (batch_size == len(wrist_images) == len(state_infos)):
-            raise VLMGuidanceError("VLM batch fields have different lengths")
-        items = []
-        files: dict[str, tuple[str, bytes, str]] = {}
-        for env_idx in range(batch_size):
-            request_id = f"env{env_idx}-step{step_idx}"
-            items.append(
-                {
-                    "request_id": request_id,
-                    "state_info": state_infos[env_idx],
-                }
-            )
-            files[f"front_{env_idx}"] = (
-                f"front_{env_idx}.png",
-                _png_bytes(front_images[env_idx]),
+    ) -> dict[str, Any]:
+        files: dict[str, tuple[str | None, bytes | str, str]] = {}
+        for request_idx, (front_image, wrist_image) in enumerate(
+            zip(front_images, wrist_images)
+        ):
+            files[f"front_{request_idx}"] = (
+                f"front_{request_idx}.png",
+                _png_bytes(front_image),
                 "image/png",
             )
-            files[f"wrist_{env_idx}"] = (
-                f"wrist_{env_idx}.png",
-                _png_bytes(wrist_images[env_idx]),
+            files[f"wrist_{request_idx}"] = (
+                f"wrist_{request_idx}.png",
+                _png_bytes(wrist_image),
                 "image/png",
             )
         files["metadata"] = (
             None,
-            json.dumps({"task": task, "items": items}, separators=(",", ":")),
+            json.dumps({"task": task, "items": list(items)}, separators=(",", ":")),
             "application/json",
         )
         try:
@@ -194,11 +186,83 @@ class VLMGuidanceClient:
                 f"VLM prediction request failed: {exc}{suffix}"
             ) from exc
         try:
-            payload = response.json()
+            return response.json()
         except Exception as exc:
             raise VLMGuidanceError(
                 f"VLM prediction response is not valid JSON: {exc}"
             ) from exc
+
+    def predict(
+        self,
+        *,
+        task: str,
+        front_images: Sequence[Any],
+        wrist_images: Sequence[Any],
+        state_infos: Sequence[dict[str, Any]],
+        step_idx: int,
+    ) -> tuple[list[VLMPrediction], dict[str, float]]:
+        batch_size = len(front_images)
+        if not (batch_size == len(wrist_images) == len(state_infos)):
+            raise VLMGuidanceError("VLM batch fields have different lengths")
+        items = []
+        for env_idx in range(batch_size):
+            request_id = f"env{env_idx}-step{step_idx}"
+            items.append(
+                {
+                    "request_id": request_id,
+                    "state_info": state_infos[env_idx],
+                }
+            )
+
+        # The reference original_sft visualizer generates one sample at a time.
+        # Greedy decoder output was empirically batch-sensitive on the deployed
+        # checkpoint (including malformed JSON in batch-3), so preserve n_envs
+        # simulation parallelism while issuing one model request per environment.
+        # Invalid singleton generations still fail closed; this is not a retry or
+        # a fallback to scripted annotations.
+        if self.ready_model_mode == "original_sft" and batch_size > 1:
+            payloads = [
+                self._post_prediction_batch(
+                    task=task,
+                    items=[items[env_idx]],
+                    front_images=[front_images[env_idx]],
+                    wrist_images=[wrist_images[env_idx]],
+                )
+                for env_idx in range(batch_size)
+            ]
+            first_payload = payloads[0]
+            payload = {
+                "model_revision": first_payload.get("model_revision"),
+                "policy_version": first_payload.get("policy_version"),
+                "predictions": [],
+                "timing_ms": {},
+            }
+            for singleton_payload in payloads:
+                if (
+                    singleton_payload.get("model_revision")
+                    != payload["model_revision"]
+                    or singleton_payload.get("policy_version")
+                    != payload["policy_version"]
+                ):
+                    raise VLMGuidanceError(
+                        "VLM model contract changed across singleton requests"
+                    )
+                payload["predictions"].extend(
+                    singleton_payload.get("predictions", [])
+                )
+                for key, value in dict(
+                    singleton_payload.get("timing_ms", {})
+                ).items():
+                    payload["timing_ms"][str(key)] = payload["timing_ms"].get(
+                        str(key), 0.0
+                    ) + float(value)
+        else:
+            payload = self._post_prediction_batch(
+                task=task,
+                items=items,
+                front_images=front_images,
+                wrist_images=wrist_images,
+            )
 
         rows = payload.get("predictions")
         if payload.get("policy_version") != EXPECTED_POLICY_VERSION:
