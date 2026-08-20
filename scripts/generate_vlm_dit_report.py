@@ -569,6 +569,7 @@ def main() -> int:
     )
     monte_carlo_samples = int(manifest.get("vlm_noise_projection_samples", 200))
     rollouts_per_cell = int(manifest.get("n_rollouts_per_task", 36))
+    max_saved_rollouts = int(manifest.get("max_saved_rollouts_per_cell", 0))
     lines = [
         "# VLM + DiT guidance point 评测报告",
         "",
@@ -1308,6 +1309,7 @@ def main() -> int:
             "- Conditions：`rgbd+GP`、`rgbd+colored GP`、`rgbd+GP+skill`；仅 checkpoint/模型输入配置不同，VLM 服务、任务初始分布和评测代码相同。",
             *checkpoint_lines,
             f"- 当前主 manifest tasks：`one_leg`、`round_table`、`lamp`；每个 condition-task {rollouts_per_cell} rollout，共 `3×3×{rollouts_per_cell}={manifest.get('total_requested_rollouts', 0)}`。Formal 固定为 36 rollout/格（324 总计）。",
+            f"- 落盘上限：每格最多保存 `{max_saved_rollouts or '全部'}` 条 pickle/MP4；全部 {rollouts_per_cell} 条仍在内存中累计 success、progress、tracking 和 VLM point/MC200 指标并写入 task summary。",
             "- 本地并行：`n_envs=3`；三个 task 上限均为 1000 step；`randomness=low`。",
             f"- VLM：固定 readiness 中的 model revision；每次正式启动先 fail-fast 检查 `status=ready`、`policy_version={readiness.get('policy_version', '—')}`、`model_mode={readiness.get('model_mode', '—')}`。HTTP timeout 30 s，失败或 schema/revision 不一致直接终止，不 fallback 到自动机。",
             "- Query：`--vlm-query-interval 0`，使用 checkpoint 的 `action_horizon=8`；每 8 个 environment step query 一次，其间缓存。",
@@ -1337,7 +1339,7 @@ def main() -> int:
                 else "### 7.4 批准门槛"
             ),
             "",
-            f"已批准的固定项：`randomness=low` 独立 reset、`n_envs=3`、36 rollout/格、query horizon=8、{monte_carlo_samples} MC 样本/点/档、2000 reference reservoir/档、32-direction SWD、三个 task 的 max steps 均为 1000，以及 clean-GT pose tracking target。正式矩阵共 324 rollout。",
+            f"已批准的固定项：`randomness=low` 独立 reset、`n_envs=3`、36 rollout/格、每格最多保存 {max_saved_rollouts or '全部'} 条 pickle/MP4、query horizon=8、{monte_carlo_samples} MC 样本/点/档、2000 reference reservoir/档、32-direction SWD、三个 task 的 max steps 均为 1000，以及 clean-GT pose tracking target。正式矩阵共 324 rollout。",
             "",
         ]
     )
@@ -1437,6 +1439,7 @@ def main() -> int:
             "  --overwrite-wt-path /mnt/nas/share/home/hy/robust-rearrangement-custom/outputs/2026-06-13/13-02-04.275134/models/icy-vortex-9_2026-06-13_13-02-27.880769/actor_chkpt_latest_3000.pt \\",
             "  --task one_leg --n-envs 3 --n-rollouts 36 \\",
             "  --randomness low --max-rollout-steps 1000 \\",
+            f"  --max-saved-rollouts {max_saved_rollouts or rollouts_per_cell} \\",
             "  --guidance-point-on-image --no-annotate-skill \\",
             "  --tracking-metric-type pose \\",
             "  --annotation-source vlm --vlm-base-url \"$VLM_GUIDANCE_URL\" \\",

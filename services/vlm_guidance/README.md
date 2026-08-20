@@ -53,14 +53,15 @@ vLLM 的前提；旧版“自定义 point head 无法由 vLLM 执行”的限制
 改变 checkpoint 与 runtime，无法判断 regress-to-mean 是否真的修复。vLLM 可以在
 Transformers 基线通过后作为单独的吞吐/一致性实验。
 
-参考 visualizer 每次只推理一条样本。2026-08-20 的线上对照进一步确认：即使 tokenizer
-已经设置 `padding_side=left`，这个 checkpoint 的 greedy generation 在 batch-3 和
-singleton 之间仍可能跨 token 分叉；同一 one_leg 首帧曾从 singleton 的
-`pick [157,153]` 变成 batch-3 的 `push [200,156]`，另一次 batch-3 还生成了损坏的 JSON。
-因此 RR client 在 readiness 声明 `model_mode=original_sft` 时，会保留 `n_envs=3` 的仿真
-并行，但把一次三环境 VLM query 串行拆成三个 singleton HTTP 请求，严格复现参考
-visualizer。任何 singleton 的无效生成仍直接终止评测，不修补 JSON，也不 fallback 到
-scripted GT。服务端保留 batch API，供 structured checkpoint 或单独的吞吐实验使用。
+参考 visualizer 每次只推理一条样本。2026-08-20 的线上对照确认：即使 tokenizer 已经
+设置 `padding_side=left`，greedy generation 在 batch-3 和 singleton 之间仍可能跨 token
+分叉；但 45 个配对 preview 帧上，两者 skill 一致率为 91.1%，点差 median/p90 为
+0/7.48 px，batch 对 GT 的总体 mean/RMSE 并未变差。少数样本会产生 82--99 px 的离散
+分叉，且正式启动时出现过一次 batch JSON 格式错误。因此生产 client 默认保留 batch-3
+吞吐；仅当 original_sft batch 返回 HTTP 422 时，把同一批输入拆成 singleton 重试。重试
+仍完全来自 VLM；任何 singleton 无效、服务不可用或 revision 变化都会终止评测，不修补
+JSON，也不 fallback 到 scripted GT。summary 中的 `vlm_transport` 会记录 batch、singleton
+和 422 retry 次数。
 
 ## 3. 本次部署使用的固定路径和版本
 
@@ -446,6 +447,7 @@ mkdir -p logs/vlm_dit_single/summaries
   --n-rollouts 36 \
   --randomness low \
   --max-rollout-steps 1000 \
+  --max-saved-rollouts 10 \
   --annotation-source vlm \
   --tracking-metric-type pose \
   --vlm-base-url "$VLM_GUIDANCE_URL" \
@@ -459,11 +461,14 @@ mkdir -p logs/vlm_dit_single/summaries
 
 关键参数的实际含义：
 
-- `--n-envs 3 --n-rollouts 36`：每轮并行 3 个仿真环境，共收集 36 个 episode；仿真仍然
-  并行，但 `original_sft` 的三条 VLM generation 会由 client 串行发成 singleton 请求；
+- `--n-envs 3 --n-rollouts 36`：每轮并行 3 个仿真环境，共收集 36 个 episode；VLM 默认
+  batch-3，仅在 original_sft 返回 422 时拆成 singleton 重试；
 - `--task one_leg`：当前评测任务。三个正式任务为 `one_leg`、`round_table`、`lamp`；
 - `--max-rollout-steps 1000`：one_leg 的 episode 上限，与项目默认
   `task_timeout(one_leg)` 以及噪声基线保持一致；round_table 和 lamp 也使用 1000；
+- `--max-saved-rollouts 10`：36 条全部参与 success、progress、tracking、VLM point 和
+  MC200/SWD 统计，但每个 condition-task 最多只落盘 10 份未压缩 pickle/MP4。第 11--36
+  条不再缓存 RGB/depth/video，统计仍写入 `--task-summary-out` JSON；
 - `--randomness low`：使用与 clean-train/noise 实验相同的 low-randomness 仿真设置；
 - `--overwrite-wt-path`：强制使用给定的本地 DiT checkpoint，不从 W&B 下载；
 - `--tracking-metric-type pose`：强制输出 position/orientation/total tracking，便于生成
@@ -471,7 +476,7 @@ mkdir -p logs/vlm_dit_single/summaries
 - `--annotation-source vlm`：policy 的 skill 和 2D point 都来自远端 VLM；自动机只作为
   shadow GT，不控制 policy，也不会在 VLM 失败时静默 fallback；
 - `--vlm-base-url`：远端 FastAPI 服务地址；
-- `--vlm-timeout-seconds 30`：每个 singleton HTTP 请求最多等待 30 秒；
+- `--vlm-timeout-seconds 30`：每个 batch 或 retry singleton HTTP 请求最多等待 30 秒；
 - `--vlm-query-interval 0`：跟随 checkpoint 的 `actor.action_horizon`。这三个 checkpoint
   都是 8，所以每 8 个 environment step 重新 query 一次，其间复用缓存；
 - `--vlm-noise-projection-samples 200`：每个有效控制 step 的 GT/VLM 点对、每个 n0--n4 档位投影

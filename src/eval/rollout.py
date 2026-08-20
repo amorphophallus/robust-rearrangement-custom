@@ -94,6 +94,7 @@ RolloutStats = collections.namedtuple(
         "tracking_error",
         "vlm_point_error",
         "vlm_model_revision",
+        "n_saved_rollouts",
     ],
 )
 
@@ -1496,6 +1497,12 @@ def calculate_success_rate(
 
         # Calculate the success rate
         success_flags = rollout_data.rewards.sum(dim=1) == n_parts_assemble
+        for env_idx in range(env.num_envs):
+            rewards_for_stats = rollout_data.rewards[env_idx].numpy()
+            episode_returns.append(
+                np.sum(rewards_for_stats * discount ** np.arange(len(rewards_for_stats)))
+            )
+            total_reward += np.sum(rewards_for_stats)
         if annotation_source == "vlm":
             for episode in rollout_data.vlm_annotations:
                 for annotation in episode:
@@ -1685,11 +1692,6 @@ def calculate_success_rate(
                 
                 # Get point clouds for this env (list of arrays per step)
                 pcs_for_rollout = rollout_data.point_clouds[env_idx] if rollout_data.point_clouds is not None else None
-
-                # Calculate episode return
-                episode_return = np.sum(rewards * discount ** np.arange(len(rewards)))
-                episode_returns.append(episode_return)
-                total_reward += np.sum(rewards)
 
                 if record_first_state_only:
                     first_robot_states.append(robot_states[0])
@@ -1950,6 +1952,7 @@ def calculate_success_rate(
         tracking_error=tracking_error,
         vlm_point_error=vlm_point_error,
         vlm_model_revision=vlm_model_revision,
+        n_saved_rollouts=saved_rollouts_count,
     )
 
 

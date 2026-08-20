@@ -31,6 +31,7 @@ EXPECTED_GPU_SNATCHER_COMMIT = "ebfea2d9f27bfdcea3a30791ebd6e70a05757799"
 EXPECTED_VLM_REVISION = "75dc7b8a4a1dcdf6ec77398494724c7b7b3fe63e"
 TASKS = ("one_leg", "round_table", "lamp")
 TASK_MAX_STEPS = {task: 1000 for task in TASKS}
+MAX_SAVED_ROLLOUTS_PER_CELL = 10
 HISTORICAL_CLEAN_REPORT = REPO_ROOT / "reports/multi_task_condition_eval_0610.md"
 HISTORICAL_CLEAN_SUCCESS = {
     # Fixed-checkpoint, low-randomness, 36-rollout clean/scripted references
@@ -285,6 +286,8 @@ def build_auto_eval_command(
         "low",
         "--max-rollout-steps",
         "1000",
+        "--max-saved-rollouts",
+        str(MAX_SAVED_ROLLOUTS_PER_CELL),
         "--annotation-source",
         annotation_source,
         "--tracking-metric-type",
@@ -348,6 +351,7 @@ def validate_expanded_command(
         "--n-rollouts": str(n_rollouts),
         "-f": task,
         "--max-rollout-steps": "1000",
+        "--max-saved-rollouts": str(MAX_SAVED_ROLLOUTS_PER_CELL),
         "--action-type": "pos",
         "--observation-space": "image",
         "--randomness": "low",
@@ -661,6 +665,7 @@ def print_phase(args: argparse.Namespace) -> int:
         "total_requested_rollouts": len(rows) * args.n_rollouts,
         "randomness": "low",
         "max_rollout_steps": 1000,
+        "max_saved_rollouts_per_cell": MAX_SAVED_ROLLOUTS_PER_CELL,
         "tracking_metric_type": "pose",
         "vlm_noise_projection_samples": 200,
         "data_dir_raw": str(args.data_dir_raw.resolve()),
@@ -688,6 +693,7 @@ def _load_execution_manifest(args: argparse.Namespace) -> tuple[Path, dict[str, 
         "n_envs": args.n_envs,
         "randomness": "low",
         "max_rollout_steps": 1000,
+        "max_saved_rollouts_per_cell": MAX_SAVED_ROLLOUTS_PER_CELL,
         "vlm_noise_projection_samples": 200,
         "data_dir_raw": str(args.data_dir_raw.resolve()),
     }

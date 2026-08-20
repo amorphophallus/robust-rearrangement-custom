@@ -43,6 +43,7 @@ def test_builder_uses_auto_eval_and_never_direct_evaluator(tmp_path):
     assert "src.eval.evaluate_model" not in command
     assert "--print-command" in command
     assert "--no-annotate-skill" in command
+    assert command[command.index("--max-saved-rollouts") + 1] == "10"
     assert "--compress-pickles" not in command
     assert "--output-only-video" not in command
 
@@ -82,6 +83,7 @@ def test_expanded_command_requires_depth(tmp_path):
         "python", "-m", "src.eval.evaluate_model",
         "--n-envs", "3", "--n-rollouts", "3", "-f", "one_leg",
         "--if-exists", "append", "--max-rollout-steps", "1000",
+        "--max-saved-rollouts", "10",
         "--action-type", "pos", "--observation-space", "image",
         "--randomness", "low", "--save-rollouts", "--save-failures",
         "--annotation-source", "vlm", "--tracking-metric-type", "pose",

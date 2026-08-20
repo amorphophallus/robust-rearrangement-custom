@@ -33,6 +33,10 @@ EXPECTED_POLICY_VERSION = 3
 class VLMGuidanceError(RuntimeError):
     """Raised when remote annotations cannot safely be used."""
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 @dataclass(frozen=True)
 class VLMPrediction:
@@ -108,6 +112,10 @@ class VLMGuidanceClient:
         self.session = session or requests.Session()
         self.ready_model_revision: str | None = None
         self.ready_model_mode: str | None = None
+        self.prediction_http_request_count = 0
+        self.batch_prediction_request_count = 0
+        self.singleton_prediction_request_count = 0
+        self.batch_422_retry_count = 0
 
     @property
     def headers(self) -> dict[str, str]:
@@ -145,6 +153,11 @@ class VLMGuidanceClient:
         front_images: Sequence[Any],
         wrist_images: Sequence[Any],
     ) -> dict[str, Any]:
+        self.prediction_http_request_count += 1
+        if len(items) > 1:
+            self.batch_prediction_request_count += 1
+        else:
+            self.singleton_prediction_request_count += 1
         files: dict[str, tuple[str | None, bytes | str, str]] = {}
         for request_idx, (front_image, wrist_image) in enumerate(
             zip(front_images, wrist_images)
@@ -182,8 +195,10 @@ class VLMGuidanceClient:
                 response_detail = str(getattr(response, "text", ""))
             response_detail = response_detail[:2048]
             suffix = f"; response={response_detail}" if response_detail else ""
+            status_code = getattr(response, "status_code", None)
             raise VLMGuidanceError(
-                f"VLM prediction request failed: {exc}{suffix}"
+                f"VLM prediction request failed: {exc}{suffix}",
+                status_code=(int(status_code) if status_code is not None else None),
             ) from exc
         try:
             return response.json()
@@ -214,13 +229,22 @@ class VLMGuidanceClient:
                 }
             )
 
-        # The reference original_sft visualizer generates one sample at a time.
-        # Greedy decoder output was empirically batch-sensitive on the deployed
-        # checkpoint (including malformed JSON in batch-3), so preserve n_envs
-        # simulation parallelism while issuing one model request per environment.
-        # Invalid singleton generations still fail closed; this is not a retry or
-        # a fallback to scripted annotations.
-        if self.ready_model_mode == "original_sft" and batch_size > 1:
+        try:
+            payload = self._post_prediction_batch(
+                task=task,
+                items=items,
+                front_images=front_images,
+                wrist_images=wrist_images,
+            )
+        except VLMGuidanceError as error:
+            should_retry_singletons = (
+                self.ready_model_mode == "original_sft"
+                and batch_size > 1
+                and error.status_code == 422
+            )
+            if not should_retry_singletons:
+                raise
+            self.batch_422_retry_count += 1
             payloads = [
                 self._post_prediction_batch(
                     task=task,
@@ -256,13 +280,6 @@ class VLMGuidanceClient:
                     payload["timing_ms"][str(key)] = payload["timing_ms"].get(
                         str(key), 0.0
                     ) + float(value)
-        else:
-            payload = self._post_prediction_batch(
-                task=task,
-                items=items,
-                front_images=front_images,
-                wrist_images=wrist_images,
-            )
 
         rows = payload.get("predictions")
         if payload.get("policy_version") != EXPECTED_POLICY_VERSION:
@@ -340,6 +357,15 @@ class VLMGuidanceClient:
             for key, value in dict(payload.get("timing_ms", {})).items()
         }
         return predictions, timing
+
+    def transport_stats(self) -> dict[str, int | str | None]:
+        return {
+            "model_mode": self.ready_model_mode,
+            "prediction_http_request_count": self.prediction_http_request_count,
+            "batch_prediction_request_count": self.batch_prediction_request_count,
+            "singleton_prediction_request_count": self.singleton_prediction_request_count,
+            "batch_422_retry_count": self.batch_422_retry_count,
+        }
 
 
 def policy_bundles_from_vlm(

@@ -1088,7 +1088,7 @@ if __name__ == "__main__":
             "VLM guidance ready: "
             f"url={args.vlm_base_url} revision={readiness.get('model_revision')} "
             f"device={readiness.get('device')} "
-            f"request_mode={'singleton' if readiness.get('model_mode') == 'original_sft' else 'batch'}"
+            f"request_mode={'batch_with_singleton_422_retry' if readiness.get('model_mode') == 'original_sft' else 'batch'}"
         )
 
     # Get the environment(s)
@@ -1109,6 +1109,7 @@ if __name__ == "__main__":
     summary_tracking_error: Optional[Dict[str, Any]] = None
     summary_vlm_point_error: Optional[Dict[str, Any]] = None
     summary_vlm_model_revision: Optional[str] = None
+    summary_saved_rollouts = 0
     summary_checkpoint_name: Optional[str] = None
     summary_checkpoint_path: Optional[str] = None
     summary_training_config: Optional[Dict[str, Any]] = None
@@ -1613,6 +1614,10 @@ if __name__ == "__main__":
                         "eval_command": sys.argv,
                         "n_success": rollout_stats.n_success,
                         "n_rollouts": rollout_stats.n_rollouts,
+                        "n_saved_rollouts": rollout_stats.n_saved_rollouts,
+                        "max_saved_rollouts": (
+                            args.max_saved_rollouts if args.max_saved_rollouts > 0 else None
+                        ),
                         "success_rate": success_rate,
                         "rollout_max_steps": rollout_stats.rollout_max_steps,
                         "total_return": rollout_stats.total_return,
@@ -1622,6 +1627,9 @@ if __name__ == "__main__":
                         "tracking_error": rollout_stats.tracking_error,
                         "vlm_point_error": rollout_stats.vlm_point_error,
                         "vlm_model_revision": rollout_stats.vlm_model_revision,
+                        "vlm_transport": (
+                            vlm_client.transport_stats() if vlm_client is not None else None
+                        ),
                         **_build_progress_summary(
                             task=task,
                             state_counts=rollout_stats.state_counts,
@@ -1743,6 +1751,7 @@ if __name__ == "__main__":
                     total_rollouts += rollout_stats.n_rollouts
                     summary_total_success += rollout_stats.n_success
                     summary_total_rollouts += rollout_stats.n_rollouts
+                    summary_saved_rollouts += rollout_stats.n_saved_rollouts
                     summary_state_counts = _merge_count_dicts(
                         summary_state_counts, rollout_stats.state_counts
                     )
@@ -1827,6 +1836,10 @@ if __name__ == "__main__":
                         "eval_command": sys.argv,
                         "n_success": summary_total_success,
                         "n_rollouts": summary_total_rollouts,
+                        "n_saved_rollouts": summary_saved_rollouts,
+                        "max_saved_rollouts": (
+                            args.max_saved_rollouts if args.max_saved_rollouts > 0 else None
+                        ),
                         "success_rate": (
                             summary_total_success / summary_total_rollouts
                             if summary_total_rollouts > 0
@@ -1835,6 +1848,9 @@ if __name__ == "__main__":
                         "tracking_error": summary_tracking_error,
                         "vlm_point_error": summary_vlm_point_error,
                         "vlm_model_revision": summary_vlm_model_revision,
+                        "vlm_transport": (
+                            vlm_client.transport_stats() if vlm_client is not None else None
+                        ),
                         **progress_summary,
                     },
                     f,
