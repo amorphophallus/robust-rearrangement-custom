@@ -24,6 +24,8 @@ CAMERA_KEY_TO_NAME = {
 }
 CAMERA_NAME_TO_KEY = {value: key for key, value in CAMERA_KEY_TO_NAME.items()}
 
+VALID_SKILLS = frozenset({"push", "pick", "place", "insert", "screw"})
+
 STATE_INFO_BASE_KEYS = (
     "ee_pos_sim",
     "ee_quat_sim",
@@ -297,6 +299,120 @@ def _target_point_2d_payload(guidance_point_2d: Any) -> Any:
     return _jsonify(guidance_point_2d.get("color_image2"))
 
 
+def _numeric_vector_error(value: Any, *, field: str, length: int) -> Optional[str]:
+    if value is None:
+        return f"{field}_null"
+    if not isinstance(value, (list, tuple)) or len(value) != length:
+        return f"{field}_shape"
+    if any(
+        isinstance(component, bool)
+        or not isinstance(component, (int, float))
+        or not np.isfinite(component)
+        for component in value
+    ):
+        return f"{field}_non_finite"
+    return None
+
+
+def _supervision_error(
+    payload: Any,
+    *,
+    front_image_shape: Optional[tuple[int, ...]] = None,
+) -> Optional[str]:
+    """Return a stable reason when an assistant label must not enter SFT data."""
+    if not isinstance(payload, dict):
+        return "assistant_not_object"
+
+    skill = payload.get("skill")
+    if skill is None:
+        return "skill_null"
+    if not isinstance(skill, str) or skill not in VALID_SKILLS:
+        return "skill_invalid"
+
+    error = _numeric_vector_error(
+        payload.get("target_point_2d"),
+        field="target_point_2d",
+        length=2,
+    )
+    if error:
+        return error
+
+    point_2d = payload["target_point_2d"]
+    if front_image_shape is not None:
+        if len(front_image_shape) < 2:
+            return "front_image_shape"
+        height, width = front_image_shape[:2]
+        u, v = point_2d
+        if not (0 <= u < width and 0 <= v < height):
+            return "target_point_2d_out_of_frame"
+
+    return _numeric_vector_error(
+        payload.get("target_point_3d"),
+        field="target_point_3d",
+        length=3,
+    )
+
+
+def _assistant_json_from_text(text: Any) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    if not isinstance(text, str) or not text.strip():
+        return None, "assistant_text_missing"
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None, "assistant_json_invalid"
+    error = _supervision_error(payload)
+    if error:
+        return None, error
+    return payload, None
+
+
+def _record_supervision_error(record: dict[str, Any]) -> Optional[str]:
+    _, _, assistant_text = _message_content(record)
+    _, error = _assistant_json_from_text(assistant_text)
+    return error
+
+
+def _filter_invalid_records(
+    records: Iterable[dict[str, Any]],
+    *,
+    skipped: Counter,
+    prefix: str,
+) -> list[dict[str, Any]]:
+    valid_records = []
+    for record in records:
+        error = _record_supervision_error(record)
+        if error:
+            skipped[f"{prefix}:{error}"] += 1
+            continue
+        valid_records.append(record)
+    return valid_records
+
+
+def _validate_output_records(records: Iterable[dict[str, Any]]) -> None:
+    seen_ids: set[str] = set()
+    for index, record in enumerate(records):
+        sample_id = record.get("id")
+        if not isinstance(sample_id, str) or not sample_id:
+            raise ValueError(f"Output record {index} has no valid id.")
+        if sample_id in seen_ids:
+            raise ValueError(f"Output dataset contains duplicate id: {sample_id}")
+        seen_ids.add(sample_id)
+
+        images = record.get("image")
+        if (
+            not isinstance(images, list)
+            or len(images) != 2
+            or any(not isinstance(path, str) or not path for path in images)
+        ):
+            raise ValueError(f"Output record {sample_id} must reference two images.")
+
+        error = _record_supervision_error(record)
+        if error:
+            raise ValueError(
+                f"Output record {sample_id} has invalid supervision: {error}"
+            )
+
+
 def _state_info_payload(obs: dict[str, Any]) -> dict[str, Any]:
     robot_state = obs.get("robot_state")
     if not isinstance(robot_state, dict):
@@ -495,6 +611,7 @@ def _write_records(
     formats: str,
     llamafactory_state_mode: str,
 ) -> dict[str, str]:
+    _validate_output_records(records)
     write_messages = formats in ("all", "both", "messages-jsonl")
     write_sharegpt = formats in ("all", "both", "sharegpt-json")
     write_llamafactory = formats in ("all", "llamafactory-json")
@@ -588,14 +705,29 @@ def convert_sharegpt_to_llamafactory(args: argparse.Namespace) -> dict[str, Any]
     if not isinstance(payload, list):
         raise ValueError(f"Expected a list in {input_file}.")
 
-    converted = [
-        _llamafactory_item_from_sharegpt(
-            item,
-            state_mode=args.llamafactory_state_mode,
-            system_prompt_override=args.system_prompt,
+    converted = []
+    skipped = Counter()
+    for item in payload:
+        conversations = item.get("conversations", [])
+        assistant_text = next(
+            (
+                turn.get("value", "")
+                for turn in conversations
+                if turn.get("from") == "gpt"
+            ),
+            "",
         )
-        for item in payload
-    ]
+        _, error = _assistant_json_from_text(assistant_text)
+        if error:
+            skipped[f"invalid_supervision:{error}"] += 1
+            continue
+        converted.append(
+            _llamafactory_item_from_sharegpt(
+                item,
+                state_mode=args.llamafactory_state_mode,
+                system_prompt_override=args.system_prompt,
+            )
+        )
     output_file.parent.mkdir(parents=True, exist_ok=True)
     _write_json(output_file, converted)
 
@@ -608,7 +740,10 @@ def convert_sharegpt_to_llamafactory(args: argparse.Namespace) -> dict[str, Any]
         "input_file": str(input_file),
         "output_file": str(output_file),
         "dataset_info_file": str(dataset_info_file),
+        "num_input_samples": len(payload),
         "num_samples": len(converted),
+        "num_skipped_invalid": sum(skipped.values()),
+        "skipped": dict(skipped),
         "llamafactory_state_mode": args.llamafactory_state_mode,
         "dataset_info": dataset_info,
     }
@@ -801,13 +936,18 @@ def convert_pickles_to_vlm_sft(args: argparse.Namespace) -> dict[str, Any]:
     image_dir = output_dir / "images"
     depth_dir = output_dir / "depth"
     output_dir.mkdir(parents=True, exist_ok=True)
-    existing_records = _prepare_output_dir(output_dir, args.output_mode)
+    skipped = Counter()
+    existing_input_records = _prepare_output_dir(output_dir, args.output_mode)
+    existing_records = _filter_invalid_records(
+        existing_input_records,
+        skipped=skipped,
+        prefix="invalid_existing_supervision",
+    )
     existing_ids = {str(record["id"]) for record in existing_records}
 
     pickle_paths = gather_pickle_paths(args, task_counts)
     selected_per_task: dict[str, int] = defaultdict(int)
     new_records: list[dict[str, Any]] = []
-    skipped = Counter()
 
     for pickle_path in pickle_paths:
         try:
@@ -854,6 +994,22 @@ def convert_pickles_to_vlm_sft(args: argparse.Namespace) -> dict[str, Any]:
                 skipped["missing_sim_local_eepose"] += 1
                 continue
 
+            try:
+                front_image = _as_image_uint8(obs["color_image2"])
+                wrist_image = _as_image_uint8(obs["color_image1"])
+            except Exception as exc:
+                skipped[f"image_error:{type(exc).__name__}"] += 1
+                continue
+
+            assistant_obj = _assistant_payload(obs, task=task)
+            supervision_error = _supervision_error(
+                assistant_obj,
+                front_image_shape=front_image.shape,
+            )
+            if supervision_error:
+                skipped[f"invalid_supervision:{supervision_error}"] += 1
+                continue
+
             sample_id = f"{task}_{rollout_index:05d}_{rollout_stem}_frame_{frame_idx:05d}"
             if sample_id in existing_ids:
                 skipped["duplicate_sample_id"] += 1
@@ -861,8 +1017,8 @@ def convert_pickles_to_vlm_sft(args: argparse.Namespace) -> dict[str, Any]:
             front_path = image_dir / task / f"{sample_id}_front.png"
             wrist_path = image_dir / task / f"{sample_id}_wrist.png"
             try:
-                _save_png(obs["color_image2"], front_path)
-                _save_png(obs["color_image1"], wrist_path)
+                _save_png(front_image, front_path)
+                _save_png(wrist_image, wrist_path)
             except Exception as exc:
                 skipped[f"image_error:{type(exc).__name__}"] += 1
                 continue
@@ -877,7 +1033,6 @@ def convert_pickles_to_vlm_sft(args: argparse.Namespace) -> dict[str, Any]:
                     depth_paths["wrist"] = _relative_to(wrist_depth_path, output_dir)
 
             state_info = _state_info_payload(obs)
-            assistant_obj = _assistant_payload(obs, task=task)
             assistant_text = json.dumps(assistant_obj, ensure_ascii=False, sort_keys=True)
             user_text = _user_prompt_with_state_info_placeholder(args.user_prompt)
 
@@ -934,6 +1089,7 @@ def convert_pickles_to_vlm_sft(args: argparse.Namespace) -> dict[str, Any]:
         "formats": outputs,
         "num_samples": len(records),
         "num_existing_samples": len(existing_records),
+        "num_existing_input_samples": len(existing_input_records),
         "num_new_samples": len(new_records),
         "requested_rollouts_per_task": task_counts,
         "selected_rollouts_per_task": dict(selected_per_task),
@@ -944,6 +1100,17 @@ def convert_pickles_to_vlm_sft(args: argparse.Namespace) -> dict[str, Any]:
             Counter(str(record["metadata"].get("task", "unknown")) for record in records)
         ),
         "skipped": dict(skipped),
+        "validation": {
+            "invalid_supervision_policy": "skip",
+            "valid_skills": sorted(VALID_SKILLS),
+            "required_non_null_fields": [
+                "skill",
+                "target_point_2d",
+                "target_point_3d",
+            ],
+            "target_point_2d_checked_against_front_image_bounds": True,
+            "final_output_validation": "strict",
+        },
         "schema": {
             "images": ["front RGB PNG", "wrist RGB PNG"],
             "assistant_json_keys": [

@@ -11,7 +11,7 @@
 
 `target_point_2d`
 
-2D target point 是 front camera 图像上的像素坐标 `[u, v]`，不再区分 front/wrist 两个字段。`u` 是从左到右增加的水平像素坐标，`v` 是从上到下增加的垂直像素坐标。坐标是在保存到数据集的 resized front image 上定义的，所以可以直接对应 `images/..._front.png` 的像素位置。没有 front 投影时 `target_point_2d = null`。
+2D target point 是 front camera 图像上的像素坐标 `[u, v]`，不再区分 front/wrist 两个字段。`u` 是从左到右增加的水平像素坐标，`v` 是从上到下增加的垂直像素坐标。坐标是在保存到数据集的 resized front image 上定义的，所以可以直接对应 `images/..._front.png` 的像素位置。没有有效 front 投影、坐标非有限数或坐标落在图像外时，该帧会被跳过，绝不会写成 `target_point_2d = null`。
 
 `target_point_3d`
 
@@ -26,6 +26,19 @@
 `state_info.extra` 是放进 user prompt 的额外本体信息，固定包含 `joint_positions`、`joint_velocities`、`joint_torques`。如果 pickle 中有 `parts_poses`，也会放到 `state_info.extra.parts_poses`。
 
 坐标语义还会记录在每条样本的 `metadata.coordinate_frames` 和 `manifest.schema.coordinate_frames` 中，方便训练或检查脚本读取；但不会放进 `state_info`，避免把说明文字拼到 user prompt。
+
+## 无效监督标签保护
+
+`convert` 和 `generate` 现在对每一帧先校验监督标签、再保存图片和 depth。以下任一情况都会跳过整条样本，并按原因记入 `manifest.json` 的 `skipped`：
+
+- `skill` 是 `null`、不是字符串，或不属于 `push/pick/place/insert/screw`。
+- `target_point_2d` 是 `null`、不是两个有限数，或不在该帧 front image 的像素范围内。
+- `target_point_3d` 是 `null`，或不是三个有限数。
+- assistant 文本不是合法 JSON（适用于 `to-llamafactory` 和 append 读取的旧数据）。
+
+在真正写出 `messages.jsonl`、ShareGPT 或 LLaMAFactory 文件前，工具还会对最终记录集合做一次严格校验：检查样本 ID 非空且无重复、每条样本恰好引用两张图片、assistant JSON 合法且三个监督字段都非空。严格校验失败会直接终止，不会留下部分新索引文件。
+
+`--output-mode append` 遇到旧索引中的坏标签会将其排除，并记录为 `invalid_existing_supervision:<reason>`。`to-llamafactory` 同样会过滤坏标签，在命令输出中报告 `num_input_samples`、`num_samples`、`num_skipped_invalid` 和各原因计数。这样即使上游 rollout 的 3D 点无法投影，也不会再把 `null` 当成可学习的 assistant label。
 
 ## 推荐用法
 
