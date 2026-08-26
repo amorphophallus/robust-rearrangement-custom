@@ -99,12 +99,14 @@ wandb summary 中最后一次 eval 记录的 test loss 和 test action mse error
 
 ## 3. 分步成功率分析
 
-下表只保留本地 JSON 可复核的 8 条 0610 run。`morning-glitter-1` / `eternal-cosmos-2` 的 A.4.1 路径当前在本地不存在，因此不在分步表中列出。每个单元格为 `completion_count / state_count`；`—` 表示没有 rollout 到达该 state/step。
+下表中的 8 条 0610 run 直接对应主表所用 JSON。`morning-glitter-1` / `eternal-cosmos-2` 在 A.4.1 中记录的 7 月原始路径已无法在 `base` 或当前 workspace 找到，因此不能从旧主表的同一批 rollout 恢复分步结果。为补全 grasp condition 的 skill-level 诊断，本节新增两组经过逐文件核验的 fresh36 clean `n0` 重评：每个 task 均为 low randomness、`N_ENVS=3`、36 rollouts、无 annotation noise，训练与评测 annotation flags 一致。它们的 task success 分别为 `55/108` 与 `61/108`，与主表旧值 `60/108` 与 `57/108` 不同，因而只用于 skill-level 分析，不能反向解释主表中的 grasp task success。精确路径和 SHA-256 见 A.4.3。
+
+每个单元格为 `completion_count / state_count`；`—` 表示没有 rollout 到达该 state/step。
 
 一致性审计：
-1. `one_leg` 的 `asm: top-leg` 与 `n_success` 完全一致；`round_table` 的最终 `asm: leg-base` 与 `n_success` 完全一致。
+1. 8 条 0610 run 中，`one_leg` 的 `asm: top-leg` 与 `n_success` 完全一致，`round_table` 的最终 `asm: leg-base` 与 `n_success` 完全一致。fresh36 grasp 重评中，`rgbd+grasp-part-colored` 的 round_table annotation 记录 `asm: leg-base=13`，但 evaluator 的 `n_success=15`，说明该批 step annotation 也有少量漏计。
 2. `lamp` 的旧 JSON 中最终 `asm: base-hood` 与 `n_success` 不一致（例如 `fresh-tree-11`: `n_success=20`, `base-hood=17`）。这说明旧 lamp hood/base annotation 有 undercount；在没有重跑 eval 或更完整逐帧 annotation 输入的前提下，不能可靠修复 hood/base 分步成功率。
-3. 因此 lamp 表保留 `base-hood` 作为“旧 annotation 诊断值”，不用于解释完整成功率；lamp 的主表 SR 仍以 eval JSON 的 `n_success / n_rollouts` 为准。
+3. 因此 assembly annotation 只作为诊断值，不用于替代 task success；task SR 始终以 eval JSON 的 `n_success / n_rollouts` 为准。单个 skill 的 `completion_count <= state_count` 以及 `skill_success_rate = completion_count / state_count` 已逐项复核通过。
 
 ### 3.1 one_leg skill success rates (cascading)
 
@@ -118,6 +120,8 @@ wandb summary 中最后一次 eval 记录的 test loss 和 test action mse error
 | rgbd+GP | icy-vortex-9 | 100.00% (36/36) | 97.22% (35/36) | 100.00% (35/35) | 97.14% (34/35) | 100.00% (34/34) | 91.18% (31/34) | 86.11% (31/36) |
 | rgbd+GP+skill | fresh-tree-11 | 100.00% (36/36) | 97.22% (35/36) | 100.00% (34/34) | 94.12% (32/34) | 100.00% (32/32) | 90.62% (29/32) | 83.33% (30/36) |
 | rgb | true-firefly-8 | 22.22% (8/36) | 0.00% (0/8) | — | — | — | — | 0.00% (0/36) |
+| rgbd+grasp-part † | morning-glitter-1 | 100.00% (36/36) | 80.56% (29/36) | 100.00% (29/29) | 100.00% (29/29) | 96.55% (28/29) | 96.43% (27/28) | 75.00% (27/36) |
+| rgbd+grasp-part-colored † | eternal-cosmos-2 | 100.00% (36/36) | 94.44% (34/36) | 100.00% (34/34) | 94.12% (32/34) | 100.00% (32/32) | 100.00% (32/32) | 88.89% (32/36) |
 
 ### 3.2 round_table skill success rates (cascading)
 
@@ -131,6 +135,8 @@ wandb summary 中最后一次 eval 记录的 test loss 和 test action mse error
 | rgbd+GP | icy-vortex-9 | 100.00% (36/36) | 91.67% (33/36) | 90.91% (30/33) | 100.00% (30/30) | 90.00% (27/30) | 92.59% (25/27) | 96.00% (24/25) | 100.00% (24/24) | 83.33% (20/24) | 75.00% (27/36) | 74.07% (20/27) |
 | rgbd+GP+skill | fresh-tree-11 | 100.00% (36/36) | 91.67% (33/36) | 96.97% (32/33) | 100.00% (32/32) | 75.00% (24/32) | 87.50% (21/24) | 100.00% (21/21) | 100.00% (21/21) | 85.71% (18/21) | 66.67% (24/36) | 75.00% (18/24) |
 | rgb | true-firefly-8 | 97.22% (35/36) | 77.14% (27/35) | 81.48% (22/27) | 100.00% (22/22) | 86.36% (19/22) | 68.42% (13/19) | 92.31% (12/13) | 100.00% (12/12) | 50.00% (6/12) | 52.78% (19/36) | 31.58% (6/19) |
+| rgbd+grasp-part † | morning-glitter-1 | 100.00% (36/36) | 77.78% (28/36) | 78.57% (22/28) | 100.00% (22/22) | 81.82% (18/22) | 94.44% (17/18) | 94.12% (16/17) | 87.50% (14/16) | 78.57% (11/14) | 50.00% (18/36) | 61.11% (11/18) |
+| rgbd+grasp-part-colored † | eternal-cosmos-2 | 100.00% (36/36) | 94.44% (34/36) | 82.35% (28/34) | 100.00% (28/28) | 71.43% (20/28) | 83.33% (15/18) | 86.67% (13/15) | 100.00% (13/13) | 100.00% (13/13) | 55.56% (20/36) | 72.22% (13/18) |
 
 ### 3.3 lamp skill success rates (cascading)
 
@@ -144,6 +150,25 @@ wandb summary 中最后一次 eval 记录的 test loss 和 test action mse error
 | rgbd+GP | icy-vortex-9 | 100.00% (36/36) | 100.00% (36/36) | 52.78% (19/36) | 100.00% (19/19) | 57.89% (11/19) | 100.00% (7/7) | 100.00% (7/7) | 30.56% (11/36) | 100.00% (7/7) |
 | rgbd+GP+skill | fresh-tree-11 | 100.00% (36/36) | 100.00% (36/36) | 75.00% (27/36) | 100.00% (27/27) | 74.07% (20/27) | 100.00% (17/17) | 100.00% (17/17) | 55.56% (20/36) | 100.00% (17/17) |
 | rgb | true-firefly-8 | 25.00% (9/36) | 22.22% (2/9) | 0.00% (0/2) | — | — | — | — | 0.00% (0/36) | — |
+| rgbd+grasp-part † | morning-glitter-1 | 97.22% (35/36) | 97.14% (34/35) | 64.71% (22/34) | 100.00% (22/22) | 81.82% (18/22) | 100.00% (9/9) | 88.89% (8/9) | 50.00% (18/36) | 88.89% (8/9) |
+| rgbd+grasp-part-colored † | eternal-cosmos-2 | 97.22% (35/36) | 97.14% (34/35) | 50.00% (17/34) | 100.00% (17/17) | 88.24% (15/17) | 92.31% (12/13) | 100.00% (12/12) | 41.67% (15/36) | 92.31% (12/13) |
+
+† fresh36 clean `n0` 重评，不是主表 grasp 行的原始 rollout batch。对应 task SR 为：`rgbd+grasp-part` = one_leg `27/36`、round_table `11/36`、lamp `17/36`；`rgbd+grasp-part-colored` = one_leg `32/36`、round_table `15/36`、lamp `14/36`。
+
+### 3.4 Cross-task skill-type success rates
+
+下表把同类型 skill 跨三个 task 汇总。每个值仍是 `完成次数 / 到达次数`，不是从 episode 起点计算的 task success。plain GP 行合并了三个 checkpoint；其余主实验 condition 各只有一个 checkpoint。fresh36 grasp 行来自单独的 clean `n0` 重评。由于不同 condition 到达的 task/state 组成不同，这张表适合定位“差异主要出现在哪类 skill”，不适合做显著性排序。
+
+| Condition | Source batch | Push | Pick | Place | Insert | Screw |
+|---|---|---:|---:|---:|---:|---:|
+| rgbd+only skill | 0610 main | 97.22% (105/108) | 95.32% (163/171) | 77.17% (98/127) | 97.73% (86/88) | 89.53% (77/86) |
+| rgbd+colored GP | 0610 main | 100.00% (108/108) | 98.29% (172/175) | 80.88% (110/136) | 99.00% (99/100) | 78.79% (78/99) |
+| rgbd+GP | 0610 main, 3 runs pooled | 99.38% (322/324) | 96.00% (504/525) | 83.84% (332/396) | 99.67% (304/305) | 78.29% (238/304) |
+| rgbd+GP+skill | 0610 main | 99.07% (107/108) | 96.72% (177/183) | **91.49% (129/141)** | 100.00% (112/112) | 81.25% (91/112) |
+| rgbd+grasp-part † | fresh36 clean n0 | 92.59% (100/108) | 93.87% (153/163) | 82.91% (97/117) | 96.63% (86/89) | 86.05% (74/86) |
+| rgbd+grasp-part-colored † | fresh36 clean n0 | 97.22% (105/108) | 95.93% (165/172) | 79.07% (102/129) | 100.00% (90/90) | 88.89% (80/90) |
+
+这组聚合最清楚的观察是：相对 `rgbd+only skill`，空间 condition 的增益主要集中在 `place`，其中 `rgbd+GP+skill` 从 `77.17%` 提高到 `91.49%`（`+14.32 pp`）；push、pick、insert 已接近 ceiling。相反，screw 没有因加入 GP 获得一致提升。该观察是描述性比较，尚不能排除 checkpoint seed、reset batch 和 cascading denominator composition 的影响。
 
 
 
@@ -242,3 +267,22 @@ wandb summary 最后一次 eval 记录的值（不一定是 3000 epoch 末尾；
 | icy-vortex-9 | 2000 | `one_leg/multi-task-rgbd-skill-low-0610_icy-vortex-9_latest_2000/2026-06-15T22-31-39.json` | `round_table/multi-task-rgbd-skill-low-0610_icy-vortex-9_latest_2000/2026-06-15T22-57-40.json` | `lamp/multi-task-rgbd-skill-low-0610_icy-vortex-9_latest_2000/2026-06-15T23-20-55.json` |
 | fresh-tree-11 | 2000 | `one_leg/multi-task-rgbd-skill-low-0610_fresh-tree-11_latest_2000/2026-06-16T02-51-34.json` | `round_table/multi-task-rgbd-skill-low-0610_fresh-tree-11_latest_2000/2026-06-16T03-17-30.json` | `lamp/multi-task-rgbd-skill-low-0610_fresh-tree-11_latest_2000/2026-06-16T03-40-53.json` |
 | true-firefly-8 | 2000 | `one_leg/multi-task-rgbd-skill-low-0610_true-firefly-8_latest_2000/2026-06-16T04-02-43.json` | `round_table/multi-task-rgbd-skill-low-0610_true-firefly-8_latest_2000/2026-06-16T04-27-54.json` | `lamp/multi-task-rgbd-skill-low-0610_true-firefly-8_latest_2000/2026-06-16T04-50-39.json` |
+
+#### A.4.3 Grasp condition 的 verified fresh36 clean n0 来源
+
+A.4.1 中 grasp condition 的 7 月 JSON 路径在 `base` 与当前 workspace 均不存在，无法恢复主表原始分步计数。第 3 节标记 † 的行改用下列 fresh36 clean `n0` 重评。逐文件审计确认：`eval_randomness=low`、`N_ENVS=3`、每 task 36 rollouts、`annotation_noise_config.enabled=false`、`perturb_mode=none`；policy 的 grasp/grasp-colored flags 与 checkpoint training config 一致，且 `annotate_skill_one_hot=false`、`annotate_guidance_point=false`。
+
+查证根目录仍为 `/home/huyue/projects/robust-rearrangement-custom/logs/evaluate_model/`。
+
+| Condition | Task | JSON path | SHA-256 |
+|---|---|---|---|
+| rgbd+grasp-part | one_leg | `one_leg/multi-task-rgbd-skill-low-grasp-annotation_morning-glitter-1_last/2026-08-04T13-38-38.json` | `de11a9d16a0332b6dc3394e71a90409555187c1e0d0534f891fabc18bc916de4` |
+| rgbd+grasp-part | round_table | `round_table/multi-task-rgbd-skill-low-grasp-annotation_morning-glitter-1_last/2026-08-04T14-02-16.json` | `b3ab4c9a74e463306292f02d2069207e9a223684764555eb57e583e6790ce92f` |
+| rgbd+grasp-part | lamp | `lamp/multi-task-rgbd-skill-low-grasp-annotation_morning-glitter-1_last/2026-08-04T14-24-39.json` | `ed329a8d3df549cdec06c74fba12b13741d5a02290eb0ffdefbd1fe6020553bf` |
+| rgbd+grasp-part | aggregate | `one_leg+round_table+lamp/multi-task-rgbd-skill-low-grasp-annotation_morning-glitter-1_last/2026-08-04T14-24-40.json` | `cb54b5e936b863d449b10582c32809a909fda95e0d960271c5e41ac30533846f` |
+| rgbd+grasp-part-colored | one_leg | `one_leg/multi-task-rgbd-skill-low-grasp-annotation_eternal-cosmos-2_last/2026-08-04T18-22-00.json` | `233fa5b41b017656da11c0abf4c5459baec969c0e31f7bddeb5d29f8dc40010e` |
+| rgbd+grasp-part-colored | round_table | `round_table/multi-task-rgbd-skill-low-grasp-annotation_eternal-cosmos-2_last/2026-08-04T18-46-02.json` | `10cee7ede534e0a55d30cd5ea0adf7eba1736d3b810b09fb9340b77a047f5d49` |
+| rgbd+grasp-part-colored | lamp | `lamp/multi-task-rgbd-skill-low-grasp-annotation_eternal-cosmos-2_last/2026-08-04T19-07-05.json` | `396d8e5344512eb306da44c0d17047641bc80929297f293d313dc2da216843ef` |
+| rgbd+grasp-part-colored | aggregate | `one_leg+round_table+lamp/multi-task-rgbd-skill-low-grasp-annotation_eternal-cosmos-2_last/2026-08-04T19-07-07.json` | `967bae9250236ff8bbc5cc367737af40af16aea3f2a31e6b378c863e4def699a` |
+
+验证结果：6 个 task JSON 与 aggregate 内嵌的 `per_task` 记录逐字段一致；44 个 `(condition, task, skill_state)` 的 completion/reached count 与 `reports/data/fresh36/annotation_noise_clean_train_per_step.csv` 逐行一致；10 个 `(condition, skill_type)` 聚合值与 `annotation_noise_clean_train_skill_type.csv` 的求和结果一致。已知 annotation 缺口为 `rgbd+grasp-part-colored / round_table` 的 `asm: leg-base=13` 与 evaluator `n_success=15` 不一致，以及两个 lamp run 的 `base-hood` 均低于 evaluator `n_success`；因此 assembly annotation 不用于替代 task SR。

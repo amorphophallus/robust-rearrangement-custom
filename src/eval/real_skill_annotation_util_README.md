@@ -52,9 +52,26 @@ python -m src.eval.real_skill_annotation_util input.pkl \
 - `guidance_point_2d`、`grasp_annotation_2d`
 - `guidance`、`real_annotation_debug`
 
-pickle 根目录写入 `annotation_source=real_skill_annotation_util`，完整配置和统计位于
+pickle 根目录写入 `annotation_source=real_skill_annotation_util` 和
+`annotation_status=annotated`，完整配置和统计位于
 `metadata.real_skill_annotation`。RGB、原始 `parts_poses` 和 `parts_founds` 不会被
 绘制或覆盖；SAM2 pose 也只作为标注计算的临时 overlay。
+
+## 标注与未标注数据分层
+
+同一批数采数据统一使用以下目录，避免仅凭文件名猜测标注状态：
+
+```text
+success/
+  annotated/    # 可直接用于后续处理；根 key 为 annotation_status=annotated
+  unannotated/  # 保留的原始数据；根 key 为 annotation_status=unannotated
+```
+
+离线标注时从 `unannotated/` 读取，并通过 `--output` 把结果写入
+`annotated/`，不要覆盖唯一的原始数据。标注程序会自动写入 `annotated` 状态；给
+原始数据分层时需要显式写入 `unannotated` 状态。现有训练数据处理器会递归发现
+pickle，因此允许在 `success/` 下增加这两层目录；但处理时必须把输入目录明确
+指向 `success/annotated/`，不要指向同时包含两类数据的父目录 `success/`。
 
 ## 实时逐帧接口
 

@@ -44,7 +44,10 @@ from src.eval.real_pose_provider import PartPoseEstimate, PartPoseProvider
 
 
 ANNOTATION_SOURCE = "real_skill_annotation_util"
-ANNOTATION_VERSION = 8
+ANNOTATION_VERSION = 9
+ANNOTATION_STATUS_KEY = "annotation_status"
+ANNOTATION_STATUS_ANNOTATED = "annotated"
+ANNOTATION_STATUS_UNANNOTATED = "unannotated"
 DEFAULT_POSE_TRACKING_POLICY = "april_tag_then_ee_rigid"
 SUPPORTED_FURNITURE = {"one_leg"}
 _OBSTACLE_NAMES = ("obstacle_front", "obstacle_right", "obstacle_left")
@@ -210,7 +213,6 @@ class RealSkillAnnotator(SkillAnnotator):
     attached_detection_gate_m: float = 0.040
     relocalization_gate_m: float = 0.030
     relocalization_frames: int = 3
-    table_release_displacement_m: float = 0.10
 
     def __post_init__(self):
         if self.furniture_name not in SUPPORTED_FURNITURE:
@@ -385,25 +387,6 @@ class RealSkillAnnotator(SkillAnnotator):
                 self.april_to_robot @ _pose_vector_to_matrix(tracker.pose_april)
             ).astype(np.float32)
         return tracker.pose_april.copy()
-
-    def _part_displacement_from_start(
-        self, part_name: str, annotation_inputs: Mapping[str, Any]
-    ) -> float:
-        initial_pose = self._initial_part_pose_robot.get(part_name)
-        if initial_pose is None:
-            return 0.0
-        idx = annotation_inputs["part_idxs"][part_name][0]
-        pose_april = annotation_inputs["rb_states"][idx]
-        current_pose_april = C.to_homogeneous(
-            pose_april[:3], C.quat2mat(pose_april[3:7])
-        )
-        current_pose_robot = annotation_inputs["april_to_robot_mat"] @ current_pose_april
-        return float(
-            torch.linalg.norm(
-                current_pose_robot[:2, 3]
-                - torch.as_tensor(initial_pose[:2, 3], dtype=torch.float32)
-            ).item()
-        )
 
     @staticmethod
     def _longest_part_length(operated_part) -> float:
@@ -765,8 +748,6 @@ class RealSkillAnnotator(SkillAnnotator):
                 skill_state == "push"
                 and not self._gripper_closed
                 and self._attached_part_name == part1.name
-                and self._part_displacement_from_start(part1.name, annotation_inputs)
-                >= self.table_release_displacement_m
             )
             if released_after_push:
                 part1.skill_state = "done"
@@ -1253,6 +1234,7 @@ class RealSkillAnnotationSession:
             mode=self.mode,
         )
         data["annotation_source"] = ANNOTATION_SOURCE
+        data[ANNOTATION_STATUS_KEY] = ANNOTATION_STATUS_ANNOTATED
 
 
 def annotate_trajectory(

@@ -8,6 +8,8 @@ import torch
 
 from src.eval.real_skill_annotation_util import (
     ANNOTATION_SOURCE,
+    ANNOTATION_STATUS_ANNOTATED,
+    ANNOTATION_STATUS_KEY,
     DEFAULT_POSE_TRACKING_POLICY,
     LEG_TO_EE_LENGTH_FRACTION,
     RealSkillAnnotator,
@@ -137,6 +139,9 @@ class RealSkillAnnotationUtilTest(unittest.TestCase):
         self.assertEqual(session.stats.frame_count, 3)
         self.assertEqual(trajectory["observations"][0]["skill"], "pick")
         self.assertEqual(trajectory["annotation_source"], ANNOTATION_SOURCE)
+        self.assertEqual(
+            trajectory[ANNOTATION_STATUS_KEY], ANNOTATION_STATUS_ANNOTATED
+        )
         metadata = trajectory["metadata"]["real_skill_annotation"]
         self.assertEqual(metadata["mode"], "online")
         self.assertEqual(metadata["stats"]["frame_count"], 3)
@@ -279,6 +284,25 @@ class RealSkillAnnotationUtilTest(unittest.TestCase):
             "tracked_tabletop_center",
         )
 
+    def test_tabletop_release_finishes_push_without_displacement_threshold(self):
+        annotator = RealSkillAnnotator("one_leg")
+        annotator.annotate_observation(
+            _observation(), _camera_info(), frame_idx=0
+        )
+        annotator.annotate_observation(
+            _observation(gripper_width=0.01), _camera_info(), frame_idx=1
+        )
+        push = annotator.annotate_observation(
+            _observation(gripper_width=0.01), _camera_info(), frame_idx=2
+        )
+        after_release = annotator.annotate_observation(
+            _observation(gripper_width=0.08), _camera_info(), frame_idx=3
+        )
+
+        self.assertEqual(push["skill"], "push")
+        self.assertTrue(annotator.furniture.parts[0].pre_assemble_done)
+        self.assertEqual(after_release["debug"]["phase"], "assemble")
+
     def test_defaults_to_new_file_and_supports_atomic_overwrite(self):
         with tempfile.TemporaryDirectory() as directory:
             tmp_path = Path(directory)
@@ -294,6 +318,9 @@ class RealSkillAnnotationUtilTest(unittest.TestCase):
             self.assertIsNone(original["observations"][0]["skill"])
             self.assertEqual(annotated["observations"][0]["skill"], "pick")
             self.assertEqual(annotated["annotation_source"], ANNOTATION_SOURCE)
+            self.assertEqual(
+                annotated[ANNOTATION_STATUS_KEY], ANNOTATION_STATUS_ANNOTATED
+            )
             self.assertIn("target_point", annotated["observations"][0]["guidance"])
             annotation_metadata = annotated["metadata"]["real_skill_annotation"]
             self.assertEqual(

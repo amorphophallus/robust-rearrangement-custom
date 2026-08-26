@@ -78,25 +78,58 @@ def lmdb_shard_path(base_path: Path, shard_index: int) -> Path:
     return base_path.with_name(f"{base_path.stem}-{shard_index}{base_path.suffix}")
 
 
+LMDB_DOMAIN_TAGS = ("real", "sim")
+
+
 def lmdb_shard_sort_key(path: Path):
-    match = re.match(r"^(?P<stem>.*)-(?P<index>\d+)\.lmdb$", path.name)
-    if match:
-        return (match.group("stem"), 1, int(match.group("index")), path.name)
-    return (path.stem, 0, 0, path.name)
+    match = re.match(
+        r"^(?P<stem>.*?)(?:-(?P<tag>real|sim))?(?:-(?P<index>\d+))?\.lmdb$",
+        path.name,
+    )
+    if not match:
+        return (path.stem, 0, 0, 0, path.name)
+
+    tag = match.group("tag")
+    index = match.group("index")
+    family_order = {None: 0, "real": 1, "sim": 2}[tag]
+    return (
+        match.group("stem"),
+        family_order,
+        1 if index is not None else 0,
+        int(index) if index is not None else 0,
+        path.name,
+    )
+
+
+def lmdb_family_pattern(base_path: Path) -> re.Pattern:
+    """Return the accepted LMDB family pattern for a requested dataset path."""
+
+    base_path = Path(base_path)
+    explicit_tag = next(
+        (tag for tag in LMDB_DOMAIN_TAGS if base_path.stem.endswith(f"-{tag}")),
+        None,
+    )
+    escaped_stem = re.escape(base_path.stem)
+    escaped_suffix = re.escape(base_path.suffix)
+
+    if explicit_tag is not None:
+        return re.compile(rf"^{escaped_stem}(?:-\d+)?{escaped_suffix}$")
+
+    tags = "|".join(re.escape(tag) for tag in LMDB_DOMAIN_TAGS)
+    return re.compile(
+        rf"^{escaped_stem}(?:-\d+|-(?:{tags})(?:-\d+)?)?{escaped_suffix}$"
+    )
 
 
 def expand_lmdb_shard_paths(base_path: Path) -> List[Path]:
     base_path = Path(base_path)
     paths = []
-    if base_path.exists():
-        paths.append(base_path)
-
-    pattern = re.compile(
-        rf"^{re.escape(base_path.stem)}-(\d+){re.escape(base_path.suffix)}$"
-    )
+    pattern = lmdb_family_pattern(base_path)
     if base_path.parent.exists():
-        for candidate in base_path.parent.glob(f"{base_path.stem}-*{base_path.suffix}"):
-            if pattern.match(candidate.name) and candidate.exists():
+        for candidate in base_path.parent.glob(
+            f"{base_path.stem}*{base_path.suffix}"
+        ):
+            if pattern.fullmatch(candidate.name) and candidate.exists():
                 paths.append(candidate)
 
     return sorted(set(paths), key=lmdb_shard_sort_key)
@@ -196,7 +229,14 @@ def get_processed_paths(
     if dataset_format == "lmdb":
         lmdb_paths = []
         for path in paths:
-            if has_glob_magic(path):
+            if has_glob_magic(path.parent) and not has_glob_magic(Path(path.name)):
+                for parent in glob(str(path.parent), recursive=True):
+                    parent = Path(parent)
+                    if parent.is_dir():
+                        lmdb_paths.extend(
+                            expand_lmdb_shard_paths(parent / path.name)
+                        )
+            elif has_glob_magic(path):
                 lmdb_paths.extend(
                     Path(match) for match in glob(str(path), recursive=True)
                 )
