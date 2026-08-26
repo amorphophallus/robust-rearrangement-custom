@@ -14,6 +14,9 @@ GUIDANCE_POINT_COLOR_MAP = {
     "push": (255, 0, 0),
     "insert": (255, 0, 0),
 }
+DEFAULT_GUIDANCE_POINT_COLOR_RGB = (255, 0, 0)
+GUIDANCE_POINT_ALPHA = 0.5
+GUIDANCE_POINT_RADIUS_PX = 2
 GRASP_COLOR_GROUP_A = {"pick", "screw"}
 GRASP_COLOR_GROUP_B = {"place", "push", "insert"}
 
@@ -44,6 +47,55 @@ def _to_numpy(value):
     return np.asarray(value)
 
 
+def resize_guidance_point_for_image(
+    guidance_point_2d,
+    *,
+    image_key: str,
+    source_image_size,
+    image_shape,
+):
+    """Map a projected guidance point to the rendered image resolution.
+
+    This is the shared transform used by simulator rollouts and offline
+    real-robot videos. Wrist images are resized directly. Front images follow
+    the simulator's resize-to-height then horizontal-center-crop path.
+    ``source_image_size`` is ``(width, height)``.
+    """
+    if guidance_point_2d is None or source_image_size is None:
+        return guidance_point_2d
+
+    source_width, source_height = [int(v) for v in source_image_size]
+    target_height, target_width = [int(v) for v in image_shape[:2]]
+    if source_width == target_width and source_height == target_height:
+        return guidance_point_2d
+
+    uv = np.asarray(guidance_point_2d, dtype=np.float32)
+    if image_key == "color_image1":
+        sx = target_width / max(source_width, 1)
+        sy = target_height / max(source_height, 1)
+        uv = np.array([uv[0] * sx, uv[1] * sy], dtype=np.float32)
+    elif image_key == "color_image2":
+        aspect_ratio = source_width / max(source_height, 1)
+        resized_width = int(target_height * aspect_ratio)
+        crop_size = max(0, (resized_width - target_width) // 2)
+        sx = resized_width / max(source_width, 1)
+        sy = target_height / max(source_height, 1)
+        uv = np.array(
+            [uv[0] * sx - crop_size, uv[1] * sy], dtype=np.float32
+        )
+    else:
+        return guidance_point_2d
+
+    if (
+        uv[0] < 0
+        or uv[0] >= target_width
+        or uv[1] < 0
+        or uv[1] >= target_height
+    ):
+        return None
+    return uv.astype(np.float32)
+
+
 def draw_guidance_point_on_image(
     image: np.ndarray,
     guidance_point_2d,
@@ -58,19 +110,25 @@ def draw_guidance_point_on_image(
     if use_skill_color and skill and skill in GUIDANCE_POINT_COLOR_MAP:
         point_color = GUIDANCE_POINT_COLOR_MAP[skill]
     else:
-        point_color = (255, 0, 0)
+        point_color = DEFAULT_GUIDANCE_POINT_COLOR_RGB
 
     def _draw_point(frame: np.ndarray, center: tuple[int, int]) -> np.ndarray:
         overlay = frame.copy()
         cv2.circle(
             overlay,
             center,
-            2,
+            GUIDANCE_POINT_RADIUS_PX,
             point_color,
             thickness=-1,
             lineType=cv2.LINE_AA,
         )
-        return cv2.addWeighted(overlay, 0.5, frame, 0.5, 0.0)
+        return cv2.addWeighted(
+            overlay,
+            GUIDANCE_POINT_ALPHA,
+            frame,
+            1.0 - GUIDANCE_POINT_ALPHA,
+            0.0,
+        )
 
     if annotated.ndim == 4:
         if annotated.shape[0] != 1:

@@ -24,6 +24,7 @@ from src.behavior.base import (
     model_uses_guidance_point_colored,
 )
 from src.common.skills import batch_skills_to_onehot_tensor
+from src.common.image_annotations import resize_guidance_point_for_image
 from src.visualization.render_mp4 import create_in_memory_mp4
 from src.common.context import suppress_all_output
 from src.common.tasks import task2idx
@@ -303,36 +304,15 @@ def _resize_guidance_point_for_image(
     image_key: str,
     image_shape,
 ):
-    if guidance_point_2d is None:
-        return None
-
     camera_info = bundle.get("camera_info", {}).get(image_key)
     if not camera_info:
         return guidance_point_2d
-
-    source_width, source_height = [int(v) for v in camera_info["image_size"]]
-    target_height, target_width = image_shape[:2]
-    if source_width == target_width and source_height == target_height:
-        return guidance_point_2d
-
-    uv = np.asarray(guidance_point_2d, dtype=np.float32)
-    if image_key == "color_image1":
-        sx = target_width / max(source_width, 1)
-        sy = target_height / max(source_height, 1)
-        uv = np.array([uv[0] * sx, uv[1] * sy], dtype=np.float32)
-    elif image_key == "color_image2":
-        aspect_ratio = source_width / max(source_height, 1)
-        resized_width = int(target_height * aspect_ratio)
-        crop_size = max(0, (resized_width - target_width) // 2)
-        sx = resized_width / max(source_width, 1)
-        sy = target_height / max(source_height, 1)
-        uv = np.array([uv[0] * sx - crop_size, uv[1] * sy], dtype=np.float32)
-    else:
-        return guidance_point_2d
-
-    if uv[0] < 0 or uv[0] >= target_width or uv[1] < 0 or uv[1] >= target_height:
-        return None
-    return uv.astype(np.float32)
+    return resize_guidance_point_for_image(
+        guidance_point_2d,
+        image_key=image_key,
+        source_image_size=camera_info["image_size"],
+        image_shape=image_shape,
+    )
 
 
 def _resize_grasp_annotation_for_image(
