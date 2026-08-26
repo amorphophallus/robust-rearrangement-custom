@@ -22,6 +22,7 @@ import os
 import pickle
 import tempfile
 from collections import Counter
+from collections.abc import MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, Iterable, Mapping, Optional, Sequence, Tuple
@@ -1111,81 +1112,47 @@ def _observation_with_pose_estimate(
     return overlay
 
 
-def annotate_trajectory(
-    data: Dict[str, Any],
-    *,
-    pose_provider: Optional[PartPoseProvider] = None,
-) -> RealAnnotationStats:
-    observations = data.get("observations")
-    if not isinstance(observations, list) or not observations:
-        raise ValueError("Trajectory must contain a non-empty observations list")
-    furniture_name = data.get("furniture", data.get("task"))
-    if furniture_name not in SUPPORTED_FURNITURE:
-        raise ValueError(
-            f"Real annotation currently supports {sorted(SUPPORTED_FURNITURE)}, "
-            f"got {furniture_name!r}"
-        )
-    camera_info = data.get("camera_info")
-    if not isinstance(camera_info, Mapping):
-        raise ValueError("Trajectory is missing camera_info")
+_ANNOTATION_FIELDS = (
+    "skill",
+    "skill_state",
+    "assembly_step",
+    "guidance_point",
+    "guidance_point_clean",
+    "guidance_pose",
+    "guidance_pose_clean",
+    "guidance_gripper_width",
+    "guidance_point_2d",
+    "grasp_annotation_2d",
+)
 
-    annotator = RealSkillAnnotator(str(furniture_name))
-    part_indices = {
-        part.name: part.part_idx for part in annotator.furniture.parts
+
+def _apply_annotation_bundle(
+    observation: MutableMapping[str, Any], bundle: Mapping[str, Any]
+) -> None:
+    for key in _ANNOTATION_FIELDS:
+        observation[key] = bundle[key]
+    observation["guidance"] = {
+        "source": ANNOTATION_SOURCE,
+        "target_point": bundle["guidance_point"],
+        "target_point_frame": "robot_base",
+        "target_point_2d": bundle["guidance_point_2d"],
+        "skill": bundle["skill"],
+        "skill_state": bundle["skill_state"],
     }
-    for frame_idx, observation in enumerate(observations):
-        estimate = (
-            None
-            if pose_provider is None
-            else pose_provider.estimate(frame_idx, observation)
-        )
-        annotation_observation = (
-            observation
-            if estimate is None
-            else _observation_with_pose_estimate(
-                observation, estimate, part_indices
-            )
-        )
-        bundle = annotator.annotate_observation(
-            annotation_observation, camera_info, frame_idx=frame_idx
-        )
-        if estimate is not None:
-            bundle["debug"]["pose_override"] = {
-                "part_name": estimate.part_name,
-                "source": estimate.source,
-                "confidence": estimate.confidence,
-                **dict(estimate.details),
-            }
-        for key in (
-            "skill",
-            "skill_state",
-            "assembly_step",
-            "guidance_point",
-            "guidance_point_clean",
-            "guidance_pose",
-            "guidance_pose_clean",
-            "guidance_gripper_width",
-            "guidance_point_2d",
-            "grasp_annotation_2d",
-        ):
-            observation[key] = bundle[key]
-        observation["guidance"] = {
-            "source": ANNOTATION_SOURCE,
-            "target_point": bundle["guidance_point"],
-            "target_point_frame": "robot_base",
-            "target_point_2d": bundle["guidance_point_2d"],
-            "skill": bundle["skill"],
-            "skill_state": bundle["skill_state"],
-        }
-        observation["real_annotation_debug"] = bundle["debug"]
+    observation["real_annotation_debug"] = bundle["debug"]
 
-    stats = annotator.stats
-    metadata = data.setdefault("metadata", {})
-    if not isinstance(metadata, dict):
-        raise ValueError("Trajectory metadata must be a mapping when present")
-    metadata["real_skill_annotation"] = {
+
+def _real_annotation_metadata(
+    stats: RealAnnotationStats,
+    *,
+    pose_provider: Optional[PartPoseProvider],
+    mode: str,
+) -> Dict[str, Any]:
+    metadata = {
         "source": ANNOTATION_SOURCE,
         "version": ANNOTATION_VERSION,
+        "mode": mode,
+        "complete": True,
         "target_point_frame": "robot_base",
         "front_projection_transform": "camera_to_april",
         "wrist_projection_transform": "robot_state.wrist_pose",
@@ -1207,11 +1174,115 @@ def annotate_trajectory(
         "stats": stats.as_dict(),
     }
     if pose_provider is not None:
-        metadata["real_skill_annotation"]["pose_provider"] = (
-            pose_provider.metadata()
+        metadata["pose_provider"] = pose_provider.metadata()
+    return metadata
+
+
+class RealSkillAnnotationSession:
+    """Stateful per-frame API shared by live and offline annotation."""
+
+    def __init__(
+        self,
+        furniture_name: str,
+        camera_info: Mapping[str, Any],
+        *,
+        pose_provider: Optional[PartPoseProvider] = None,
+        mode: str = "online",
+    ):
+        if not isinstance(camera_info, Mapping):
+            raise ValueError("Real annotation requires trajectory camera_info")
+        if mode not in {"online", "offline"}:
+            raise ValueError(f"Unsupported real annotation mode {mode!r}")
+        self.camera_info = camera_info
+        self.pose_provider = pose_provider
+        self.mode = mode
+        self.annotator = RealSkillAnnotator(str(furniture_name))
+        self.part_indices = {
+            part.name: part.part_idx for part in self.annotator.furniture.parts
+        }
+        self.frame_idx = 0
+
+    @property
+    def stats(self) -> RealAnnotationStats:
+        return self.annotator.stats
+
+    def reset(self) -> None:
+        self.annotator.reset()
+        self.frame_idx = 0
+
+    def annotate_observation(
+        self, observation: MutableMapping[str, Any]
+    ) -> Dict[str, Any]:
+        if not isinstance(observation, MutableMapping):
+            raise ValueError("Real annotation observation must be mutable")
+        estimate = (
+            None
+            if self.pose_provider is None
+            else self.pose_provider.estimate(self.frame_idx, observation)
         )
-    data["annotation_source"] = ANNOTATION_SOURCE
-    return stats
+        annotation_observation = (
+            observation
+            if estimate is None
+            else _observation_with_pose_estimate(
+                observation, estimate, self.part_indices
+            )
+        )
+        bundle = self.annotator.annotate_observation(
+            annotation_observation,
+            self.camera_info,
+            frame_idx=self.frame_idx,
+        )
+        if estimate is not None:
+            bundle["debug"]["pose_override"] = {
+                "part_name": estimate.part_name,
+                "source": estimate.source,
+                "confidence": estimate.confidence,
+                **dict(estimate.details),
+            }
+        _apply_annotation_bundle(observation, bundle)
+        self.frame_idx += 1
+        return bundle
+
+    def update_trajectory_metadata(self, data: MutableMapping[str, Any]) -> None:
+        metadata = data.setdefault("metadata", {})
+        if not isinstance(metadata, MutableMapping):
+            raise ValueError("Trajectory metadata must be a mapping when present")
+        metadata["real_skill_annotation"] = _real_annotation_metadata(
+            self.stats,
+            pose_provider=self.pose_provider,
+            mode=self.mode,
+        )
+        data["annotation_source"] = ANNOTATION_SOURCE
+
+
+def annotate_trajectory(
+    data: Dict[str, Any],
+    *,
+    pose_provider: Optional[PartPoseProvider] = None,
+) -> RealAnnotationStats:
+    observations = data.get("observations")
+    if not isinstance(observations, list) or not observations:
+        raise ValueError("Trajectory must contain a non-empty observations list")
+    furniture_name = data.get("furniture", data.get("task"))
+    if furniture_name not in SUPPORTED_FURNITURE:
+        raise ValueError(
+            f"Real annotation currently supports {sorted(SUPPORTED_FURNITURE)}, "
+            f"got {furniture_name!r}"
+        )
+    camera_info = data.get("camera_info")
+    if not isinstance(camera_info, Mapping):
+        raise ValueError("Trajectory is missing camera_info")
+
+    session = RealSkillAnnotationSession(
+        str(furniture_name),
+        camera_info,
+        pose_provider=pose_provider,
+        mode="offline",
+    )
+    for observation in observations:
+        session.annotate_observation(observation)
+    session.update_trajectory_metadata(data)
+    return session.stats
 
 
 class _NumpyCompatUnpickler(pickle.Unpickler):

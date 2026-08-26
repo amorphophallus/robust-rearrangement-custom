@@ -11,6 +11,7 @@ from src.eval.real_skill_annotation_util import (
     DEFAULT_POSE_TRACKING_POLICY,
     LEG_TO_EE_LENGTH_FRACTION,
     RealSkillAnnotator,
+    RealSkillAnnotationSession,
     _parse_args,
     annotate_pickle,
     load_trajectory_pickle,
@@ -120,6 +121,26 @@ def _trajectory():
 
 
 class RealSkillAnnotationUtilTest(unittest.TestCase):
+    def test_stateful_session_supports_online_annotation_and_metadata(self):
+        trajectory = _trajectory()
+        session = RealSkillAnnotationSession(
+            "one_leg",
+            trajectory["camera_info"],
+            mode="online",
+        )
+
+        for observation in trajectory["observations"]:
+            session.annotate_observation(observation)
+        session.update_trajectory_metadata(trajectory)
+
+        self.assertEqual(session.frame_idx, 3)
+        self.assertEqual(session.stats.frame_count, 3)
+        self.assertEqual(trajectory["observations"][0]["skill"], "pick")
+        self.assertEqual(trajectory["annotation_source"], ANNOTATION_SOURCE)
+        metadata = trajectory["metadata"]["real_skill_annotation"]
+        self.assertEqual(metadata["mode"], "online")
+        self.assertEqual(metadata["stats"]["frame_count"], 3)
+
     def test_cli_defaults_to_rigid_and_exposes_sam2_backup(self):
         rigid_args = _parse_args(["demo.pkl"])
         self.assertIsNone(rigid_args.sam2_tabletop_recovery)
