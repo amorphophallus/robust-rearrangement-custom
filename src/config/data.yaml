@@ -1,8 +1,10 @@
 data:
   test_split: 0.05
   data_subset: null
-  dataloader_workers: 16
-  persistent_workers: false
+  # Validated on local zstd LMDB storage: four workers per rank outperformed
+  # higher reader counts, while persistent workers avoid per-epoch restarts.
+  dataloader_workers: 4
+  persistent_workers: true
   prefetch_factor: 2
   async_device_prefetch: false
   pred_horizon: ${pred_horizon}

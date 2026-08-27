@@ -1,4 +1,3 @@
-import itertools
 from typing import Optional
 
 import numpy as np
@@ -20,11 +19,22 @@ class FixedStepsDataloader(torch.utils.data.DataLoader):
         self.n_batches = n_batches
 
     def __iter__(self):
-        # Keep cycling over the first underlying iterator instead of recreating it
-        # mid-epoch, which can be extremely expensive for lazy zarr-backed datasets.
-        endless_dataloader = itertools.cycle(super().__iter__())
+        # Recreate the underlying iterator when it is exhausted.  itertools.cycle
+        # must not be used here: it retains every yielded batch, which can cache an
+        # entire lazy-loaded epoch (including pinned tensors) in host memory.
+        iterator = super().__iter__()
         for _ in range(self.n_batches):
-            yield next(endless_dataloader)
+            try:
+                yield next(iterator)
+            except StopIteration:
+                iterator = super().__iter__()
+                try:
+                    yield next(iterator)
+                except StopIteration as exc:
+                    raise RuntimeError(
+                        "FixedStepsDataloader cannot yield batches from an empty "
+                        "underlying dataloader."
+                    ) from exc
 
     def __len__(self):
         return self.n_batches
@@ -39,9 +49,13 @@ class EndlessDataloader(torch.utils.data.DataLoader):
         super().__init__(*args, **kwargs)
 
     def __iter__(self):
-        endless_dataloader = itertools.cycle(super().__iter__())
-        for batch in endless_dataloader:
-            yield batch
+        while True:
+            yielded_batch = False
+            for batch in super().__iter__():
+                yielded_batch = True
+                yield batch
+            if not yielded_batch:
+                return
 
     def __len__(self):
         return float("inf")

@@ -20,6 +20,8 @@ Agent 在修改仓库内核心代码逻辑前，必须先向用户列出拟修�
 
 本文档用于让 agent 从零询问配置、准备数据、调度双卡训练并监控到完成。它不是某次 low/med 实验的静态记录。服务器容量、GPU、数据位置和 checkpoint 状态必须在每次 campaign 开始时实时审计，禁止照抄历史快照。
 
+> ppu96 上“zstd LMDB 放根盘、四个独立 world-size=1 实验按每卡两个并行”的专用方案，不使用本文的双卡 DDP 启动章节；应改读 `reports/claude/ppu96_single_card_4way_zstd_runbook.md`。该专用文档同时记录了 1/3/4 路压力测试、固定参数、磁盘与 checkpoint 布局、正式启动模板和恢复 gate。
+
 ## 1. 完成定义
 
 一个 campaign 只有同时满足以下条件才算完成：

@@ -29,6 +29,8 @@ from src.data_processing.process_pickles import (
 from src.data_processing.offline_image_annotations import IMAGE_ANNOTATION_MODES
 from src.dataset.lmdb import (
     EPISODE_INDEX_KEY,
+    DEFAULT_FRAME_COMPRESSION,
+    DEFAULT_FRAME_COMPRESSION_LEVEL,
     LMDB_FORMAT_VERSION,
     META_KEY,
     build_frame_specs,
@@ -39,6 +41,7 @@ from src.dataset.lmdb import (
     pack_frame,
     pack_named_arrays,
     require_lmdb,
+    require_zstandard,
     read_lmdb_episode_index,
     read_lmdb_meta,
 )
@@ -83,9 +86,12 @@ def format_bytes(num_bytes: int) -> str:
 
 
 def log_lmdb_storage_layout(frame_specs, lowdim_specs, resize_image: bool):
+    compression = frame_specs.get("compression")
+    codec = compression.get("codec") if isinstance(compression, dict) else compression
     print(
-        "[INFO] LMDB storage format: images are stored as raw per-frame byte payloads "
-        "(no compression), low-dimensional arrays are stored once per episode."
+        "[INFO] LMDB storage format: images are stored as per-frame byte payloads "
+        f"(compression={codec or 'none'}), low-dimensional arrays are stored once "
+        "per episode."
     )
     print(f"[INFO] resize_image={resize_image} (default: False)")
     print("[INFO] Image frame layout:")
@@ -559,6 +565,25 @@ def main():
     parser.add_argument("--batch-size", type=int, default=20)
     parser.add_argument("--map-size-gb", type=int, default=1024)
     parser.add_argument(
+        "--frame-compression",
+        choices=("none", "zstd"),
+        default=DEFAULT_FRAME_COMPRESSION,
+        help=(
+            "Per-frame image payload compression. New LMDB datasets default to "
+            f"{DEFAULT_FRAME_COMPRESSION}; pass 'none' only for compatibility or "
+            "controlled benchmarks."
+        ),
+    )
+    parser.add_argument(
+        "--frame-compression-level",
+        type=int,
+        default=DEFAULT_FRAME_COMPRESSION_LEVEL,
+        help=(
+            "Zstd compression level when --frame-compression=zstd "
+            f"(default: {DEFAULT_FRAME_COMPRESSION_LEVEL})."
+        ),
+    )
+    parser.add_argument(
         "--resize-image",
         action="store_true",
         help="Resize images to standard dimensions (240x320x3).",
@@ -600,6 +625,9 @@ def main():
         help="Print detailed LMDB payload estimates for image and low-dimensional data.",
     )
     args = parser.parse_args()
+
+    if args.frame_compression == "zstd":
+        require_zstandard()
 
     provenance = {}
     if args.provenance_json is not None:
@@ -721,6 +749,11 @@ def main():
                             for key in IMAGE_KEYS
                         }
                     )
+                    if args.frame_compression == "zstd":
+                        frame_specs["compression"] = {
+                            "codec": "zstd",
+                            "level": int(args.frame_compression_level),
+                        }
                     lowdim_specs = build_lowdim_specs(episode_data)
                     log_lmdb_storage_layout(
                         frame_specs,
@@ -742,7 +775,6 @@ def main():
                 )
                 packed_lowdim_nbytes = len(packed_lowdim_payload)
                 batch_lowdim_bytes += packed_lowdim_nbytes
-                batch_image_bytes += int(frame_specs["total_nbytes"]) * episode_length
                 batch_timesteps += episode_length
 
                 if args.debug_storage_stats and global_episode_idx == 0:
@@ -757,10 +789,12 @@ def main():
                         key: episode_data[key][local_frame_idx]
                         for key in IMAGE_KEYS
                     }
+                    packed_frame = pack_frame(frame_payload, frame_specs)
                     txn.put(
                         frame_key(global_frame_idx + local_frame_idx),
-                        pack_frame(frame_payload, frame_specs),
+                        packed_frame,
                     )
+                    batch_image_bytes += len(packed_frame)
 
                 env_label = normalize_env_label(episode_data.get("env"))
                 episode_index.append(
@@ -852,6 +886,7 @@ def main():
         "suffix": args.suffix,
         "output_suffix": args.output_suffix,
         "storage_format": "lmdb",
+        "frame_compression": frame_specs.get("compression", {"codec": "none"}),
         "image_annotation_mode": args.image_annotation_mode,
         "provenance": provenance,
         "normalizer_stats": serialized_normalizer_stats,

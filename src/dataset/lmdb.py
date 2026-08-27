@@ -30,6 +30,11 @@ try:
 except ImportError:  # pragma: no cover - exercised only when LMDB support is used.
     lmdb = None
 
+try:
+    import zstandard as zstd
+except ImportError:  # pragma: no cover - exercised only for compressed LMDB frames.
+    zstd = None
+
 
 NORMALIZER_STATS_ATTR = "normalizer_stats"
 LMDB_FORMAT_VERSION = 1
@@ -40,6 +45,11 @@ FRAME_PREFIX = b"__frame__/"
 EPISODE_DATA_PREFIX = b"__episode_data__/"
 
 IMAGE_KEYS = ("color_image1", "color_image2", "depth_image1", "depth_image2")
+DEFAULT_FRAME_COMPRESSION = "zstd"
+DEFAULT_FRAME_COMPRESSION_LEVEL = 1
+
+_ZSTD_COMPRESSORS = {}
+_ZSTD_DECOMPRESSOR = None
 
 
 def require_lmdb():
@@ -48,6 +58,15 @@ def require_lmdb():
             "LMDB support requires the `lmdb` package. Install it with `pip install lmdb`."
         )
     return lmdb
+
+
+def require_zstandard():
+    if zstd is None:
+        raise ImportError(
+            "Zstd-compressed LMDB frames require the `zstandard` package. "
+            "Install it with `pip install zstandard`."
+        )
+    return zstd
 
 
 def dataset_tuple(path: Path) -> Tuple[str, str, str, str]:
@@ -174,11 +193,55 @@ def pack_frame(images: Dict[str, np.ndarray], frame_specs: Dict[str, dict]) -> b
                 f"expected {tuple(spec['shape'])}/{spec['dtype']}."
             )
         parts.append(array.tobytes(order="C"))
-    return b"".join(parts)
+    payload = b"".join(parts)
+    compression = frame_specs.get("compression")
+    if compression is None:
+        return payload
+
+    codec = compression.get("codec") if isinstance(compression, dict) else compression
+    if codec in {None, "none"}:
+        return payload
+    if codec != "zstd":
+        raise ValueError(f"Unsupported LMDB frame compression codec: {codec!r}.")
+
+    level = int(compression.get("level", 1)) if isinstance(compression, dict) else 1
+    zstd_module = require_zstandard()
+    compressor = _ZSTD_COMPRESSORS.get(level)
+    if compressor is None:
+        compressor = zstd_module.ZstdCompressor(
+            level=level,
+            write_checksum=True,
+            write_content_size=True,
+        )
+        _ZSTD_COMPRESSORS[level] = compressor
+    return compressor.compress(payload)
 
 
 def unpack_frame(raw_value: bytes, frame_specs: Dict[str, dict], keys=None) -> Dict[str, np.ndarray]:
-    payload = memoryview(raw_value)
+    compression = frame_specs.get("compression")
+    codec = compression.get("codec") if isinstance(compression, dict) else compression
+    if codec in {None, "none"}:
+        payload_bytes = raw_value
+    elif codec == "zstd":
+        global _ZSTD_DECOMPRESSOR
+        zstd_module = require_zstandard()
+        if _ZSTD_DECOMPRESSOR is None:
+            _ZSTD_DECOMPRESSOR = zstd_module.ZstdDecompressor()
+        payload_bytes = _ZSTD_DECOMPRESSOR.decompress(
+            raw_value,
+            max_output_size=int(frame_specs["total_nbytes"]),
+        )
+    else:
+        raise ValueError(f"Unsupported LMDB frame compression codec: {codec!r}.")
+
+    expected_nbytes = int(frame_specs["total_nbytes"])
+    if len(payload_bytes) != expected_nbytes:
+        raise ValueError(
+            "Corrupted LMDB frame payload: "
+            f"decoded {len(payload_bytes)} bytes, expected {expected_nbytes}."
+        )
+
+    payload = memoryview(payload_bytes)
     specs = frame_specs["specs"]
     requested_keys = frame_specs["ordered_keys"] if keys is None else keys
     arrays = {}

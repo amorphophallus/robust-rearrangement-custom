@@ -160,6 +160,7 @@ def _worker_run(
 
     pid = os.getpid()
     proc = psutil.Process(pid)
+    cpu_start = proc.cpu_times()
 
     latencies: List[float] = []
     total_samples = 0
@@ -198,10 +199,9 @@ def _worker_run(
                 continue
             elapsed = time.perf_counter() - t0
 
-            total_samples += 1
-            total_bytes += key_nbytes
-
             if time.perf_counter() > warmup_start + warmup:
+                total_samples += 1
+                total_bytes += key_nbytes
                 latencies.append(elapsed)
 
             if errors > 100:
@@ -217,7 +217,8 @@ def _worker_run(
             except Exception:
                 pass
 
-    elapsed_total = time.perf_counter() - start_time - warmup
+    worker_wall_elapsed = time.perf_counter() - start_time
+    elapsed_total = worker_wall_elapsed - warmup
     if elapsed_total <= 0:
         elapsed_total = 0.001
 
@@ -225,7 +226,14 @@ def _worker_run(
     try:
         mem = proc.memory_info()
         rss_mb = mem.rss / (1024 * 1024)
-        cpu_pct = proc.cpu_percent(interval=0)
+        cpu_end = proc.cpu_times()
+        cpu_seconds = (
+            cpu_end.user
+            + cpu_end.system
+            - cpu_start.user
+            - cpu_start.system
+        )
+        cpu_pct = 100.0 * cpu_seconds / max(worker_wall_elapsed, 0.001)
     except Exception:
         rss_mb = 0.0
         cpu_pct = 0.0
@@ -352,10 +360,16 @@ def _aggregate_stats(
         r["samples"] += w["samples"]
         r["bytes"] += w["bytes_total"]
         r["workers"] += 1
-    for r in by_rank.values():
-        r["elapsed"] = max(w["elapsed"] for w in worker_stats if w["rank_id"] == worker_stats[0]["rank_id"])
+    for rank_id, r in by_rank.items():
+        r["elapsed"] = max(
+            w["elapsed"] for w in worker_stats if w["rank_id"] == rank_id
+        )
         r["samples_per_sec"] = r["samples"] / max(r["elapsed"], 0.001)
         r["mb_per_sec"] = (r["bytes"] / (1024 * 1024)) / max(r["elapsed"], 0.001)
+
+    measurement_elapsed = max(w["elapsed"] for w in worker_stats)
+    total_gib = total_bytes / (1024**3)
+    total_gib_per_sec = total_gib / max(measurement_elapsed, 0.001)
 
     return BenchmarkResult(
         config=config,
@@ -364,10 +378,20 @@ def _aggregate_stats(
             "total_samples": total_samples,
             "total_bytes": total_bytes,
             "total_errors": total_errors,
-            "elapsed_sec": elapsed,
-            "total_samples_per_sec": total_samples / max(elapsed, 0.001),
-            "total_mb_per_sec": (total_bytes / (1024 * 1024)) / max(elapsed, 0.001),
-            "avg_samples_per_sec_per_worker": total_samples / max(elapsed, 0.001) / len(worker_stats),
+            "elapsed_sec": measurement_elapsed,
+            "process_wall_elapsed_sec": elapsed,
+            "total_samples_per_sec": total_samples / max(measurement_elapsed, 0.001),
+            "total_mb_per_sec": (total_bytes / (1024 * 1024))
+            / max(measurement_elapsed, 0.001),
+            "total_gib_per_sec": total_gib_per_sec,
+            "seconds_per_gib": (
+                1.0 / total_gib_per_sec
+                if total_gib_per_sec > 0
+                else float("inf")
+            ),
+            "avg_samples_per_sec_per_worker": total_samples
+            / max(measurement_elapsed, 0.001)
+            / len(worker_stats),
             "avg_rss_mb": float(np.mean(rss_values)) if rss_values else 0.0,
             "max_rss_mb": float(np.max(rss_values)) if rss_values else 0.0,
             "total_rss_mb": float(np.sum(rss_values)) if rss_values else 0.0,
@@ -394,6 +418,32 @@ def _drop_caches():
         print("[info] Dropped page caches")
     except Exception as e:
         print(f"[warn] Could not drop caches: {e}")
+
+
+def _evict_file_cache(shards: List[Path]) -> bool:
+    """Ask the kernel to evict cached pages for only the selected LMDB files."""
+    if not hasattr(os, "posix_fadvise") or not hasattr(os, "POSIX_FADV_DONTNEED"):
+        print("[warn] POSIX_FADV_DONTNEED is unavailable on this platform")
+        return False
+
+    evicted_bytes = 0
+    for shard in shards:
+        data_path = shard / "data.mdb"
+        fd = os.open(data_path, os.O_RDONLY)
+        try:
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+            evicted_bytes += data_path.stat().st_size
+        except OSError as exc:
+            print(f"[warn] Could not evict file cache for {data_path}: {exc}")
+            return False
+        finally:
+            os.close(fd)
+
+    print(
+        "[info] Requested file-cache eviction for "
+        f"{len(shards)} LMDB shard(s), {evicted_bytes / (1024**3):.2f} GiB"
+    )
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +499,7 @@ def run_benchmark(
     output: Optional[Path],
     system_monitor: bool,
     cold_cache: bool,
+    evict_file_cache: bool,
     allocate_gpu_memory: bool,
     gpu_ids: Optional[List[int]],
 ) -> BenchmarkResult:
@@ -475,10 +526,17 @@ def run_benchmark(
         _drop_caches()
         time.sleep(2)
 
+    file_cache_eviction_succeeded = False
+    if evict_file_cache:
+        file_cache_eviction_succeeded = _evict_file_cache(selected_shards)
+        time.sleep(1)
+
     system_info = _collect_system_info()
     system_info["lmdb_shards_used"] = [str(s) for s in selected_shards]
     system_info["total_shards_available"] = len(all_shards)
     system_info["shard_mode"] = shard_mode
+    system_info["file_cache_eviction_requested"] = evict_file_cache
+    system_info["file_cache_eviction_succeeded"] = file_cache_eviction_succeeded
 
     # Start system monitor
     stop_monitor = threading.Event()
@@ -576,6 +634,8 @@ def run_benchmark(
         "duration": duration,
         "warmup": warmup,
         "cold_cache": cold_cache,
+        "evict_file_cache": evict_file_cache,
+        "file_cache_eviction_succeeded": file_cache_eviction_succeeded,
         "allocate_gpu_memory": allocate_gpu_memory,
     }, elapsed, system_info)
 
@@ -583,6 +643,7 @@ def run_benchmark(
     agg = result.aggregate
     print(f"  -> {agg['total_samples_per_sec']:.1f} samples/s, "
           f"{agg['total_mb_per_sec']:.1f} MB/s, "
+          f"{agg['seconds_per_gib']:.3f} s/GiB, "
           f"{agg['total_rss_mb']:.0f} MB RSS total, "
           f"{agg['avg_cpu_pct']:.1f}% avg CPU")
 
@@ -699,6 +760,14 @@ def main():
         help="Drop page caches before benchmark (requires sudo)",
     )
     parser.add_argument(
+        "--evict-file-cache",
+        action="store_true",
+        help=(
+            "Request POSIX_FADV_DONTNEED for only the selected LMDB data.mdb "
+            "files before benchmarking"
+        ),
+    )
+    parser.add_argument(
         "--allocate-gpu-memory",
         action="store_true",
         help="Allocate GPU memory to simulate training memory pressure",
@@ -771,6 +840,7 @@ def main():
         output=output,
         system_monitor=args.system_monitor,
         cold_cache=args.cold_cache,
+        evict_file_cache=args.evict_file_cache,
         allocate_gpu_memory=args.allocate_gpu_memory,
         gpu_ids=gpu_ids,
     )

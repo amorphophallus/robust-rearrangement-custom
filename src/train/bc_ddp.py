@@ -53,6 +53,7 @@ from src.dataset.dataloader import (
     build_dataloader,
 )
 from src.dataset.dataset import ImageDataset, RGBDDataset, StateDataset
+from src.dataset.lmdb import read_lmdb_meta
 from src.dataset.normalizer import LinearNormalizer
 from src.dataset.source_sampling import (
     SourceWeightedSampler,
@@ -570,6 +571,50 @@ def distributed_mean(value_sum: float, count: int, device: torch.device) -> floa
     if tensor[1].item() == 0:
         return float("nan")
     return (tensor[0] / tensor[1]).item()
+
+
+def distributed_max(value: float, device: torch.device) -> float:
+    tensor = torch.tensor(value, device=device, dtype=torch.float64)
+    dist.all_reduce(tensor, op=dist.ReduceOp.MAX)
+    return tensor.item()
+
+
+def lmdb_raw_image_bytes_per_sample(
+    data_paths: List[Path], observation_type: str, obs_horizon: int
+) -> Optional[int]:
+    image_keys_by_observation_type = {
+        "image": ("color_image1", "color_image2"),
+        "rgbd": (
+            "color_image1",
+            "color_image2",
+            "depth_image1",
+            "depth_image2",
+        ),
+    }
+    image_keys = image_keys_by_observation_type.get(observation_type)
+    if image_keys is None:
+        return None
+
+    bytes_per_frame_by_path = {}
+    for path in data_paths:
+        meta = read_lmdb_meta(path)
+        specs = meta["frame_specs"]["specs"]
+        missing_keys = set(image_keys) - set(specs)
+        if missing_keys:
+            raise ValueError(
+                f"LMDB dataset {path} is missing image keys {sorted(missing_keys)}."
+            )
+        bytes_per_frame_by_path[str(path)] = sum(
+            int(specs[key]["nbytes"]) for key in image_keys
+        )
+
+    unique_bytes_per_frame = set(bytes_per_frame_by_path.values())
+    if len(unique_bytes_per_frame) != 1:
+        raise ValueError(
+            "LMDB datasets have inconsistent raw image bytes per frame: "
+            f"{bytes_per_frame_by_path}"
+        )
+    return unique_bytes_per_frame.pop() * int(obs_horizon)
 
 
 def sort_data_paths(data_paths: List[Path]) -> List[Path]:
@@ -1410,6 +1455,20 @@ def main(cfg: DictConfig):
         if main_process:
             print(f"Using data from {data_path}")
 
+        raw_storage_bytes_per_sample = None
+        if to_native(cfg.data.get("storage_format", "zarr")) == "lmdb":
+            raw_storage_bytes_per_sample = lmdb_raw_image_bytes_per_sample(
+                data_path,
+                to_native(cfg.observation_type),
+                int(cfg.data.obs_horizon),
+            )
+            if main_process and raw_storage_bytes_per_sample is not None:
+                print(
+                    "LMDB raw image payload per sample: "
+                    f"{raw_storage_bytes_per_sample} bytes "
+                    f"({raw_storage_bytes_per_sample / (1024**2):.3f} MiB)."
+                )
+
         ddp_shard_enabled = bool(
             world_size > 1 and cfg.data.get("ddp_shard_enabled", False)
         )
@@ -2160,18 +2219,35 @@ def main(cfg: DictConfig):
             train_metric_counts = defaultdict(int)
             train_loss_keys = set()
             updated_checkpoint_types = set()
+            train_data_wait_seconds = 0.0
+            train_compute_seconds = 0.0
+            train_batch_count = 0
 
             actor.train()
             train_sampler.set_epoch(epoch_idx)
 
             tepoch = tqdm(
-                trainloader,
+                range(len(trainloader)),
                 desc=f"Training [rank {rank}]",
                 leave=False,
                 total=len(trainloader),
                 disable=not main_process,
             )
-            for batch in tepoch:
+            train_loop_started_unix = datetime.now().timestamp()
+            train_iterator = None
+            for _ in tepoch:
+                data_wait_start_perf = perf_counter()
+                try:
+                    if train_iterator is None:
+                        train_iterator = iter(trainloader)
+                    batch = next(train_iterator)
+                except StopIteration as exc:
+                    raise RuntimeError(
+                        "Training dataloader stopped before its reported length."
+                    ) from exc
+                train_data_wait_seconds += perf_counter() - data_wait_start_perf
+                compute_start_perf = perf_counter()
+
                 for _, opt in optimizers:
                     opt.zero_grad()
 
@@ -2202,12 +2278,107 @@ def main(cfg: DictConfig):
                     train_metric_sums[key] += float(value)
                     train_metric_counts[key] += 1
 
+                train_compute_seconds += perf_counter() - compute_start_perf
+                train_batch_count += 1
                 global_step += 1
 
                 if main_process:
                     tepoch.set_postfix(loss=loss_cpu)
 
             tepoch.close()
+            train_loop_ended_unix = datetime.now().timestamp()
+
+            mean_data_wait_seconds = distributed_mean(
+                train_data_wait_seconds, train_batch_count, device
+            )
+            mean_compute_seconds = distributed_mean(
+                train_compute_seconds, train_batch_count, device
+            )
+            mean_step_seconds = mean_data_wait_seconds + mean_compute_seconds
+            local_data_wait_seconds = (
+                train_data_wait_seconds / train_batch_count
+                if train_batch_count > 0
+                else float("nan")
+            )
+            local_step_seconds = (
+                (train_data_wait_seconds + train_compute_seconds) / train_batch_count
+                if train_batch_count > 0
+                else float("nan")
+            )
+            max_rank_data_wait_seconds = distributed_max(
+                local_data_wait_seconds, device
+            )
+            max_rank_data_wait_fraction = distributed_max(
+                local_data_wait_seconds / local_step_seconds, device
+            )
+            epoch_log["timing/train_data_wait_seconds_per_step"] = (
+                mean_data_wait_seconds
+            )
+            epoch_log["timing/train_data_wait_seconds_per_step_max_rank"] = (
+                max_rank_data_wait_seconds
+            )
+            epoch_log["timing/train_compute_seconds_per_step"] = mean_compute_seconds
+            epoch_log["timing/train_data_wait_fraction"] = (
+                mean_data_wait_seconds / mean_step_seconds
+                if mean_step_seconds > 0
+                else float("nan")
+            )
+            epoch_log["timing/train_data_wait_fraction_max_rank"] = (
+                max_rank_data_wait_fraction
+            )
+            epoch_log["throughput/optimizer_steps_per_second"] = (
+                1.0 / mean_step_seconds if mean_step_seconds > 0 else float("nan")
+            )
+            epoch_log["throughput/samples_per_second_global"] = (
+                cfg.training.batch_size / mean_step_seconds
+                if mean_step_seconds > 0
+                else float("nan")
+            )
+            epoch_log["timing/train_loop_started_unix"] = train_loop_started_unix
+            epoch_log["timing/train_loop_ended_unix"] = train_loop_ended_unix
+            raw_input_gib_per_step = None
+            if raw_storage_bytes_per_sample is not None:
+                raw_input_gib_per_step = (
+                    raw_storage_bytes_per_sample
+                    * cfg.training.batch_size
+                    / (1024**3)
+                )
+                epoch_log["throughput/raw_input_gib_per_step"] = (
+                    raw_input_gib_per_step
+                )
+                epoch_log["throughput/raw_input_gib_per_second"] = (
+                    raw_input_gib_per_step / mean_step_seconds
+                    if mean_step_seconds > 0
+                    else float("nan")
+                )
+                epoch_log["timing/train_seconds_per_raw_gib"] = (
+                    mean_step_seconds / raw_input_gib_per_step
+                    if raw_input_gib_per_step > 0
+                    else float("nan")
+                )
+            if main_process:
+                timing_message = (
+                    "TRAIN_TIMING "
+                    f"epoch={epoch_idx} "
+                    f"loop_started_unix={train_loop_started_unix:.6f} "
+                    f"loop_ended_unix={train_loop_ended_unix:.6f} "
+                    f"data_wait_seconds_per_step={mean_data_wait_seconds:.6f} "
+                    f"data_wait_seconds_per_step_max_rank={max_rank_data_wait_seconds:.6f} "
+                    f"compute_seconds_per_step={mean_compute_seconds:.6f} "
+                    f"data_wait_fraction={epoch_log['timing/train_data_wait_fraction']:.6f} "
+                    f"data_wait_fraction_max_rank={max_rank_data_wait_fraction:.6f} "
+                    f"optimizer_steps_per_second={epoch_log['throughput/optimizer_steps_per_second']:.6f} "
+                    f"samples_per_second_global={epoch_log['throughput/samples_per_second_global']:.3f}"
+                )
+                if raw_input_gib_per_step is not None:
+                    timing_message += (
+                        f" raw_input_gib_per_step={raw_input_gib_per_step:.6f}"
+                        " raw_input_gib_per_second="
+                        f"{epoch_log['throughput/raw_input_gib_per_second']:.6f}"
+                        " train_seconds_per_raw_gib="
+                        f"{epoch_log['timing/train_seconds_per_raw_gib']:.6f}"
+                    )
+                print(timing_message, flush=True)
 
             epoch_log["epoch_loss"] = distributed_mean(
                 train_metric_sums["epoch_loss"],
