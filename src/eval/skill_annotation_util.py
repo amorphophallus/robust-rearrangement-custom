@@ -24,6 +24,8 @@ from src.common.image_annotations import (
     draw_grasp_annotation_on_image,
     draw_guidance_point_on_image,
 )
+from src.common.eepose import ROBOT_BASE
+from src.common.guidance import camera_info_with_robot_base, translation_transform
 
 
 VALID_SKILLS = {"pick", "place", "insert", "screw", "push"}
@@ -142,16 +144,16 @@ def _wrist_camera_to_sim_local(annotation_inputs) -> np.ndarray:
     return (ee_pose @ wrist_offset).astype(np.float32)
 
 
-def _project_sim_local_to_image(
-    point_sim_local: np.ndarray,
+def _project_robot_base_to_image(
+    point_robot_base: np.ndarray,
     intrinsics: np.ndarray,
-    sim_local_to_camera: np.ndarray,
+    robot_base_to_camera: np.ndarray,
     image_width: int,
     image_height: int,
 ) -> Optional[np.ndarray]:
     point = np.ones(4, dtype=np.float32)
-    point[:3] = point_sim_local.astype(np.float32)
-    point_cam = sim_local_to_camera @ point
+    point[:3] = point_robot_base.astype(np.float32)
+    point_cam = robot_base_to_camera @ point
     if not np.isfinite(point_cam).all():
         return None
     if point_cam[2] <= 1e-8:
@@ -172,19 +174,19 @@ def _project_sim_local_to_image(
     )
 
 
-def _project_points_sim_local_to_image(
-    points_sim_local: np.ndarray,
+def _project_points_robot_base_to_image(
+    points_robot_base: np.ndarray,
     intrinsics: np.ndarray,
-    sim_local_to_camera: np.ndarray,
+    robot_base_to_camera: np.ndarray,
     image_width: int,
     image_height: int,
 ) -> Optional[np.ndarray]:
     projected = []
-    for point_sim_local in np.asarray(points_sim_local, dtype=np.float32):
-        uv = _project_sim_local_to_image(
-            point_sim_local,
+    for point_robot_base in np.asarray(points_robot_base, dtype=np.float32):
+        uv = _project_robot_base_to_image(
+            point_robot_base,
             intrinsics,
-            sim_local_to_camera,
+            robot_base_to_camera,
             image_width,
             image_height,
         )
@@ -197,16 +199,18 @@ def _project_points_sim_local_to_image(
 
 
 def project_3d_to_2d(
-    point_sim_local: np.ndarray,
+    point_robot_base: np.ndarray,
     camera_info: Dict[str, np.ndarray],
 ) -> Optional[np.ndarray]:
-    if point_sim_local is None:
+    """Project a canonical robot-base point with saved simulator camera metadata."""
+
+    if point_robot_base is None:
         return None
     image_size = camera_info["image_size"]
-    uv = _project_sim_local_to_image(
-        point_sim_local,
+    uv = _project_robot_base_to_image(
+        point_robot_base,
         camera_info["intrinsics"],
-        camera_info["sim_local_to_camera"],
+        camera_info["robot_base_to_camera"],
         int(image_size[0]),
         int(image_size[1]),
     )
@@ -279,10 +283,10 @@ def project_pose_to_grasp_annotation_2d(
         return None
 
     image_size = camera_info["image_size"]
-    corners_2d = _project_points_sim_local_to_image(
+    corners_2d = _project_points_robot_base_to_image(
         corners_3d,
         camera_info["intrinsics"],
-        camera_info["sim_local_to_camera"],
+        camera_info["robot_base_to_camera"],
         int(image_size[0]),
         int(image_size[1]),
     )
@@ -325,12 +329,15 @@ def _build_camera_info(
         annotation_inputs["front_cam_pos"],
         annotation_inputs["front_cam_target"],
     )
-    camera_info["color_image2"] = {
+    robot_base_to_sim_local = translation_transform(
+        _to_numpy(annotation_inputs["base_pos"]).astype(np.float32)
+    )
+    camera_info["color_image2"] = camera_info_with_robot_base({
         "image_size": front_image_size,
         "intrinsics": front_intrinsics.astype(np.float32),
         "camera_to_sim_local": front_camera_to_sim_local.astype(np.float32),
         "sim_local_to_camera": np.linalg.inv(front_camera_to_sim_local).astype(np.float32),
-    }
+    }, robot_base_to_sim_local)
 
     if annotate_wrist_camera:
         wrist_cfg = camera_cfgs["wrist"]
@@ -347,12 +354,12 @@ def _build_camera_info(
         else:
             wrist_image_size = np.array([wrist_cfg["width"], wrist_cfg["height"]], dtype=np.int32)
         wrist_camera_to_sim_local = _wrist_camera_to_sim_local(annotation_inputs)
-        camera_info["color_image1"] = {
+        camera_info["color_image1"] = camera_info_with_robot_base({
             "image_size": wrist_image_size,
             "intrinsics": wrist_intrinsics.astype(np.float32),
             "camera_to_sim_local": wrist_camera_to_sim_local.astype(np.float32),
             "sim_local_to_camera": np.linalg.inv(wrist_camera_to_sim_local).astype(np.float32),
-        }
+        }, robot_base_to_sim_local)
 
     return camera_info
 
@@ -674,6 +681,7 @@ class SkillAnnotator:
                 "guidance_point_clean": None,
                 "guidance_pose": None,
                 "guidance_pose_clean": None,
+                "guidance_frame": ROBOT_BASE,
                 "guidance_gripper_width": None,
                 "guidance_point_2d": {},
                 "grasp_annotation_2d": {},
@@ -724,6 +732,7 @@ class SkillAnnotator:
                 "guidance_point_clean": self.previous_guidance_point_clean,
                 "guidance_pose": self.previous_guidance_pose,
                 "guidance_pose_clean": self.previous_guidance_pose_clean,
+                "guidance_frame": ROBOT_BASE,
                 "guidance_gripper_width": self.previous_guidance_gripper_width,
                 "guidance_point_2d": guidance_point_2d,
                 "grasp_annotation_2d": grasp_annotation_2d,
@@ -814,19 +823,14 @@ class SkillAnnotator:
                 self.previous_guidance_pose_robot = _pose_to_numpy(guidance_pose_robot)
             self.previous_guidance_gripper_width = guidance_gripper_width
 
-        guidance_point = None
-        if guidance_point_robot is not None:
-            guidance_point = (
-                _to_numpy(guidance_point_robot).astype(np.float32)
-                + _to_numpy(annotation_inputs["base_pos"]).astype(np.float32)
-            )
-
-        guidance_pose = None
-        if guidance_pose_robot is not None:
-            guidance_pose = _pose_to_numpy(guidance_pose_robot)
-            if guidance_pose is not None:
-                guidance_pose = guidance_pose.copy()
-                guidance_pose[:3, 3] += _to_numpy(annotation_inputs["base_pos"]).astype(np.float32)
+        guidance_point = (
+            None
+            if guidance_point_robot is None
+            else _to_numpy(guidance_point_robot).astype(np.float32)
+        )
+        guidance_pose = (
+            None if guidance_pose_robot is None else _pose_to_numpy(guidance_pose_robot)
+        )
 
         guidance_point_clean = None if guidance_point is None else guidance_point.copy()
         guidance_pose_clean = None if guidance_pose is None else guidance_pose.copy()
@@ -843,7 +847,7 @@ class SkillAnnotator:
                 active_part_name=debug_info.get("active_part"),
                 part_idxs=annotation_inputs["part_idxs"],
                 rb_states=annotation_inputs["rb_states"],
-                env_offset=annotation_inputs["env_offset"],
+                base_pos=annotation_inputs["base_pos"],
             )
 
         phase_key = (
@@ -911,6 +915,7 @@ class SkillAnnotator:
             "guidance_point_clean": guidance_point_clean,
             "guidance_pose": guidance_pose,
             "guidance_pose_clean": guidance_pose_clean,
+            "guidance_frame": ROBOT_BASE,
             "guidance_gripper_width": guidance_gripper_width,
             "guidance_point_2d": guidance_point_2d,
             "grasp_annotation_2d": grasp_annotation_2d,
@@ -989,6 +994,7 @@ def get_annotation_bundle_for_env(
             "guidance_point_clean": None,
             "guidance_pose": None,
             "guidance_pose_clean": None,
+            "guidance_frame": ROBOT_BASE,
             "guidance_gripper_width": None,
             "guidance_point_2d": {},
             "grasp_annotation_2d": {},

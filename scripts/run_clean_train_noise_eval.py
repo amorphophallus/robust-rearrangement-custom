@@ -431,6 +431,9 @@ def _validate_guidance_bank(bank_dir: Path, tasks: list[str]) -> None:
             issues.append(f"invalid {path}: {exc}")
             continue
         records = payload.get("records") or []
+        guidance_frame = str(payload.get("guidance_frame", "")).replace("_", "-")
+        if guidance_frame != "robot-base":
+            issues.append(f"non-canonical or missing guidance_frame in {path}")
         if not records:
             issues.append(f"empty {path}")
         elif any(str(record.get("task")) != task for record in records):

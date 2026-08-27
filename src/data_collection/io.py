@@ -12,6 +12,7 @@ from src.visualization.render_mp4 import pickle_data
 from src.common.types import Trajectory, Observation
 from src.common.geometry import np_action_6d_to_quat
 from src.common.eepose import ROBOT_BASE, SIM_LOCAL
+from src.common.guidance import GUIDANCE_SCHEMA_VERSION
 
 from ipdb import set_trace as bp
 from src.visualization.render_mp4 import (
@@ -218,6 +219,7 @@ def save_raw_rollout(
     eepose_frame: str = ROBOT_BASE,
     eepose_original_frame: str = SIM_LOCAL,
     policy_eepose_frame: str = ROBOT_BASE,
+    guidance_frame: str = ROBOT_BASE,
 ):
     observations: List[Observation] = list()
     include_vlm_metadata = any(
@@ -317,6 +319,7 @@ def save_raw_rollout(
             "guidance_point_clean": guidance_point_clean,
             "guidance_pose": guidance_pose,
             "guidance_pose_clean": guidance_pose_clean,
+            "guidance_frame": guidance_frame,
             "guidance_gripper_width": guidance_gripper_width,
             "guidance_point_2d": guidance_point_2d,
             "grasp_annotation_2d": grasp_annotation_2d,
@@ -385,6 +388,8 @@ def save_raw_rollout(
         "eepose_original_frame": eepose_original_frame,
         "policy_eepose_frame": policy_eepose_frame,
         "eepose_schema_version": 2,
+        "guidance_frame": guidance_frame,
+        "guidance_schema_version": GUIDANCE_SCHEMA_VERSION,
     }
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S.%f")

@@ -173,14 +173,13 @@ TRACKING_TOTAL_POS_SCALE_M = 0.01
 TRACKING_TOTAL_ORI_SCALE_DEG = 5.0
 TRACKING_METRIC_TYPES = {"position", "pose"}
 
-# Guidance targets are stored in sim-local coordinates. The Panda controller's
-# robot-local XY/Z maxima are shifted by the simulated base origin
-# (-0.3, 0.0, 0.415). Guidance points may lie on the table surface, 5 mm below
-# the minimum EE-origin limit, so the point workspace starts at table height.
-TRACKING_GUIDANCE_WORKSPACE_SIM_LOCAL_M = (
-    (0.0, 0.5),
+# Guidance targets and the canonical EE pose are stored in robot-base
+# coordinates. Guidance points may lie on the table surface, 5 mm below the
+# minimum EE-origin limit, so the point workspace starts at z=0.
+TRACKING_GUIDANCE_WORKSPACE_ROBOT_BASE_M = (
+    (0.3, 0.8),
     (-0.55, 0.55),
-    (0.415, 0.815),
+    (0.0, 0.4),
 )
 TRACKING_WORKSPACE_STATUSES = {"inside", "outside", "invalid"}
 
@@ -200,7 +199,7 @@ def tracking_target_workspace_status(target_pose) -> str:
         return "invalid"
 
     target_pos = target[:3, 3]
-    bounds = np.asarray(TRACKING_GUIDANCE_WORKSPACE_SIM_LOCAL_M, dtype=np.float64)
+    bounds = np.asarray(TRACKING_GUIDANCE_WORKSPACE_ROBOT_BASE_M, dtype=np.float64)
     inside = np.logical_and(target_pos >= bounds[:, 0], target_pos <= bounds[:, 1])
     return "inside" if bool(np.all(inside)) else "outside"
 
@@ -226,8 +225,8 @@ def build_tracking_workspace_filter_summary(
     for status in normalized:
         normalized[status] = int((counts or {}).get(status, 0))
     return {
-        "coordinate_frame": "sim_local_m",
-        "bounds_m": [list(axis) for axis in TRACKING_GUIDANCE_WORKSPACE_SIM_LOCAL_M],
+        "coordinate_frame": "robot_base_m",
+        "bounds_m": [list(axis) for axis in TRACKING_GUIDANCE_WORKSPACE_ROBOT_BASE_M],
         "final_segment_count": sum(normalized.values()),
         "included_segment_count": normalized["inside"],
         "excluded_outside_workspace_count": normalized["outside"],
@@ -260,10 +259,9 @@ def _extract_ee_pose_from_robot_state(robot_state) -> Optional[tuple[np.ndarray,
     if not isinstance(robot_state, dict):
         return None
 
-    # Guidance poses are projected/drawn in sim-local coordinates. Prefer the
-    # matching EE pose when rollout saved it; fall back for old rollouts.
-    ee_pos = _as_float_array(robot_state.get("ee_pos_sim", robot_state.get("ee_pos")))
-    ee_quat = _as_float_array(robot_state.get("ee_quat_sim", robot_state.get("ee_quat")))
+    # Guidance poses and the policy-facing canonical EE pose are robot-base.
+    ee_pos = _as_float_array(robot_state.get("ee_pos"))
+    ee_quat = _as_float_array(robot_state.get("ee_quat"))
     if ee_pos is None or ee_quat is None:
         return None
     ee_pos = ee_pos.reshape(-1)

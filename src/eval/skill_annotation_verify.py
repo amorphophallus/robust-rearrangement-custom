@@ -62,7 +62,7 @@ class SkillAnnotationVerifier:
         active_part_name: Optional[str],
         part_idxs: Dict[str, List[int]],
         rb_states,
-        env_offset,
+        base_pos,
     ) -> Optional[Dict[str, Any]]:
         """Run one consistency check."""
         if skill is None or guidance_point is None:
@@ -74,15 +74,15 @@ class SkillAnnotationVerifier:
         if ref_mode is None:
             return None
 
-        # --- resolve reference part position in sim frame ---
-        ref_pos_sim = self._ref_part_position(
+        # --- resolve reference part position in robot-base frame ---
+        ref_pos_robot = self._ref_part_position(
             ref_mode, part1_name, part2_name, active_part_name,
-            part_idxs, rb_states, env_offset,
+            part_idxs, rb_states, base_pos,
         )
-        if ref_pos_sim is None:
+        if ref_pos_robot is None:
             return None
 
-        relative_pos = guidance_point.astype(np.float32) - ref_pos_sim
+        relative_pos = guidance_point.astype(np.float32) - ref_pos_robot
 
         # --- phase-change detection ---
         current_key = skill_state_label if skill_state_label is not None else skill
@@ -117,9 +117,9 @@ class SkillAnnotationVerifier:
         active_part_name: Optional[str],
         part_idxs: Dict[str, List[int]],
         rb_states,
-        env_offset,
+        base_pos,
     ) -> Optional[np.ndarray]:
-        """Return the reference part position in sim frame (3,)."""
+        """Return the reference part position in robot-base frame (3,)."""
         if ref_mode == "absolute":
             return np.zeros(3, dtype=np.float32)
 
@@ -138,8 +138,8 @@ class SkillAnnotationVerifier:
 
         idx = part_idxs[ref_name][0]
         ref_pos_sim_local = _to_numpy(rb_states[idx][:3]).astype(np.float32)
-        off = _to_numpy(env_offset).astype(np.float32)
-        return ref_pos_sim_local + off
+        robot_origin_sim_local = _to_numpy(base_pos).astype(np.float32)
+        return ref_pos_sim_local - robot_origin_sim_local
 
 
 # ---------------------------------------------------------------------------

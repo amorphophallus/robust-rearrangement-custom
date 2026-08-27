@@ -1131,7 +1131,7 @@ def main() -> int:
             "1. 每个有效控制 step 形成一个配对样本：自动机给出当步 3D GT guidance point `P_gt`，同一 annotation util 给出 front-camera GT pixel `p_gt` 和相机内外参，实际送给 policy 的 VLM 点为 `p_vlm`。VLM 在 action horizon 内可以缓存，但每个当步 GT/VLM 点对都独立进入 step average 和投影分布。",
             f"2. 用由 `(episode, env, step, query_step)` 确定的 seed 采样 `{monte_carlo_samples}` 个 `z_j ~ N(0, I_3)`，随后逐分量 clip 到 `[-2, 2]`。这与现有 `annotation_noise.py` 完全一致。严格来说 clip 后的边际方差小于 1；这里的 n1--n4 名称和 σ 参数沿用原噪声实验，而不是声称截断后的实际标准差仍恰好等于 σ。",
             "3. 五档使用同一组 `z_j`（common random numbers）以减小档位间 Monte Carlo 抖动。令 `σ_n ∈ {0, 3, 6, 12, 24} mm`，构造 `P_nj = P_gt + σ_n z_j`。",
-            "4. 使用 `skill_annotation_util.py` 相同的 sim-local→camera 变换、camera-y 翻转和内参投影，计算连续坐标 `e_nj = π(P_nj) - π(P_gt)`；VLM 残差为 `e_vlm = p_vlm - p_gt`。参考噪声投影不做整数取整，也不按图像边界裁剪，否则会人为压缩尾部。",
+            "4. 使用 `skill_annotation_util.py` 相同的 robot-base→camera 变换、camera-y 翻转和内参投影，计算连续坐标 `e_nj = π(P_nj) - π(P_gt)`；VLM 残差为 `e_vlm = p_vlm - p_gt`。参考噪声投影不做整数取整，也不按图像边界裁剪，否则会人为压缩尾部。",
             "5. 对每档全部投影样本精确累计一阶、二阶矩：`μ_n = (1/M)Σe_nj`，`Σ_n = (1/M)Σ(e_nj-μ_n)(e_nj-μ_n)^T`，并由全部样本计算 projected RMSE。VLM 的 mean/cov/RMSE 在所有有效 step 残差上计算，和 reference 的相机/深度条件完全配对。",
             "6. 用 projected RMSE 在相邻 n 档之间线性插值得到主要“误差量级”，例如 `n1–n2`；超过 n4 时线性外推并标记 `>n4`。径向 W1 最近档作为大小分布的稳健交叉检查。",
             "7. 完整 2D SWD 用于判断包含系统偏置的二维分布是否像某档噪声；centered SWD 在双方各自减均值后比较形状。它们不替代第 6 步的误差大小分类。",

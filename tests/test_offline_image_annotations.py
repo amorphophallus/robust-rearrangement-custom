@@ -74,6 +74,29 @@ class OfflineImageAnnotationTest(unittest.TestCase):
         )
         np.testing.assert_array_equal(observation["color_image2"], 0)
 
+    def test_robot_base_point_is_reprojected_instead_of_using_stale_saved_pixel(self):
+        observation = make_observation(skill="push")
+        observation["guidance_point_2d"]["color_image2"] = np.array([5.0, 5.0])
+        observation["guidance_point"] = np.array([0.0, 0.0, 1.0])
+        camera_info = {
+            "front_camera": {
+                "image_size": np.array([40, 40]),
+                "intrinsics": np.array(
+                    [[20.0, 0.0, 20.0], [0.0, 20.0, 20.0], [0.0, 0.0, 1.0]]
+                ),
+                "robot_base_to_camera": np.eye(4),
+            }
+        }
+
+        output = annotate_observation_image(
+            observation,
+            "guidance-point",
+            trajectory_camera_info=camera_info,
+        )
+
+        self.assertGreater(output["color_image2"][20, 20, 0], 0)
+        np.testing.assert_array_equal(output["color_image2"][5, 5], 0)
+
     def test_grasp_part_uses_grasp_rectangle_for_grasp_skills(self):
         for skill in ("pick", "place"):
             with self.subTest(skill=skill):

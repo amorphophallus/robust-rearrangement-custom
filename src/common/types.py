@@ -13,6 +13,7 @@ class Observation(TypedDict):
     guidance_point_clean: Optional[np.ndarray]
     guidance_pose: Optional[np.ndarray]
     guidance_pose_clean: Optional[np.ndarray]
+    guidance_frame: str
     guidance_gripper_width: Optional[float]
     guidance_point_2d: Dict[str, Optional[np.ndarray]]
     grasp_annotation_2d: Dict[str, Optional[dict]]
@@ -30,6 +31,8 @@ class Trajectory(TypedDict):
     error_description: str
     annotation_source: str
     vlm_model_revision: Optional[str]
+    guidance_frame: str
+    guidance_schema_version: int
 
 
 # Make type for the encoder name choices

@@ -306,7 +306,11 @@ def process_pickle_file(
 
     if image_annotation_mode != "none":
         obs = [
-            annotate_observation_image(observation, image_annotation_mode)
+            annotate_observation_image(
+                observation,
+                image_annotation_mode,
+                trajectory_camera_info=data.get("camera_info"),
+            )
             for observation in obs
         ]
 

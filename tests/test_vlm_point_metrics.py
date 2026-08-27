@@ -84,6 +84,8 @@ def _camera_info():
         ),
         "sim_local_to_camera": np.eye(4),
         "camera_to_sim_local": np.eye(4),
+        "robot_base_to_camera": np.eye(4),
+        "camera_to_robot_base": np.eye(4),
         "image_size": np.array([100, 100]),
     }
 

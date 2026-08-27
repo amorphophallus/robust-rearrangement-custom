@@ -94,7 +94,7 @@ def test_lamp_progress_schema_includes_hood_place_state():
 
 def _robot_state(pos, quat=(0.0, 0.0, 0.0, 1.0)):
     pos = np.asarray(pos, dtype=np.float32) + np.asarray(
-        [0.2, 0.0, 0.5], dtype=np.float32
+        [0.4, 0.0, 0.1], dtype=np.float32
     )
     return {
         "ee_pos": pos,
@@ -110,7 +110,7 @@ def _robot_state_with_sim_pose(
 ):
     state = _robot_state(pos, quat=quat)
     state["ee_pos_sim"] = np.asarray(sim_pos, dtype=np.float32) + np.asarray(
-        [0.2, 0.0, 0.5], dtype=np.float32
+        [0.1, 0.0, 0.515], dtype=np.float32
     )
     state["ee_quat_sim"] = np.asarray(sim_quat, dtype=np.float32)
     return state
@@ -119,7 +119,7 @@ def _robot_state_with_sim_pose(
 def _target_pose(pos):
     pose = np.eye(4, dtype=np.float32)
     pose[:3, 3] = np.asarray(pos, dtype=np.float32) + np.asarray(
-        [0.2, 0.0, 0.5], dtype=np.float32
+        [0.4, 0.0, 0.1], dtype=np.float32
     )
     return pose
 
@@ -143,12 +143,12 @@ def test_tracking_error_uses_final_frame_of_each_skill_phase():
     assert np.isclose(errors["leg-top-place"]["pos_m"], 0.05)
 
 
-def test_tracking_error_prefers_sim_local_ee_pose_when_available():
+def test_tracking_error_prefers_robot_base_ee_pose_when_sim_pose_is_available():
     errors = compute_episode_tracking_errors(
         robot_states=[
             _robot_state_with_sim_pose(
-                pos=[0.5, 0.0, 0.4],
-                sim_pos=[0.1, 0.0, 0.0],
+                pos=[0.1, 0.0, 0.0],
+                sim_pos=[0.5, 0.0, 0.4],
             )
         ],
         skill_states=["top-leg-pick"],

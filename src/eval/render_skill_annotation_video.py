@@ -24,7 +24,8 @@ from src.common.image_annotations import (
     draw_guidance_point_on_image,
     resize_guidance_point_for_image,
 )
-from src.eval.skill_annotation_util import draw_skill_on_image
+from src.common.guidance import camera_info_for_image
+from src.eval.skill_annotation_util import draw_skill_on_image, project_3d_to_2d
 
 
 DEFAULT_FPS = 20
@@ -60,6 +61,12 @@ def _recorded_image_size(
     if not isinstance(camera_info, Mapping):
         return None
 
+    saved_projection = camera_info_for_image(camera_info, image_key)
+    if isinstance(saved_projection, Mapping) and saved_projection.get("image_size") is not None:
+        size = np.asarray(saved_projection["image_size"]).reshape(-1)
+        if size.shape == (2,):
+            return int(size[0]), int(size[1])
+
     mapping = camera_info.get("camera_key_mapping", {})
     default_camera = "wrist" if image_key == WRIST_IMAGE_KEY else "front"
     camera_name = (
@@ -89,18 +96,87 @@ def _recorded_image_size(
     return None
 
 
+def _front_guidance_point(
+    observation: Mapping[str, Any],
+    camera_info: Optional[Mapping[str, Any]],
+):
+    front_camera = camera_info_for_image(camera_info, FRONT_IMAGE_KEY)
+    point = observation.get("guidance_point")
+    if (
+        point is not None
+        and isinstance(front_camera, Mapping)
+        and "robot_base_to_camera" in front_camera
+    ):
+        return project_3d_to_2d(point, front_camera)
+    return _camera_annotation(observation, "guidance_point_2d", FRONT_IMAGE_KEY)
+
+
+def _draw_robot_base_axes(
+    image: np.ndarray,
+    camera_info: Optional[Mapping[str, Any]],
+    *,
+    axis_length_m: float = 0.15,
+) -> np.ndarray:
+    """Draw the projected robot-base origin and +X/+Y/+Z axes when available."""
+
+    camera = camera_info_for_image(camera_info, FRONT_IMAGE_KEY)
+    if not isinstance(camera, Mapping) or "robot_base_to_camera" not in camera:
+        return image
+    points = {
+        "O": np.zeros(3, dtype=np.float32),
+        "X": np.array([axis_length_m, 0.0, 0.0], dtype=np.float32),
+        "Y": np.array([0.0, axis_length_m, 0.0], dtype=np.float32),
+        "Z": np.array([0.0, 0.0, axis_length_m], dtype=np.float32),
+    }
+    pixels = {label: project_3d_to_2d(point, camera) for label, point in points.items()}
+    if pixels["O"] is None:
+        return image
+    output = image.copy()
+    origin = tuple(np.asarray(pixels["O"], dtype=int))
+    colors = {"X": (255, 64, 64), "Y": (64, 255, 64), "Z": (64, 128, 255)}
+    for label in ("X", "Y", "Z"):
+        if pixels[label] is None:
+            continue
+        endpoint = tuple(np.asarray(pixels[label], dtype=int))
+        cv2.arrowedLine(output, origin, endpoint, colors[label], 2, cv2.LINE_AA, tipLength=0.2)
+        cv2.putText(
+            output,
+            label,
+            (endpoint[0] + 3, endpoint[1] - 3),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            colors[label],
+            1,
+            cv2.LINE_AA,
+        )
+    cv2.circle(output, origin, 3, (255, 255, 255), -1, cv2.LINE_AA)
+    cv2.putText(
+        output,
+        "robot base",
+        (origin[0] + 5, origin[1] + 14),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.35,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    return output
+
+
 def standard_annotation_frame(
     observation: Mapping[str, Any],
     camera_info: Optional[Mapping[str, Any]] = None,
+    *,
+    show_robot_base_axes: bool = False,
 ) -> np.ndarray:
     """Return one frame using the simulator rollout annotation settings."""
 
     wrist = np.asarray(observation[WRIST_IMAGE_KEY], dtype=np.uint8).copy()
     front = np.asarray(observation[FRONT_IMAGE_KEY], dtype=np.uint8).copy()
+    if show_robot_base_axes:
+        front = _draw_robot_base_axes(front, camera_info)
     guidance = resize_guidance_point_for_image(
-        _camera_annotation(
-            observation, "guidance_point_2d", FRONT_IMAGE_KEY
-        ),
+        _front_guidance_point(observation, camera_info),
         image_key=FRONT_IMAGE_KEY,
         source_image_size=_recorded_image_size(camera_info, FRONT_IMAGE_KEY),
         image_shape=front.shape,
@@ -162,6 +238,7 @@ def render_skill_annotation_video(
     output_path: Path,
     *,
     fps: int = DEFAULT_FPS,
+    show_robot_base_axes: bool = False,
 ) -> Dict[str, Any]:
     data = _load_annotated_pickle(annotated_pickle)
     observations = data.get("observations")
@@ -169,7 +246,9 @@ def render_skill_annotation_video(
         raise ValueError("Annotated pickle must contain non-empty observations")
 
     camera_info = data.get("camera_info")
-    sample = standard_annotation_frame(observations[0], camera_info)
+    sample = standard_annotation_frame(
+        observations[0], camera_info, show_robot_base_axes=show_robot_base_axes
+    )
     height, width = sample.shape[:2]
     encoder = _open_encoder(output_path, width, height, fps)
     preview_idx = next(
@@ -185,14 +264,15 @@ def render_skill_annotation_video(
     visible_guidance_frames = 0
     try:
         for frame_idx, observation in enumerate(observations):
-            frame = standard_annotation_frame(observation, camera_info)
+            frame = standard_annotation_frame(
+                observation,
+                camera_info,
+                show_robot_base_axes=show_robot_base_axes,
+            )
             skill = str(observation.get("skill", "none"))
             skill_counts[skill] = skill_counts.get(skill, 0) + 1
             if (
-                _camera_annotation(
-                    observation, "guidance_point_2d", FRONT_IMAGE_KEY
-                )
-                is not None
+                _front_guidance_point(observation, camera_info) is not None
             ):
                 visible_guidance_frames += 1
             if frame_idx == preview_idx:
@@ -218,6 +298,8 @@ def render_skill_annotation_video(
         "layout": [WRIST_IMAGE_KEY, FRONT_IMAGE_KEY],
         "front_annotations": ["guidance_point", "skill"],
         "guidance_point_colored": False,
+        "guidance_frame": data.get("guidance_frame"),
+        "robot_base_axes": show_robot_base_axes,
         "image_channel_order": "RGB",
         "front_projection_size": _recorded_image_size(
             camera_info, FRONT_IMAGE_KEY
@@ -240,6 +322,7 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("annotated_pickle", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
+    parser.add_argument("--show-robot-base-axes", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -249,6 +332,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         args.annotated_pickle.resolve(),
         args.output.resolve(),
         fps=args.fps,
+        show_robot_base_axes=args.show_robot_base_axes,
     )
     print(json.dumps(report, indent=2))
     return 0

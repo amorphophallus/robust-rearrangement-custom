@@ -27,8 +27,8 @@ CAMERA_NAME_TO_KEY = {value: key for key, value in CAMERA_KEY_TO_NAME.items()}
 VALID_SKILLS = frozenset({"push", "pick", "place", "insert", "screw"})
 
 STATE_INFO_BASE_KEYS = (
-    "ee_pos_sim",
-    "ee_quat_sim",
+    "ee_pos",
+    "ee_quat",
     "ee_pos_vel",
     "ee_ori_vel",
     "gripper_width",
@@ -43,9 +43,9 @@ COORDINATE_FRAMES = {
         "front-camera resized image pixel coordinates [u, v]; "
         "u increases left-to-right and v increases top-to-bottom"
     ),
-    "target_point_3d": "sim_local position in meters, same frame as state_info.base.ee_pos_sim",
-    "state_info.base.ee_pos_sim": "sim_local position in meters",
-    "state_info.base.ee_quat_sim": "sim_local end-effector orientation quaternion [x, y, z, w]",
+    "target_point_3d": "robot-base position in meters, same frame as state_info.base.ee_pos",
+    "state_info.base.ee_pos": "robot-base position in meters",
+    "state_info.base.ee_quat": "robot-base end-effector orientation quaternion [x, y, z, w]",
     "state_info.base.ee_pos_vel": "end-effector linear velocity from rollout robot_state",
     "state_info.base.ee_ori_vel": "end-effector angular velocity from rollout robot_state",
 }
@@ -64,8 +64,8 @@ BASE_SYSTEM_PROMPT = (
     "and the next target point. Return strict JSON only; do not output any "
     "extra explanation. target_point_2d is a front-camera image pixel coordinate "
     "[u, v], where u increases from left to right and v increases from top to bottom. "
-    "target_point_3d and state_info.base.ee_pos_sim are expressed in the same "
-    "sim_local coordinate frame. The target point is the position component of the "
+    "target_point_3d and state_info.base.ee_pos are expressed in the same "
+    "robot-base coordinate frame. The target point is the position component of the "
     "target end-effector pose for the current skill. Skill semantics: for push, the "
     "target point is the goal location where the object or part should be pushed; "
     "for pick, the target point is the grasp "
@@ -136,7 +136,7 @@ TASK_SYSTEM_PROMPTS = {
 STATE_INFO_PLACEHOLDER = "<state_info>"
 OUTPUT_JSON_EXAMPLE = (
     '{"skill": "pick", "target_point_2d": [160.0, 153.0], '
-    '"target_point_3d": [0.160508, 0.000166, 0.430685]}'
+    '"target_point_3d": [0.460508, 0.000166, 0.015685]}'
 )
 
 DEFAULT_USER_PROMPT = (
@@ -285,11 +285,11 @@ def _system_prompt_for_task(task: Optional[str], override: Optional[str]) -> str
     return TASK_SYSTEM_PROMPTS.get(str(task), BASE_SYSTEM_PROMPT)
 
 
-def _has_sim_local_eepose(robot_state: Any) -> bool:
+def _has_robot_base_eepose(robot_state: Any) -> bool:
     return (
         isinstance(robot_state, dict)
-        and robot_state.get("ee_pos_sim") is not None
-        and robot_state.get("ee_quat_sim") is not None
+        and robot_state.get("ee_pos") is not None
+        and robot_state.get("ee_quat") is not None
     )
 
 
@@ -428,10 +428,10 @@ def _state_info_payload(obs: dict[str, Any]) -> dict[str, Any]:
         key: _jsonify(robot_state.get(key))
         for key in STATE_INFO_BASE_KEYS
     }
-    if base["ee_pos_sim"] is None and robot_state.get("ee_pos") is not None:
-        base["ee_pos_sim"] = _jsonify(robot_state.get("ee_pos"))
-    if base["ee_quat_sim"] is None and robot_state.get("ee_quat") is not None:
-        base["ee_quat_sim"] = _jsonify(robot_state.get("ee_quat"))
+    if base["ee_pos"] is None and robot_state.get("ee_pos_sim") is not None:
+        base["ee_pos"] = _jsonify(robot_state.get("ee_pos_sim"))
+    if base["ee_quat"] is None and robot_state.get("ee_quat_sim") is not None:
+        base["ee_quat"] = _jsonify(robot_state.get("ee_quat_sim"))
     state_info = {
         "base": base,
         "extra": {
@@ -444,14 +444,49 @@ def _state_info_payload(obs: dict[str, Any]) -> dict[str, Any]:
     return state_info
 
 
+def _guidance_frame_for_trajectory(data: dict[str, Any]) -> str:
+    value = data.get("guidance_frame")
+    if value is None:
+        metadata = data.get("metadata")
+        if isinstance(metadata, dict):
+            annotation = metadata.get("real_skill_annotation")
+            if isinstance(annotation, dict):
+                value = annotation.get("target_point_frame")
+    if value is not None:
+        normalized = str(value).strip().lower().replace("_", "-")
+        if normalized in {"robot-base", "sim-local"}:
+            return normalized
+    observations = data.get("observations")
+    sample = observations[0] if isinstance(observations, list) and observations else {}
+    state = sample.get("robot_state", {}) if isinstance(sample, dict) else {}
+    return "sim-local" if isinstance(state, dict) and "ee_pos_sim" in state else "robot-base"
+
+
+def _guidance_point_robot_base(obs: dict[str, Any], guidance_frame: str):
+    point = obs.get("guidance_point")
+    if point is None or guidance_frame == "robot-base":
+        return point
+    state = obs.get("robot_state")
+    if not isinstance(state, dict) or "ee_pos" not in state or "ee_pos_sim" not in state:
+        return None
+    offset = np.asarray(state["ee_pos_sim"], dtype=np.float32) - np.asarray(
+        state["ee_pos"], dtype=np.float32
+    )
+    return np.asarray(point, dtype=np.float32) - offset
+
+
 def _assistant_payload(
     obs: dict[str, Any],
     task: Optional[str],
+    *,
+    guidance_frame: str = "robot-base",
 ) -> dict[str, Any]:
     return {
         "skill": _jsonify(obs.get("skill")),
         "target_point_2d": _target_point_2d_payload(obs.get("guidance_point_2d")),
-        "target_point_3d": _jsonify(obs.get("guidance_point")),
+        "target_point_3d": _jsonify(
+            _guidance_point_robot_base(obs, guidance_frame)
+        ),
     }
 
 
@@ -975,6 +1010,7 @@ def convert_pickles_to_vlm_sft(args: argparse.Namespace) -> dict[str, Any]:
         rollout_stem = _safe_stem(pickle_path)
         rollout_index = selected_per_task[task]
         emitted_for_rollout = 0
+        guidance_frame = _guidance_frame_for_trajectory(data)
 
         for frame_idx in _iter_frame_indices(
             len(observations),
@@ -988,10 +1024,10 @@ def convert_pickles_to_vlm_sft(args: argparse.Namespace) -> dict[str, Any]:
             if obs.get("color_image2") is None or obs.get("color_image1") is None:
                 skipped["missing_required_images"] += 1
                 continue
-            if not args.allow_legacy_eepose and not _has_sim_local_eepose(
+            if not args.allow_legacy_eepose and not _has_robot_base_eepose(
                 obs.get("robot_state")
             ):
-                skipped["missing_sim_local_eepose"] += 1
+                skipped["missing_robot_base_eepose"] += 1
                 continue
 
             try:
@@ -1001,7 +1037,11 @@ def convert_pickles_to_vlm_sft(args: argparse.Namespace) -> dict[str, Any]:
                 skipped[f"image_error:{type(exc).__name__}"] += 1
                 continue
 
-            assistant_obj = _assistant_payload(obs, task=task)
+            assistant_obj = _assistant_payload(
+                obs,
+                task=task,
+                guidance_frame=guidance_frame,
+            )
             supervision_error = _supervision_error(
                 assistant_obj,
                 front_image_shape=front_image.shape,
@@ -1351,8 +1391,8 @@ def add_convert_args(parser: argparse.ArgumentParser, include_source_args: bool 
         "--allow-legacy-eepose",
         action="store_true",
         help=(
-            "Allow converting old pickles without robot_state.ee_pos_sim. "
-            "Without this flag, samples missing sim-local EE pose are skipped."
+            "Allow converting old pickles without canonical robot_state.ee_pos/ee_quat. "
+            "Without this flag, samples missing robot-base EE pose are skipped."
         ),
     )
     parser.add_argument("--no-save-depth-npy", dest="save_depth_npy", action="store_false")

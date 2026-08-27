@@ -191,7 +191,7 @@ def _tracking_coverage_complete(task_payload: dict[str, Any]) -> bool:
         and int(tracking.get("episode_count", -1)) == expected
         and int(tracking.get("expected_episode_count", expected)) == expected
         and int(tracking.get("incomplete_episode_count", -1)) == 0
-        and workspace_filter.get("coordinate_frame") == "sim_local_m"
+        and workspace_filter.get("coordinate_frame") == "robot_base_m"
         and workspace_counts_match
     )
 
@@ -2173,7 +2173,7 @@ def generate_report(
                     ],
                 ),
                 "",
-                "历史排除项主要包含两类：任务完成后的 annotation 早退分支错误返回 robot-local 缓存坐标，以及家具部件被物理仿真抛出工作空间。前者已改为缓存并返回实际用于绘图的 sim-local noisy/clean guidance；该表反映历史数据质量，不应解释为 condition 本身的失败率。",
+                "历史排除项主要包含两类：任务完成后的 annotation 早退分支返回了错误 frame 的缓存坐标，以及家具部件被物理仿真抛出工作空间。前者已改为缓存并返回实际用于绘图的 robot-base noisy/clean guidance；该表反映历史数据质量，不应解释为 condition 本身的失败率。",
                 "",
             ]
             if tracking_workspace_exclusion_rows
@@ -2214,7 +2214,7 @@ def generate_report(
         "- n1-n4 均使用 annotation noise seed 0；相同 env/phase 的标准高斯方向相同，仅按 noise std 缩放。因此单条幅度曲线仍包含 noise-seed-specific 效应，不等价于对零均值噪声分布取期望。",
         "- Shuffle 优先从同 task、同 skill type 的其他 semantic state 选择 donor；若不存在，则从同 task 的任意其他 semantic state 选择，禁止回退到当前 state。",
         "- tracking error 比较每个连续 skill 阶段最后一帧 final EE pose 与实际画出的 noisy/shuffled guidance pose。",
-        "- tracking 只接收 sim-local workspace `x=[0.000, 0.500] m, y=[-0.550, 0.550] m, z=[0.415, 0.815] m` 内的 guidance target；workspace 外 target 会被计数并排除。z 下界取桌面高度，因为 guidance 是物体表面点而不是 EE origin。",
+        "- tracking 只接收 robot-base workspace `x=[0.300, 0.800] m, y=[-0.550, 0.550] m, z=[0.000, 0.400] m` 内的 guidance target；workspace 外 target 会被计数并排除。z 下界取桌面高度，因为 guidance 是物体表面点而不是 EE origin。",
         "- 同一 episode 多次进入同一 semantic skill state 时，point 保留最小 position error，grasp-part 保留最小 total error。",
         "- point 只报告 position tracking；grasp-part 报告 position/orientation/total，其中 `total = pos_m / 0.01 + ori_deg / 5`。",
         f"- 当前完成组数：`{len(overall_rows)}`；task-level 数据行：`{len(task_rows)}`。",

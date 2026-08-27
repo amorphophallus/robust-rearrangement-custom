@@ -8,6 +8,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from scripts.run_clean_train_noise_eval import (
     CONDITIONS,
     GRASP_NOISE_LEVELS,
@@ -23,6 +25,12 @@ from src.eval.progress_schema import (
     new_tracking_workspace_counts,
     record_tracking_workspace_status,
     tracking_target_workspace_status,
+)
+from src.common.eepose import ROBOT_BASE, SIM_LOCAL
+from src.common.guidance import (
+    normalize_guidance_frame,
+    robot_base_to_sim_local_from_state,
+    transform_guidance_pose,
 )
 
 
@@ -91,18 +99,29 @@ def _episode_tracking_errors(
     workspace_counts: dict[str, int] | None = None,
 ) -> dict[str, dict[str, float]]:
     observations = trajectory.get("observations") or []
+    frame = trajectory.get("guidance_frame")
+    if frame is None:
+        sample_state = observations[0].get("robot_state", {}) if observations else {}
+        frame = SIM_LOCAL if "ee_pos_sim" in sample_state else ROBOT_BASE
+    frame = normalize_guidance_frame(frame)
     per_state: dict[str, dict[str, float]] = {}
     for semantic_state, _, final_idx in _observation_segments(observations, task):
         observation = observations[final_idx]
-        workspace_status = tracking_target_workspace_status(
-            observation.get("guidance_pose")
-        )
+        target_pose = observation.get("guidance_pose")
+        if target_pose is not None and frame == SIM_LOCAL:
+            robot_to_sim = robot_base_to_sim_local_from_state(
+                observation["robot_state"]
+            )
+            target_pose = transform_guidance_pose(
+                target_pose, np.linalg.inv(robot_to_sim)
+            )
+        workspace_status = tracking_target_workspace_status(target_pose)
         record_tracking_workspace_status(workspace_counts, workspace_status)
         if workspace_status != "inside":
             continue
         error = _tracking_error_at_frame(
             observation.get("robot_state"),
-            observation.get("guidance_pose"),
+            target_pose,
             metric_type=metric_type,
         )
         if error is None:
@@ -231,10 +250,10 @@ def recompute_saved_tracking(
         "rollouts_per_task_setting": expected_rollouts,
         "target_pose": "displayed_noisy_guidance_pose",
         "workspace_filter": (
-            "Only final-segment guidance targets inside the Panda sim-local point "
+            "Only final-segment guidance targets inside the Panda robot-base point "
             "workspace contribute tracking error. Outside targets are counted and excluded."
         ),
-        "position_metric": "3d_euclidean_sim_local_m",
+        "position_metric": "3d_euclidean_robot_base_m",
         "orientation_metric": "so3_geodesic_deg",
         "total_metric": "pos_m/0.01 + ori_deg/5",
         "semantic_state_reconstruction": (

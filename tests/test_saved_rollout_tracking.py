@@ -12,6 +12,8 @@ def _observation(skill: str, ee_x: float) -> dict:
     return {
         "skill": skill,
         "robot_state": {
+            "ee_pos": np.asarray([0.5 + ee_x, 0.0, 0.085]),
+            "ee_quat": np.asarray([0.0, 0.0, 0.0, 1.0]),
             "ee_pos_sim": np.asarray([0.2 + ee_x, 0.0, 0.5]),
             "ee_quat_sim": np.asarray([0.0, 0.0, 0.0, 1.0]),
         },

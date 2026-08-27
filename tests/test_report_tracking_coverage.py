@@ -93,7 +93,7 @@ def test_tracking_coverage_accepts_all_complete_episodes():
             "incomplete_episode_count": 0,
             "complete": True,
             "workspace_filter": {
-                "coordinate_frame": "sim_local_m",
+                "coordinate_frame": "robot_base_m",
                 "final_segment_count": 100,
                 "included_segment_count": 99,
                 "excluded_outside_workspace_count": 1,

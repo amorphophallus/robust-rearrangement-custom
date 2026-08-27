@@ -41,10 +41,12 @@ from src.eval.skill_annotation_util import (
     _to_numpy,
 )
 from src.eval.real_pose_provider import PartPoseEstimate, PartPoseProvider
+from src.common.eepose import ROBOT_BASE
+from src.common.guidance import GUIDANCE_SCHEMA_VERSION
 
 
 ANNOTATION_SOURCE = "real_skill_annotation_util"
-ANNOTATION_VERSION = 9
+ANNOTATION_VERSION = 10
 ANNOTATION_STATUS_KEY = "annotation_status"
 ANNOTATION_STATUS_ANNOTATED = "annotated"
 ANNOTATION_STATUS_UNANNOTATED = "unannotated"
@@ -1049,6 +1051,7 @@ class RealSkillAnnotator(SkillAnnotator):
                 if bundle["guidance_pose"] is None
                 else bundle["guidance_pose"].copy()
             ),
+            "guidance_frame": ROBOT_BASE,
             "guidance_point_2d": guidance_point_2d,
             "grasp_annotation_2d": grasp_annotation_2d,
             "debug": debug,
@@ -1101,6 +1104,7 @@ _ANNOTATION_FIELDS = (
     "guidance_point_clean",
     "guidance_pose",
     "guidance_pose_clean",
+    "guidance_frame",
     "guidance_gripper_width",
     "guidance_point_2d",
     "grasp_annotation_2d",
@@ -1115,7 +1119,7 @@ def _apply_annotation_bundle(
     observation["guidance"] = {
         "source": ANNOTATION_SOURCE,
         "target_point": bundle["guidance_point"],
-        "target_point_frame": "robot_base",
+        "target_point_frame": ROBOT_BASE,
         "target_point_2d": bundle["guidance_point_2d"],
         "skill": bundle["skill"],
         "skill_state": bundle["skill_state"],
@@ -1134,7 +1138,7 @@ def _real_annotation_metadata(
         "version": ANNOTATION_VERSION,
         "mode": mode,
         "complete": True,
-        "target_point_frame": "robot_base",
+        "target_point_frame": ROBOT_BASE,
         "front_projection_transform": "camera_to_april",
         "wrist_projection_transform": "robot_state.wrist_pose",
         "missing_pose_policy": "parts_founds + ee_rigid_propagation + held_last",
@@ -1235,6 +1239,8 @@ class RealSkillAnnotationSession:
         )
         data["annotation_source"] = ANNOTATION_SOURCE
         data[ANNOTATION_STATUS_KEY] = ANNOTATION_STATUS_ANNOTATED
+        data["guidance_frame"] = ROBOT_BASE
+        data["guidance_schema_version"] = GUIDANCE_SCHEMA_VERSION
 
 
 def annotate_trajectory(

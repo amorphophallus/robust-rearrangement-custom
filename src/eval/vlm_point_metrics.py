@@ -37,22 +37,31 @@ def _to_numpy(value: Any) -> np.ndarray:
     return np.asarray(value, dtype=np.float64)
 
 
+def _point_to_camera(camera_info: Mapping[str, Any]) -> np.ndarray:
+    """Select canonical extrinsics, falling back for legacy saved rollouts."""
+
+    value = camera_info.get("robot_base_to_camera")
+    if value is None:
+        value = camera_info.get("sim_local_to_camera")
+    return _to_numpy(value)
+
+
 def _project_continuous(
-    point_sim_local: Any,
+    point_3d: Any,
     camera_info: Mapping[str, Any],
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Return continuous ``uv`` and camera-frame xyz without image clipping."""
 
-    point = _to_numpy(point_sim_local)
+    point = _to_numpy(point_3d)
     intrinsics = _to_numpy(camera_info.get("intrinsics"))
-    sim_local_to_camera = _to_numpy(camera_info.get("sim_local_to_camera"))
+    point_to_camera = _point_to_camera(camera_info)
     if point.shape != (3,) or intrinsics.shape != (3, 3):
         return None
-    if sim_local_to_camera.shape != (4, 4):
+    if point_to_camera.shape != (4, 4):
         return None
     homogeneous = np.ones(4, dtype=np.float64)
     homogeneous[:3] = point
-    point_camera = sim_local_to_camera @ homogeneous
+    point_camera = point_to_camera @ homogeneous
     if not np.isfinite(point_camera).all() or point_camera[2] <= 1e-8:
         return None
     point_cv = point_camera[:3].copy()
@@ -65,22 +74,22 @@ def _project_continuous(
 
 
 def _project_points_continuous(
-    points_sim_local: Any,
+    points_3d: Any,
     camera_info: Mapping[str, Any],
 ) -> np.ndarray | None:
     """Vectorized continuous projection matching annotation-util conventions."""
 
-    points = _to_numpy(points_sim_local)
+    points = _to_numpy(points_3d)
     intrinsics = _to_numpy(camera_info.get("intrinsics"))
-    sim_local_to_camera = _to_numpy(camera_info.get("sim_local_to_camera"))
+    point_to_camera = _point_to_camera(camera_info)
     if points.ndim != 2 or points.shape[1] != 3:
         return None
-    if intrinsics.shape != (3, 3) or sim_local_to_camera.shape != (4, 4):
+    if intrinsics.shape != (3, 3) or point_to_camera.shape != (4, 4):
         return None
     homogeneous = np.concatenate(
         [points, np.ones((len(points), 1), dtype=np.float64)], axis=1
     )
-    points_camera = (sim_local_to_camera @ homogeneous.T).T
+    points_camera = (point_to_camera @ homogeneous.T).T
     if not np.isfinite(points_camera).all() or np.any(points_camera[:, 2] <= 1e-8):
         return None
     points_cv = points_camera[:, :3].copy()

@@ -137,11 +137,31 @@ def test_runtime_payload_accepts_numpy_then_validates():
     ) is None
 
 
+def test_legacy_sim_guidance_is_exported_in_robot_base():
+    obs = {
+        "skill": "pick",
+        "guidance_point_2d": {"color_image2": np.array([100.0, 120.0])},
+        "guidance_point": np.array([0.1, 0.2, 0.5]),
+        "robot_state": {
+            "ee_pos": np.array([0.5, 0.0, 0.1]),
+            "ee_pos_sim": np.array([0.2, 0.0, 0.515]),
+        },
+    }
+
+    payload = generator._assistant_payload(
+        obs,
+        task="one_leg",
+        guidance_frame="sim-local",
+    )
+
+    np.testing.assert_allclose(payload["target_point_3d"], [0.4, 0.2, 0.085])
+
+
 def test_convert_skips_null_before_writing_media(tmp_path):
     image = np.zeros((8, 10, 3), dtype=np.uint8)
     robot_state = {
-        "ee_pos_sim": np.array([0.1, 0.2, 0.3]),
-        "ee_quat_sim": np.array([0.0, 0.0, 0.0, 1.0]),
+        "ee_pos": np.array([0.1, 0.2, 0.3]),
+        "ee_quat": np.array([0.0, 0.0, 0.0, 1.0]),
         "ee_pos_vel": np.zeros(3),
         "ee_ori_vel": np.zeros(3),
         "gripper_width": np.array([0.05]),

@@ -231,3 +231,6 @@ def test_guidance_bank_round_trip(tmp_path):
     records = _shuffle_records()
     write_guidance_shuffle_bank(path, task="one_leg", records=records)
     assert load_guidance_shuffle_bank(path) == records
+    payload = __import__("json").loads(path.read_text())
+    assert payload["version"] == 2
+    assert payload["guidance_frame"] == "robot-base"

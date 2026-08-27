@@ -7,6 +7,9 @@ from typing import Any, Optional
 
 import numpy as np
 
+from src.common.eepose import ROBOT_BASE
+from src.common.guidance import GUIDANCE_SCHEMA_VERSION, normalize_guidance_frame
+
 
 @dataclass(frozen=True)
 class AnnotationNoiseConfig:
@@ -87,10 +90,30 @@ def load_guidance_shuffle_bank(path: Path) -> list[dict[str, Any]]:
             records.extend(load_guidance_shuffle_bank(child))
         return records
     payload = json.loads(path.read_text())
+    if not isinstance(payload, dict) or "guidance_frame" not in payload:
+        raise ValueError(
+            f"Guidance bank {path} has no explicit guidance_frame; "
+            "migrate or regenerate the legacy bank before use"
+        )
+    frame = normalize_guidance_frame(payload["guidance_frame"])
+    if frame != ROBOT_BASE:
+        raise ValueError(
+            f"Guidance bank {path} uses {frame!r}; expected canonical {ROBOT_BASE!r}"
+        )
     records = payload.get("records", payload) if isinstance(payload, dict) else payload
     if not isinstance(records, list):
         raise ValueError(f"Invalid guidance bank payload: {path}")
-    return [dict(record) for record in records if isinstance(record, dict)]
+    output = [dict(record) for record in records if isinstance(record, dict)]
+    for record in output:
+        record_frame = normalize_guidance_frame(
+            record.get("guidance_frame", frame)
+        )
+        if record_frame != ROBOT_BASE:
+            raise ValueError(
+                f"Guidance bank {path} contains a non-canonical record frame: "
+                f"{record_frame!r}"
+            )
+    return output
 
 
 def write_guidance_shuffle_bank(
@@ -102,7 +125,12 @@ def write_guidance_shuffle_bank(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
-            {"version": 1, "task": task, "records": records},
+            {
+                "version": GUIDANCE_SCHEMA_VERSION,
+                "task": task,
+                "guidance_frame": ROBOT_BASE,
+                "records": records,
+            },
             indent=2,
             sort_keys=True,
         )

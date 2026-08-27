@@ -204,6 +204,7 @@ def _guidance_bank_records_for_episode(
                 "guidance_gripper_width": (
                     None if width is None else float(np.asarray(width).reshape(-1)[0])
                 ),
+                "guidance_frame": ROBOT_BASE,
             }
         )
     return records

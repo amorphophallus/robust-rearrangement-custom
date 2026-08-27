@@ -15,11 +15,11 @@
 
 `target_point_3d`
 
-3D target point 是 `sim_local` 坐标系下的位置，单位是米。这个点来自 rollout pickle 中的 `observation["guidance_point"]`，代码中由 `skill_annotation_util.project_3d_to_2d(point_sim_local, camera_info)` 投影到 2D。
+3D target point 是 `robot-base` 坐标系下的位置，单位是米。这个点来自 rollout pickle 中的 `observation["guidance_point"]`，代码中由 `skill_annotation_util.project_3d_to_2d(point_robot_base, camera_info)` 投影到 2D。
 
 `state_info.base`
 
-`state_info.base` 是放进 user prompt 的主要本体信息，固定包含 `ee_pos_sim`、`ee_quat_sim`、`ee_pos_vel`、`ee_ori_vel`、`gripper_width`。其中 `ee_pos_sim` / `ee_quat_sim` 来自 rollout pickle 的 `robot_state.ee_pos_sim` / `robot_state.ee_quat_sim`，和 `target_point_3d` 使用同一个 `sim_local` 坐标系。默认情况下，旧 pickle 如果没有 `ee_pos_sim` 会被跳过，并在 manifest 的 `skipped.missing_sim_local_eepose` 中计数；只有显式设置 `--allow-legacy-eepose` 时才允许转换旧数据。
+`state_info.base` 是放进 user prompt 的主要本体信息，固定包含 `ee_pos`、`ee_quat`、`ee_pos_vel`、`ee_ori_vel`、`gripper_width`。其中 `ee_pos` / `ee_quat` 来自 rollout pickle 的 canonical `robot_state.ee_pos` / `robot_state.ee_quat`，和 `target_point_3d` 使用同一个 `robot-base` 坐标系。默认情况下，旧 pickle 如果没有 canonical EE pose 会被跳过，并在 manifest 的 `skipped.missing_robot_base_eepose` 中计数；只有显式设置 `--allow-legacy-eepose` 时才允许使用旧字段兜底。
 
 `state_info.extra`
 
@@ -187,7 +187,7 @@ VLM 数据集输出目录。
 
 `--allow-legacy-eepose`
 
-允许转换缺少 `robot_state.ee_pos_sim` 的旧 pickle。默认不开启，因为这样无法严格保证 `target_point_3d` 和 `state_info.base.ee_pos_sim` 在同一个坐标系。
+允许转换缺少 canonical `robot_state.ee_pos` / `robot_state.ee_quat` 的旧 pickle。默认不开启，因为这样无法严格保证 `target_point_3d` 和 `state_info.base.ee_pos` 在同一个 robot-base 坐标系。
 
 `--system-prompt`
 
@@ -338,7 +338,7 @@ This is the robot proprioceptive state information:
 默认 user prompt 还包含一个输出 JSON 示例，用来约束模型输出格式：
 
 ```json
-{"skill": "pick", "target_point_2d": [160.0, 153.0], "target_point_3d": [0.160508, 0.000166, 0.430685]}
+{"skill": "pick", "target_point_2d": [160.0, 153.0], "target_point_3d": [0.460508, 0.000166, 0.015685]}
 ```
 
 ## `messages.jsonl` 格式
@@ -356,8 +356,8 @@ This is the robot proprioceptive state information:
   ],
   "state_info": {
     "base": {
-      "ee_pos_sim": [0.610314, 0.099169, 0.173151],
-      "ee_quat_sim": [0.856925, 0.510935, 0.052267, 0.0435],
+      "ee_pos": [0.610314, 0.099169, 0.173151],
+      "ee_quat": [0.856925, 0.510935, 0.052267, 0.0435],
       "ee_pos_vel": [0.0, 0.0, 0.0],
       "ee_ori_vel": [0.0, 0.0, 0.0],
       "gripper_width": [0.065]
@@ -382,7 +382,7 @@ This is the robot proprioceptive state information:
     "camera_map": {"front": "color_image2", "wrist": "color_image1"},
     "coordinate_frames": {
       "target_point_2d": "front-camera resized image pixel coordinates [u, v]; u increases left-to-right and v increases top-to-bottom",
-      "target_point_3d": "sim_local position in meters, same frame as state_info.base.ee_pos_sim"
+      "target_point_3d": "robot-base position in meters, same frame as state_info.base.ee_pos"
     },
     "depth": {
       "front": "depth/round_table/..._front_depth.npy",
