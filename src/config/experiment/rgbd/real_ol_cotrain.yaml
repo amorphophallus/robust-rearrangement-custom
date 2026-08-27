@@ -1,0 +1,26 @@
+# @package _global_
+defaults:
+  - rgbd/base
+  - override /actor: diffusion
+  - override /actor/diffusion_model: dit
+
+# Train one RGBD policy on the aligned real OSC and simulation DiffIK data.
+# The policy/action representation is shared; control.controller intentionally
+# remains the scalar `diffik` inherited from rgbd/base for simulator rollouts.
+task: one_leg
+environment: [real, sim]
+demo_source: [teleop, rollout]
+randomness: [low, med]
+
+data:
+  # Explicit paths are required because the two datasets use different
+  # controller, demo_source, randomness, and suffix path components.
+  data_paths_override:
+    - osc/real/one_leg/teleop/low/success/annotated.lmdb
+    - diffik/sim/one_leg/rollout/med/success/rgbd-only-skill.lmdb
+  load_into_memory: false
+  augment_image: true
+  annotate_skill_one_hot: true
+
+wandb:
+  project: real-sim-one-leg-rgbd-cotrain
