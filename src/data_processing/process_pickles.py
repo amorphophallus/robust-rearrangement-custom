@@ -29,6 +29,11 @@ from src.common.geometry import (
     np_action_quat_to_6d_rotation,
     np_apply_quat,
 )
+from src.common.gripper import (
+    GRIPPER_OPEN_THRESHOLD_METERS,
+    GRIPPER_WIDTH_ENCODING,
+    binarize_gripper_width,
+)
 from src.data_processing.utils import resize, resize_crop
 from src.data_processing.utils import clip_quat_xyzw_magnitude
 from src.data_processing.offline_image_annotations import annotate_observation_image
@@ -367,6 +372,10 @@ def process_pickle_file(
         )
     else:
         robot_state_quat = np.array([o["robot_state"] for o in obs], dtype=np.float32)
+
+    # Store gripper proprioception with the same discrete convention as the
+    # action: open=-1, closed=+1. Raw pickles retain the metric sensor value.
+    robot_state_quat[:, -1] = binarize_gripper_width(robot_state_quat[:, -1])
 
     robot_state_6d = ensure_float32(
         np_proprioceptive_quat_to_6d_rotation(robot_state_quat)
@@ -869,6 +878,8 @@ if __name__ == "__main__":
         z.attrs["randomness"] = args.randomness
         z.attrs["demo_outcome"] = args.demo_outcome
         z.attrs["suffix"] = args.suffix
+        z.attrs["gripper_width_encoding"] = GRIPPER_WIDTH_ENCODING
+        z.attrs["gripper_width_open_threshold_m"] = GRIPPER_OPEN_THRESHOLD_METERS
         z.attrs["normalizer_stats"] = serialize_normalizer_stats(normalizer_stats)
         print("[INFO] Batch processing complete.")
         exit(0)
@@ -951,3 +962,5 @@ if __name__ == "__main__":
     z.attrs["normalizer_stats"] = serialize_normalizer_stats(normalizer_stats)
     z.attrs["demo_outcome"] = args.demo_outcome
     z.attrs["suffix"] = args.suffix
+    z.attrs["gripper_width_encoding"] = GRIPPER_WIDTH_ENCODING
+    z.attrs["gripper_width_open_threshold_m"] = GRIPPER_OPEN_THRESHOLD_METERS

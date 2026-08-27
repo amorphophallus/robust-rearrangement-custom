@@ -35,6 +35,10 @@ from src.common.eepose import (
     select_policy_eepose,
 )
 from src.common.geometry import quaternion_xyzw_to_matrix
+from src.common.gripper import (
+    binarize_robot_state_gripper_width,
+    normalizer_expects_binary_gripper_width,
+)
 from src.common.files import get_processed_path, trajectory_save_dir
 from src.data_collection.io import save_raw_rollout
 from src.data_processing.utils import filter_and_concat_robot_state
@@ -827,6 +831,10 @@ def rollout(
         else:
             obs = env.reset()
         actor.reset()
+    use_binary_gripper_width = (
+        not getattr(actor, "expects_raw_robot_state", False)
+        and normalizer_expects_binary_gripper_width(actor.normalizer)
+    )
     collect_skill_annotations = (
         use_vlm
         or annotate_skill
@@ -1056,11 +1064,16 @@ def rollout(
         # Keep the policy tensor layout stable while selecting either the new
         # robot-base pose or a legacy EE representation.
         if isinstance(raw_robot_state, dict):
-            obs["robot_state"] = select_policy_eepose(
+            policy_robot_state = select_policy_eepose(
                 raw_robot_state,
                 eepose_frame,
                 original_frame=SIM_LOCAL,
             )
+            if use_binary_gripper_width:
+                policy_robot_state = binarize_robot_state_gripper_width(
+                    policy_robot_state
+                )
+            obs["robot_state"] = policy_robot_state
 
         # Convert from robot state dict to robot state tensor
         if not getattr(actor, "expects_raw_robot_state", False):

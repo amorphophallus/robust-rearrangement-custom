@@ -53,6 +53,10 @@ from src.dataset.depth_stats import (
     update_depth_moments,
 )
 from src.visualization.render_mp4 import unpickle_data
+from src.common.gripper import (
+    GRIPPER_OPEN_THRESHOLD_METERS,
+    GRIPPER_WIDTH_ENCODING,
+)
 
 
 LOWDIM_KEYS = tuple(key for key in TIMESERIES_KEYS if key not in {
@@ -891,6 +895,8 @@ def main():
         "provenance": provenance,
         "normalizer_stats": serialized_normalizer_stats,
         "normalizer_stats_keys": list(NORMALIZER_STATS_KEYS),
+        "gripper_width_encoding": GRIPPER_WIDTH_ENCODING,
+        "gripper_width_open_threshold_m": GRIPPER_OPEN_THRESHOLD_METERS,
         DEPTH_NORMALIZER_STATS_ATTR: depth_normalizer_stats,
         "env_counts": dict(sorted(env_counts.items())),
     }

@@ -55,6 +55,10 @@ from src.common.eepose import (
     ROBOT_BASE,
     resolve_eepose_frame,
 )
+from src.common.gripper import (
+    binarize_gripper_width,
+    normalizer_expects_binary_gripper_width,
+)
 from ipdb import set_trace as bp
 from furniture_bench.utils.scripted_demo_mod import scale_scripted_action
 from furniture_bench.furniture import furniture_factory
@@ -362,6 +366,7 @@ class SimpleDiffIKFrankaEnv:
         furniture_name: str = "one_leg",
         part_poses_norm_mid: torch.Tensor = None,
         eepose_frame: str = ROBOT_BASE,
+        binary_gripper_width: bool = False,
     ):
 
         self.device = device
@@ -383,6 +388,7 @@ class SimpleDiffIKFrankaEnv:
         self.eepose_frame = resolve_eepose_frame(
             eepose_frame, original_frame=REAL_TIP
         )
+        self.binary_gripper_width = binary_gripper_width
 
         if self.observation_type == "image":
             self.get_obs = self.get_img_obs
@@ -538,6 +544,8 @@ class SimpleDiffIKFrankaEnv:
             robot_state = torch.cat([robot_state, ee_vel], dim=-1)
 
         gripper_width = torch.Tensor([self.gripper.get_state().width])
+        if self.binary_gripper_width:
+            gripper_width = binarize_gripper_width(gripper_width)
         robot_state = torch.cat([robot_state, gripper_width], dim=-1)
 
         # convert to tensors
@@ -833,6 +841,9 @@ def main():
         furniture_name=args.furniture,
         part_poses_norm_mid=part_poses_norm_mid,
         eepose_frame=args.eepose_frame,
+        binary_gripper_width=normalizer_expects_binary_gripper_width(
+            actor.normalizer
+        ),
     )
 
     obs = env.get_obs()
