@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RR real-robot latency profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "measured_at",
+    "front_observation_ms",
+    "wrist_observation_ms",
+    "robot_observation_ms",
+    "gripper_observation_ms",
+    "robot_action_ms",
+    "gripper_action_ms"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "measured_at": {"type": "string", "minLength": 1},
+    "front_observation_ms": {"type": "number", "minimum": 0},
+    "wrist_observation_ms": {"type": "number", "minimum": 0},
+    "robot_observation_ms": {"type": "number", "minimum": 0},
+    "gripper_observation_ms": {"type": "number", "minimum": 0},
+    "robot_action_ms": {"type": "number", "minimum": 0},
+    "gripper_action_ms": {"type": "number", "minimum": 0}
+  }
+}

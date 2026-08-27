@@ -873,6 +873,30 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
         # Return the first action in the queue
         return self.actions.popleft()
 
+    @torch.no_grad()
+    def action_chunk(self, obs: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Predict and return a fresh timestampable action chunk.
+
+        Real-world inference needs all future actions at once so they can be
+        assigned to observation-relative target timestamps.  Calling this
+        method deliberately replaces any single-step queue left by ``action``;
+        it never mixes predictions from two policy queries.
+
+        Returns:
+            Tensor of shape ``(batch, action_horizon, action_dim)`` (or the
+            subdivided horizon when subdivision is enabled).
+        """
+
+        self.observations.append(obs)
+        while len(self.observations) < self.obs_horizon:
+            self.observations.append(obs)
+        nobs = self._normalized_obs(self.observations, flatten=self.flatten_obs)
+        predicted = self._sample_action_pred(nobs)
+        self.actions.clear()
+        if not predicted:
+            raise RuntimeError("Policy returned an empty action chunk")
+        return torch.stack(list(predicted), dim=1)
+
     # @torch.compile
     def action_normalized(self, obs: Dict[str, torch.Tensor]):
         action = self.action(obs)

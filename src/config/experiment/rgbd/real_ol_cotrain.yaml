@@ -16,7 +16,7 @@ data:
   # Explicit paths are required because the two datasets use different
   # controller, demo_source, randomness, and suffix path components.
   data_paths_override:
-    - osc/real/one_leg/teleop/low/success/annotated.lmdb
+    - osc/real/one_leg/teleop/low/success/aligned.lmdb
     - diffik/sim/one_leg/rollout/med/success/rgbd-only-skill.lmdb
   load_into_memory: false
   augment_image: true

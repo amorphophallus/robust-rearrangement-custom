@@ -396,8 +396,11 @@ def process_pickle_file(
 
     # figure out what to do with the corrupted raw data
     # For now, clip the z-axis rotation to 0.35
+    legacy_rotation_scale = metadata.get("legacy_rotation_episode_scale")
     action_delta_quat[:, 3:7] = clip_quat_xyzw_magnitude(
-        action_delta_quat[:, 3:7], clip_mag=0.35
+        action_delta_quat[:, 3:7],
+        clip_mag=0.35,
+        episode_scale_factor=legacy_rotation_scale,
     )
 
     # Take the sign of the gripper action

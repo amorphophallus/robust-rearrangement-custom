@@ -100,18 +100,32 @@ def resize_crop(img: Union[np.ndarray, torch.Tensor]):
     return img
 
 
-def clip_quat_xyzw_magnitude(delta_quat_xyzw: np.ndarray, clip_mag=0.35) -> np.ndarray:
+def clip_quat_xyzw_magnitude(
+    delta_quat_xyzw: np.ndarray,
+    clip_mag=0.35,
+    episode_scale_factor=None,
+) -> np.ndarray:
     """
-    Clips the rotation magnitude
+    Clips the legacy episode-level rotation magnitude.
+
+    ``episode_scale_factor`` is used by timestamp-aligned segments to preserve
+    the exact scale computed from their unsplit source episode.  Without it the
+    historical behavior is unchanged.
     """
     assert delta_quat_xyzw.shape[-1] == 4
 
     delta_rotvec = R.from_quat(delta_quat_xyzw).as_rotvec()
 
-    magnitude = np.linalg.norm(delta_rotvec)
-    if magnitude > clip_mag:
-        scale_factor = clip_mag / magnitude
-        delta_rotvec = scale_factor * delta_rotvec
+    if episode_scale_factor is None:
+        magnitude = np.linalg.norm(delta_rotvec)
+        scale_factor = min(1.0, clip_mag / magnitude) if magnitude > 0 else 1.0
+    else:
+        scale_factor = float(episode_scale_factor)
+        if not np.isfinite(scale_factor) or not 0.0 < scale_factor <= 1.0:
+            raise ValueError(
+                "episode_scale_factor must be finite and in the interval (0, 1]"
+            )
+    delta_rotvec = scale_factor * delta_rotvec
 
     delta_quat_xyzw = R.from_rotvec(delta_rotvec).as_quat()
 

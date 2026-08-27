@@ -21,3 +21,7 @@ python minimal.py -p 6000 --run-id real-one_leg-cotrain-2/paxnbwsu # -w _1199.pt
 ```
 - `--run-id` corresponds to the `wandb` run you want to evaluate
 - `-w` indicates which specific checkpoint you may want to test out (optional - by default it uses the `best_test_loss` or `best_success_rate` checkpoint)
+
+The Polymetis path above is legacy. New Deoxys RGBD evaluation and timestamp
+alignment are documented in `reports/real_time_alignment_and_eval.md`; use
+`python -m src.real.evaluate_policy` for the timestamped absolute-pose path.
