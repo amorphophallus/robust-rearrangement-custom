@@ -11,6 +11,7 @@ from scipy.spatial.transform import Rotation as R
 from src.visualization.render_mp4 import pickle_data
 from src.common.types import Trajectory, Observation
 from src.common.geometry import np_action_6d_to_quat
+from src.common.eepose import ROBOT_BASE, SIM_LOCAL
 
 from ipdb import set_trace as bp
 from src.visualization.render_mp4 import (
@@ -214,6 +215,9 @@ def save_raw_rollout(
     vlm_point_error_records: List[dict] = None,
     annotation_source: str = "scripted",
     vlm_model_revision: str = None,
+    eepose_frame: str = ROBOT_BASE,
+    eepose_original_frame: str = SIM_LOCAL,
+    policy_eepose_frame: str = ROBOT_BASE,
 ):
     observations: List[Observation] = list()
     include_vlm_metadata = any(
@@ -377,6 +381,10 @@ def save_raw_rollout(
         "action_type": action_type,
         "annotation_source": annotation_source,
         "vlm_model_revision": vlm_model_revision,
+        "eepose_frame": eepose_frame,
+        "eepose_original_frame": eepose_original_frame,
+        "policy_eepose_frame": policy_eepose_frame,
+        "eepose_schema_version": 2,
     }
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S.%f")

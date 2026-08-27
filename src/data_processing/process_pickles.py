@@ -15,6 +15,14 @@ from tqdm import tqdm, trange
 from src.common.types import Trajectory
 from src.common.files import get_processed_path, get_raw_paths
 from src.common.skills import SKILL_ORDER, SKILL_TO_ONEHOT
+from src.common.eepose import (
+    EEPPOSE_FRAME_HELP,
+    REAL_TIP,
+    ROBOT_BASE,
+    SIM_LOCAL,
+    resolve_eepose_frame,
+    select_policy_eepose,
+)
 from src.visualization.render_mp4 import unpickle_data
 from src.common.geometry import (
     np_proprioceptive_quat_to_6d_rotation,
@@ -250,6 +258,7 @@ def process_pickle_file(
     resize_image: bool = False,
     image_annotation_mode: str = "none",
     include_env_metadata: bool = False,
+    eepose_frame: str = ROBOT_BASE,
 ):
     """
     Process a single pickle file and return processed data.
@@ -257,7 +266,23 @@ def process_pickle_file(
     data: Trajectory = unpickle_data(pickle_path)
     obs = data["observations"]
 
-    action_delta_quat = np.array(data["actions"], dtype=np.float32)
+    metadata = data.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    original_frame = data.get(
+        "eepose_original_frame", metadata.get("eepose_original_frame")
+    )
+    if original_frame is None:
+        sample_state = obs[0].get("robot_state", {}) if obs else {}
+        sim_pos = sample_state.get("ee_pos_sim") if isinstance(sample_state, dict) else None
+        original_frame = SIM_LOCAL if sim_pos is not None else REAL_TIP
+    resolved_eepose_frame = resolve_eepose_frame(
+        eepose_frame, original_frame=original_frame
+    )
+
+    action_source = data["actions"]
+    if resolved_eepose_frame == REAL_TIP and "actions_original" in data:
+        action_source = data["actions_original"]
+    action_delta_quat = np.array(action_source, dtype=np.float32)
     assert (
         action_delta_quat.shape[-1] == 8
     ), "Expecting actions to be 8D (pos, quat, gripper)"
@@ -319,9 +344,25 @@ def process_pickle_file(
         # assert color_image2.shape[1:] == (240, 320, 3), f"Unexpected shape for color_image2: {color_image2.shape[1:]}"
 
     if isinstance(obs[0]["robot_state"], dict):
+        policy_robot_states = []
+        for observation in obs:
+            state = observation["robot_state"]
+            if (
+                resolved_eepose_frame == REAL_TIP
+                and "ee_pos_original" not in state
+            ):
+                # Unmigrated real pickles exposed the virtual tip directly.
+                selected_state = state
+            else:
+                selected_state = select_policy_eepose(
+                    state,
+                    eepose_frame,
+                    original_frame=original_frame,
+                )
+            policy_robot_states.append(selected_state)
         # Convert the robot state to a numpy array
         robot_state_quat = np.array(
-            [filter_and_concat_robot_state(o["robot_state"]) for o in obs],
+            [filter_and_concat_robot_state(state) for state in policy_robot_states],
             dtype=np.float32,
         )
     else:
@@ -441,6 +482,7 @@ def parallel_process_pickle_files(
     num_threads,
     calculate_pos_action_from_delta=False,
     resize_image=False,
+    eepose_frame=ROBOT_BASE,
 ):
     """
     Process all pickle files in parallel and aggregate results.
@@ -481,7 +523,11 @@ def parallel_process_pickle_files(
         # Run synchronous version
         for path in tqdm(pickle_paths, desc="Processing files"):
             data = process_pickle_file(
-                path, noop_threshold, calculate_pos_action_from_delta, resize_image
+                path,
+                noop_threshold,
+                calculate_pos_action_from_delta,
+                resize_image,
+                eepose_frame=eepose_frame,
             )
             aggregate_data(data)
     else:
@@ -494,6 +540,9 @@ def parallel_process_pickle_files(
                     noop_threshold,
                     calculate_pos_action_from_delta,
                     resize_image,
+                    "none",
+                    False,
+                    eepose_frame,
                 )
                 for path in pickle_paths
             ]
@@ -610,7 +659,30 @@ if __name__ == "__main__":
     parser.add_argument("--resize-image", action="store_true", help="Resize images to standard dimensions (240x320x3)")
     parser.add_argument("--input-dir", type=str, help="Path to the directory containing pkl files", default=None)
     parser.add_argument("--output-dir", type=str, help="Path to save the zarr file", default=None)
+    parser.add_argument(
+        "--eepose-frame",
+        default=ROBOT_BASE,
+        help=EEPPOSE_FRAME_HELP,
+    )
     args = parser.parse_args()
+
+    try:
+        resolved_eepose_frame = resolve_eepose_frame(
+            args.eepose_frame,
+            original_frame=(REAL_TIP if args.domain == "real" else SIM_LOCAL),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    available_eepose_frames = (
+        {ROBOT_BASE, REAL_TIP}
+        if args.domain == "real"
+        else {ROBOT_BASE, SIM_LOCAL}
+    )
+    if resolved_eepose_frame not in available_eepose_frames:
+        parser.error(
+            f"eepose frame {resolved_eepose_frame!r} is not available for "
+            f"domain {args.domain!r}"
+        )
 
     assert not args.randomize_order or args.offset == 0, "Cannot offset with randomize"
 
@@ -722,6 +794,7 @@ if __name__ == "__main__":
                     noop_threshold=0.0,
                     calculate_pos_action_from_delta=True,
                     resize_image=args.resize_image,
+                    eepose_frame=args.eepose_frame,
                 )
                 for k in TIMESERIES_KEYS:
                     batch_timeseries[k].append(data[k])
@@ -789,6 +862,7 @@ if __name__ == "__main__":
         z.attrs["randomize_order"] = args.randomize_order
         z.attrs["random_seed"] = args.random_seed
         z.attrs["demo_source"] = args.source
+        z.attrs["eepose_frame"] = args.eepose_frame
         z.attrs["controller"] = args.controller
         z.attrs["domain"] = args.domain if args.domain == "real" else "sim"
         z.attrs["task"] = args.task
@@ -811,6 +885,7 @@ if __name__ == "__main__":
         n_cpus,
         calculate_pos_action_from_delta=True,
         resize_image=args.resize_image,
+        eepose_frame=args.eepose_frame,
     )
     normalizer_stats = compute_normalizer_stats_from_dict(all_data)
 
@@ -868,6 +943,7 @@ if __name__ == "__main__":
     z.attrs["randomize_order"] = args.randomize_order
     z.attrs["random_seed"] = args.random_seed
     z.attrs["demo_source"] = args.source
+    z.attrs["eepose_frame"] = args.eepose_frame
     z.attrs["controller"] = args.controller
     z.attrs["domain"] = args.domain if args.domain == "real" else "sim"
     z.attrs["task"] = args.task

@@ -28,6 +28,13 @@ from src.common.image_annotations import resize_guidance_point_for_image
 from src.visualization.render_mp4 import create_in_memory_mp4
 from src.common.context import suppress_all_output
 from src.common.tasks import task2idx
+from src.common.eepose import (
+    ROBOT_BASE,
+    SIM_LOCAL,
+    resolve_eepose_frame,
+    select_policy_eepose,
+)
+from src.common.geometry import quaternion_xyzw_to_matrix
 from src.common.files import get_processed_path, trajectory_save_dir
 from src.data_collection.io import save_raw_rollout
 from src.data_processing.utils import filter_and_concat_robot_state
@@ -201,31 +208,84 @@ def _guidance_bank_records_for_episode(
 def _add_sim_local_ee_pose_to_robot_state(env: Env, robot_state):
     if not isinstance(robot_state, dict):
         return robot_state
-    if not all(hasattr(env, attr) for attr in ("rb_states", "ee_idxs", "base_idxs")):
-        return robot_state
-
-    device = env.rb_states.device
-    ee_idxs = torch.as_tensor(env.ee_idxs, device=device, dtype=torch.long)
-    base_idxs = torch.as_tensor(env.base_idxs, device=device, dtype=torch.long)
-    ee_pos_global = env.rb_states[ee_idxs, :3].clone()
-    ee_quat = env.rb_states[ee_idxs, 3:7].clone()
-    base_pos_global = env.rb_states[base_idxs, :3].clone()
-
-    if hasattr(env, "franka_from_origin_mat"):
-        franka_origin = torch.as_tensor(
-            np.asarray(env.franka_from_origin_mat, dtype=np.float32)[:3, 3],
-            device=device,
-            dtype=ee_pos_global.dtype,
-        )
-        env_offset = base_pos_global - franka_origin
-        ee_pos_sim = ee_pos_global - env_offset
-    else:
-        ee_pos_sim = ee_pos_global
-
     robot_state = dict(robot_state)
-    robot_state["ee_pos_sim"] = ee_pos_sim
-    robot_state["ee_quat_sim"] = ee_quat
+    if "ee_pos_sim" not in robot_state or "ee_quat_sim" not in robot_state:
+        if not all(
+            hasattr(env, attr) for attr in ("rb_states", "ee_idxs", "base_idxs")
+        ):
+            return robot_state
+
+        device = env.rb_states.device
+        ee_idxs = torch.as_tensor(env.ee_idxs, device=device, dtype=torch.long)
+        base_idxs = torch.as_tensor(env.base_idxs, device=device, dtype=torch.long)
+        ee_pos_global = env.rb_states[ee_idxs, :3].clone()
+        ee_quat = env.rb_states[ee_idxs, 3:7].clone()
+        base_pos_global = env.rb_states[base_idxs, :3].clone()
+
+        if hasattr(env, "franka_from_origin_mat"):
+            franka_origin = torch.as_tensor(
+                np.asarray(env.franka_from_origin_mat, dtype=np.float32)[:3, 3],
+                device=device,
+                dtype=ee_pos_global.dtype,
+            )
+            env_offset = base_pos_global - franka_origin
+            ee_pos_sim = ee_pos_global - env_offset
+        else:
+            ee_pos_sim = ee_pos_global
+        robot_state["ee_pos_sim"] = ee_pos_sim
+        robot_state["ee_quat_sim"] = ee_quat
+
+    def pose_matrix(pos, quat):
+        pose = torch.zeros(
+            (*pos.shape[:-1], 4, 4), dtype=pos.dtype, device=pos.device
+        )
+        pose[..., :3, :3] = quaternion_xyzw_to_matrix(quat)
+        pose[..., :3, 3] = pos
+        pose[..., 3, 3] = 1.0
+        return pose
+
+    if "ee_pose" not in robot_state:
+        robot_state["ee_pose"] = pose_matrix(
+            robot_state["ee_pos"], robot_state["ee_quat"]
+        )
+    if "ee_pose_sim" not in robot_state:
+        robot_state["ee_pose_sim"] = pose_matrix(
+            robot_state["ee_pos_sim"], robot_state["ee_quat_sim"]
+        )
+    robot_state.setdefault("ee_pos_original", robot_state["ee_pos_sim"])
+    robot_state.setdefault("ee_quat_original", robot_state["ee_quat_sim"])
+    robot_state.setdefault("ee_pose_original", robot_state["ee_pose_sim"])
     return robot_state
+
+
+def _policy_action_to_robot_base(env: Env, action, robot_state, eepose_frame):
+    """Convert legacy sim-local absolute targets to canonical robot-base.
+
+    The two sim representations differ only by a translation, so delta actions
+    need no conversion.  Absolute position actions must remove that offset.
+    """
+
+    resolved_frame = resolve_eepose_frame(
+        eepose_frame, original_frame=SIM_LOCAL
+    )
+    if resolved_frame == ROBOT_BASE or getattr(env, "action_type", None) != "pos":
+        return action
+    if resolved_frame != SIM_LOCAL:
+        raise ValueError(
+            f"eepose frame {resolved_frame!r} is not available in simulation"
+        )
+    missing = [
+        key for key in ("ee_pos", "ee_pos_sim") if key not in robot_state
+    ]
+    if missing:
+        raise KeyError(
+            "cannot convert sim-local absolute action; missing robot-state fields: "
+            + ", ".join(missing)
+        )
+    action_robot_base = action.clone()
+    sim_local_offset = robot_state["ee_pos_sim"] - robot_state["ee_pos"]
+    action_robot_base[..., :3] = action[..., :3] - sim_local_offset
+    return action_robot_base
 
 
 def resize_image(obs, key):
@@ -744,6 +804,7 @@ def rollout(
     vlm_query_interval: Optional[int] = None,
     vlm_metric_episode_offset: int = 0,
     vlm_noise_projection_samples: int = DEFAULT_MONTE_CARLO_SAMPLES_PER_PAIR,
+    eepose_frame: str = ROBOT_BASE,
 ) -> Optional[RolloutSaveValues]:
     use_vlm = annotation_source == "vlm"
     if annotation_source not in {"scripted", "vlm"}:
@@ -982,11 +1043,24 @@ def rollout(
                 noise_projection_samples=vlm_noise_projection_samples,
             )
         raw_robot_state = obs.get("robot_state") if isinstance(obs, dict) else None
+        if isinstance(raw_robot_state, dict):
+            raw_robot_state = _add_sim_local_ee_pose_to_robot_state(
+                env, raw_robot_state
+            )
         ee_pos_vel = (
             raw_robot_state.get("ee_pos_vel")
             if isinstance(raw_robot_state, dict)
             else None
         )
+
+        # Keep the policy tensor layout stable while selecting either the new
+        # robot-base pose or a legacy EE representation.
+        if isinstance(raw_robot_state, dict):
+            obs["robot_state"] = select_policy_eepose(
+                raw_robot_state,
+                eepose_frame,
+                original_frame=SIM_LOCAL,
+            )
 
         # Convert from robot state dict to robot state tensor
         if not getattr(actor, "expects_raw_robot_state", False):
@@ -1013,6 +1087,13 @@ def rollout(
 
         # Get the next actions from the actor
         action_pred = actor.action(obs)
+        if isinstance(raw_robot_state, dict):
+            action_pred = _policy_action_to_robot_base(
+                env,
+                action_pred,
+                raw_robot_state,
+                eepose_frame,
+            )
 
         # Mutate the action vector for action-modifying perturb modes
         # (e.g. place_drop forces the gripper open during the place skill).
@@ -1360,6 +1441,7 @@ def calculate_success_rate(
     vlm_query_interval: Optional[int] = None,
     tracking_metric_type: Optional[str] = None,
     vlm_noise_projection_samples: int = DEFAULT_MONTE_CARLO_SAMPLES_PER_PAIR,
+    eepose_frame: str = ROBOT_BASE,
 ) -> RolloutStats:
 
     use_target_mode = target_successes is not None and target_successes > 0
@@ -1473,6 +1555,7 @@ def calculate_success_rate(
             vlm_query_interval=vlm_query_interval,
             vlm_metric_episode_offset=n_total_rollouts,
             vlm_noise_projection_samples=vlm_noise_projection_samples,
+            eepose_frame=eepose_frame,
         )
 
         # Calculate the success rate
@@ -1819,6 +1902,9 @@ def calculate_success_rate(
                         vlm_point_error_records=point_error_records_to_save,
                         annotation_source=annotation_source,
                         vlm_model_revision=vlm_model_revision,
+                        eepose_frame=ROBOT_BASE,
+                        eepose_original_frame=SIM_LOCAL,
+                        policy_eepose_frame=eepose_frame,
                     )
                     saved_rollouts_count += 1
 

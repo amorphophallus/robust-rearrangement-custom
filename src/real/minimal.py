@@ -49,6 +49,12 @@ from omegaconf import OmegaConf, DictConfig
 from src.behavior.base import Actor  # noqa
 from src.behavior import get_actor
 from src.data_processing.utils import resize, resize_crop
+from src.common.eepose import (
+    EEPPOSE_FRAME_HELP,
+    REAL_TIP,
+    ROBOT_BASE,
+    resolve_eepose_frame,
+)
 from ipdb import set_trace as bp
 from furniture_bench.utils.scripted_demo_mod import scale_scripted_action
 from furniture_bench.furniture import furniture_factory
@@ -244,8 +250,23 @@ parser.add_argument("-w", "--wts-name", default="best", type=str)
 parser.add_argument("--log-ci", action="store_true")
 parser.add_argument("--ci-save-dir", type=str, default=None)
 parser.add_argument("--furniture", type=str, default=None)
+parser.add_argument(
+    "--eepose-frame",
+    default=ROBOT_BASE,
+    help=EEPPOSE_FRAME_HELP + " On real, original and real-tip are equivalent.",
+)
 
 args = parser.parse_args()
+try:
+    resolved_eepose_frame = resolve_eepose_frame(
+        args.eepose_frame, original_frame=REAL_TIP
+    )
+except ValueError as exc:
+    parser.error(str(exc))
+if resolved_eepose_frame not in {ROBOT_BASE, REAL_TIP}:
+    parser.error(
+        f"eepose frame {resolved_eepose_frame!r} is not available on the real robot"
+    )
 
 poly_util = PolymetisHelper()
 
@@ -340,6 +361,7 @@ class SimpleDiffIKFrankaEnv:
         action_horizon: int = 10,
         furniture_name: str = "one_leg",
         part_poses_norm_mid: torch.Tensor = None,
+        eepose_frame: str = ROBOT_BASE,
     ):
 
         self.device = device
@@ -358,6 +380,9 @@ class SimpleDiffIKFrankaEnv:
         self.observation_type = observation_type
         self.proprioceptive_state_dim = proprioceptive_state_dim
         self.control_mode = control_mode
+        self.eepose_frame = resolve_eepose_frame(
+            eepose_frame, original_frame=REAL_TIP
+        )
 
         if self.observation_type == "image":
             self.get_obs = self.get_img_obs
@@ -489,17 +514,16 @@ class SimpleDiffIKFrankaEnv:
         # input action is pos and 6d rot
         rot_6d = raw_action[3:9]
         rot_mat = pt.rotation_6d_to_matrix(rot_6d)
-        action_pose_mat = torch.eye(4)
+        action_pose_mat = torch.eye(
+            4, dtype=raw_action.dtype, device=raw_action.device
+        )
         action_pose_mat[:-1, :-1] = rot_mat
         action_pose_mat[:-1, -1] = raw_action[:3]
 
         return action_pose_mat
 
     def get_robot_state(self):
-        # convert to tip
-        current_ee_wrist_pose_mat = poly_util.polypose2mat(self.robot.get_ee_pose())
-        current_ee_tip_pose_mat = convert_wrist2tip(current_ee_wrist_pose_mat)
-        pos, quat_xyzw = poly_util.mat2polypose(current_ee_tip_pose_mat)
+        pos, quat_xyzw = poly_util.mat2polypose(self._current_policy_eepose_mat())
 
         # rot_6d = quat_xyzw_to_rot_6d(quat_xyzw)
         # robot_state = torch.cat([pos, rot_6d], dim=-1)
@@ -519,6 +543,33 @@ class SimpleDiffIKFrankaEnv:
         # convert to tensors
         robot_state = robot_state.reshape(1, -1).to(self.device)
         return robot_state
+
+    def _current_policy_eepose_mat(self):
+        wrist_pose_mat = poly_util.polypose2mat(self.robot.get_ee_pose())
+        if self.eepose_frame == ROBOT_BASE:
+            return wrist_pose_mat
+        if self.eepose_frame == REAL_TIP:
+            return convert_wrist2tip(wrist_pose_mat)
+        raise ValueError(
+            f"eepose frame {self.eepose_frame!r} is not available on the real robot"
+        )
+
+    def _policy_target_to_wrist(self, target_pose_mat):
+        if isinstance(target_pose_mat, torch.Tensor):
+            target_pose_mat = target_pose_mat.detach().cpu().numpy()
+        target_pose_mat = np.asarray(target_pose_mat, dtype=np.float64)
+        if self.eepose_frame == ROBOT_BASE:
+            return target_pose_mat.copy()
+        if self.eepose_frame == REAL_TIP:
+            return convert_tip2wrist(target_pose_mat)
+        raise ValueError(
+            f"eepose frame {self.eepose_frame!r} is not available on the real robot"
+        )
+
+    def _policy_target_pose_pair(self, target_pose_mat):
+        """Return target poses for visualization as (wrist, tip)."""
+        wrist_pose_mat = self._policy_target_to_wrist(target_pose_mat)
+        return wrist_pose_mat, convert_wrist2tip(wrist_pose_mat)
 
     def get_state_obs(self):
 
@@ -577,9 +628,21 @@ class SimpleDiffIKFrankaEnv:
         # current state so we get the desired pose
         if self.control_mode == "delta":
             ee_pose_mat = torch.from_numpy(
-                poly_util.polypose2mat(self.robot.get_ee_pose())
-            ).to(torch.float32)
-            new_target_pose_mat = torch.matmul(new_target_pose_mat, ee_pose_mat)
+                self._current_policy_eepose_mat()
+            ).to(
+                dtype=new_target_pose_mat.dtype,
+                device=new_target_pose_mat.device,
+            )
+            # Raw delta actions use base-frame translation and a local,
+            # right-multiplied rotation: p' = p + dp; R' = R @ dR.
+            delta_pose_mat = new_target_pose_mat
+            new_target_pose_mat = ee_pose_mat.clone()
+            new_target_pose_mat[:3, 3] = (
+                ee_pose_mat[:3, 3] + delta_pose_mat[:3, 3]
+            )
+            new_target_pose_mat[:3, :3] = (
+                ee_pose_mat[:3, :3] @ delta_pose_mat[:3, :3]
+            )
 
         self.last_grip_step += 1
         grasp = action[-1]
@@ -608,17 +671,20 @@ class SimpleDiffIKFrankaEnv:
             #     new_target_pose_mat, dt=self.dt
             # )  # , scalar=0.5)
             self.robot.update_desired_ee_pose(
-                convert_tip2wrist(new_target_pose_mat), dt=self.dt
+                self._policy_target_to_wrist(new_target_pose_mat), dt=self.dt
             )
 
         # Draw the current target pose (in meshcat)
+        target_wrist_pose_mat, target_tip_pose_mat = self._policy_target_pose_pair(
+            new_target_pose_mat
+        )
         mc_util.meshcat_frame_show(
             self.mc_vis,
             f"scene/target_pose_wrist",
-            convert_tip2wrist(new_target_pose_mat.cpu().numpy()),
+            target_wrist_pose_mat,
         )
         mc_util.meshcat_frame_show(
-            self.mc_vis, f"scene/target_pose_tip", new_target_pose_mat.cpu().numpy()
+            self.mc_vis, f"scene/target_pose_tip", target_tip_pose_mat
         )
         mc_util.meshcat_frame_show(
             self.mc_vis,
@@ -766,6 +832,7 @@ def main():
         control_mode=config.control.control_mode,
         furniture_name=args.furniture,
         part_poses_norm_mid=part_poses_norm_mid,
+        eepose_frame=args.eepose_frame,
     )
 
     obs = env.get_obs()

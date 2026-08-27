@@ -33,6 +33,7 @@ from src.behavior.base import (
 )
 from src.behavior.diffusion import DiffusionPolicy  # noqa
 from src.eval.rollout import calculate_success_rate
+from src.common.eepose import EEPPOSE_FRAME_HELP, ROBOT_BASE, SIM_LOCAL, resolve_eepose_frame
 from src.behavior import get_actor
 from src.common.tasks import task2idx, task_timeout
 from src.common.files import trajectory_save_dir
@@ -741,6 +742,11 @@ if __name__ == "__main__":
         "--observation-space", choices=["image", "state"], default="state"
     )
     parser.add_argument("--action-horizon", type=int, default=None)
+    parser.add_argument(
+        "--eepose-frame",
+        default=ROBOT_BASE,
+        help=EEPPOSE_FRAME_HELP + " In sim, original and sim-local are equivalent.",
+    )
     parser.add_argument("--wt-type", type=str, default="best_success_rate")
 
     parser.add_argument("--stop-after-n-success", type=int, default=0)
@@ -908,6 +914,17 @@ if __name__ == "__main__":
 
     # Parse the arguments
     args = parser.parse_args()
+
+    try:
+        resolved_eepose_frame = resolve_eepose_frame(
+            args.eepose_frame, original_frame=SIM_LOCAL
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    if resolved_eepose_frame not in {ROBOT_BASE, SIM_LOCAL}:
+        parser.error(
+            f"eepose frame {resolved_eepose_frame!r} is not available in simulation"
+        )
 
     # Validate the arguments
     validate_args(args)
@@ -1542,6 +1559,7 @@ if __name__ == "__main__":
                             or resolved_eval_annotations["annotate_skill"]
                         ),
                         annotation_noise_config=annotation_noise_config,
+                        eepose_frame=args.eepose_frame,
                         output_only_pickle=args.output_only_pickle,
                         output_only_video=args.output_only_video,
                         perturb_runner=perturb_runner,
