@@ -28,7 +28,7 @@ from src.eval.vlm_content_audit import audit_manifest_rollouts
 
 AUTO_EVAL_DEFAULT = Path("/data/hy/gpu-snatcher/auto_eval.sh")
 EXPECTED_GPU_SNATCHER_COMMIT = "ebfea2d9f27bfdcea3a30791ebd6e70a05757799"
-EXPECTED_VLM_REVISION = "75dc7b8a4a1dcdf6ec77398494724c7b7b3fe63e"
+EXPECTED_VLM_REVISION = "9d36062d461e6d07f78d6148bea8039e1e019f92"
 TASKS = ("one_leg", "round_table", "lamp")
 TASK_MAX_STEPS = {task: 1000 for task in TASKS}
 MAX_SAVED_ROLLOUTS_PER_CELL = 10
@@ -262,6 +262,12 @@ def build_auto_eval_command(
 ) -> list[str]:
     spec = CONDITIONS[condition]
     n_envs = int(getattr(args, "n_envs", 3))
+    vlm_timeout_seconds = float(getattr(args, "vlm_timeout_seconds", 30.0))
+    vlm_timeout_arg = (
+        str(int(vlm_timeout_seconds))
+        if vlm_timeout_seconds.is_integer()
+        else str(vlm_timeout_seconds)
+    )
     preview_overlay = getattr(args, "stage", None) == "preview"
     visual_flags = (
         ("--guidance-point-on-image", "--annotate-skill", "--skill-on-image")
@@ -306,7 +312,7 @@ def build_auto_eval_command(
                 "--vlm-base-url",
                 args.vlm_base_url,
                 "--vlm-timeout-seconds",
-                "30",
+                vlm_timeout_arg,
                 "--vlm-query-interval",
                 "0",
                 "--vlm-noise-projection-samples",
@@ -343,6 +349,7 @@ def validate_expanded_command(
     summary_path: Path,
     rollout_suffix: str,
     vlm_base_url: str,
+    vlm_timeout_seconds: float = 30.0,
     n_envs: int = 3,
     preview_overlay: bool = False,
 ) -> None:
@@ -358,7 +365,11 @@ def validate_expanded_command(
         "--annotation-source": "vlm",
         "--tracking-metric-type": "pose",
         "--vlm-base-url": vlm_base_url,
-        "--vlm-timeout-seconds": "30",
+        "--vlm-timeout-seconds": (
+            str(int(vlm_timeout_seconds))
+            if float(vlm_timeout_seconds).is_integer()
+            else str(vlm_timeout_seconds)
+        ),
         "--vlm-query-interval": "0",
         "--vlm-noise-projection-samples": "200",
         "--task-summary-out": str(summary_path),
@@ -624,6 +635,7 @@ def print_phase(args: argparse.Namespace) -> int:
             summary_path=Path(row["summary_path"]),
             rollout_suffix=row["rollout_suffix"],
             vlm_base_url=args.vlm_base_url,
+            vlm_timeout_seconds=float(getattr(args, "vlm_timeout_seconds", 30.0)),
             n_envs=args.n_envs,
             preview_overlay=args.stage == "preview",
         )
@@ -657,6 +669,7 @@ def print_phase(args: argparse.Namespace) -> int:
         "robust_rearrangement_commit": _git_commit(REPO_ROOT),
         "auto_eval_path": str(args.auto_eval),
         "vlm_base_url": args.vlm_base_url,
+        "vlm_timeout_seconds": float(getattr(args, "vlm_timeout_seconds", 30.0)),
         "vlm_readiness": readiness,
         "expected_vlm_revision": EXPECTED_VLM_REVISION,
         "checkpoint_audits": audits,
@@ -695,6 +708,7 @@ def _load_execution_manifest(args: argparse.Namespace) -> tuple[Path, dict[str, 
         "max_rollout_steps": 1000,
         "max_saved_rollouts_per_cell": MAX_SAVED_ROLLOUTS_PER_CELL,
         "vlm_noise_projection_samples": 200,
+        "vlm_timeout_seconds": float(getattr(args, "vlm_timeout_seconds", 30.0)),
         "data_dir_raw": str(args.data_dir_raw.resolve()),
     }
     if args.stage == "formal":
@@ -926,6 +940,12 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("VLM_GUIDANCE_URL", "http://10.71.106.240:8000"),
     )
     parser.add_argument(
+        "--vlm-timeout-seconds",
+        type=float,
+        default=30.0,
+        help="Per-request VLM transport timeout forwarded through auto_eval.sh.",
+    )
+    parser.add_argument(
         "--token-file",
         type=Path,
         default=Path("/mnt/nas/share/home/hy/vlm-guidance/server.env"),
@@ -960,6 +980,8 @@ def parse_args() -> argparse.Namespace:
         )
     if args.gpu < 0:
         raise SystemExit("--gpu must be non-negative")
+    if args.vlm_timeout_seconds <= 0:
+        raise SystemExit("--vlm-timeout-seconds must be positive")
     if not args.auto_eval.is_file():
         raise SystemExit(f"auto_eval.sh not found: {args.auto_eval}")
     if not args.rr_python.is_file():

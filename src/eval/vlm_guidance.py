@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import io
 import json
+import logging
 import math
 import os
 from dataclasses import dataclass
@@ -28,14 +30,22 @@ STATE_INFO_BASE_KEYS = (
 )
 VALID_SKILLS = {"push", "pick", "place", "insert", "screw"}
 EXPECTED_POLICY_VERSION = 3
+LOGGER = logging.getLogger(__name__)
 
 
 class VLMGuidanceError(RuntimeError):
     """Raised when remote annotations cannot safely be used."""
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        response_payload: Any | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.response_payload = response_payload
 
 
 @dataclass(frozen=True)
@@ -49,6 +59,43 @@ class VLMPrediction:
     model_revision: str
     query_step: int
     generated_text: str | None = None
+    recovered_from_invalid_json: bool = False
+
+
+def _parse_recoverable_generated_prefix(text: str) -> tuple[str, list[float]] | None:
+    """Recover only a complete skill/2-D-point prefix from malformed JSON.
+
+    The original-SFT model also emits a target_point_3d field, but the 2-D
+    guidance policy does not consume it. A rare malformed suffix must not make
+    us accept a partial or invalid control annotation: both control fields are
+    reconstructed as a standalone JSON object and then validated strictly.
+    """
+
+    object_start = text.find("{")
+    key_start = text.find('"target_point_2d"', object_start + 1)
+    list_start = text.find("[", key_start + 1)
+    list_end = text.find("]", list_start + 1)
+    if min(object_start, key_start, list_start, list_end) < 0:
+        return None
+    try:
+        payload = json.loads(text[object_start : list_end + 1] + "}")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    skill = payload.get("skill")
+    point = payload.get("target_point_2d")
+    if skill not in VALID_SKILLS or not isinstance(point, list) or len(point) != 2:
+        return None
+    try:
+        point_px = [float(point[0]), float(point[1])]
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in point_px):
+        return None
+    if not (0.0 <= point_px[0] <= 319.0 and 0.0 <= point_px[1] <= 239.0):
+        return None
+    return str(skill), point_px
 
 
 def _json_value(value: Any, env_idx: int):
@@ -115,7 +162,9 @@ class VLMGuidanceClient:
         self.prediction_http_request_count = 0
         self.batch_prediction_request_count = 0
         self.singleton_prediction_request_count = 0
+        self.prediction_transport_retry_count = 0
         self.batch_422_retry_count = 0
+        self.invalid_json_prefix_recovery_count = 0
 
     @property
     def headers(self) -> dict[str, str]:
@@ -177,21 +226,51 @@ class VLMGuidanceClient:
             json.dumps({"task": task, "items": list(items)}, separators=(",", ":")),
             "application/json",
         )
-        try:
-            response = self.session.post(
-                f"{self.base_url}/v1/guidance/predict",
-                files=files,
-                headers=self.headers,
-                timeout=self.timeout_seconds,
-            )
-        except Exception as exc:
-            raise VLMGuidanceError(f"VLM prediction request failed: {exc}") from exc
+        for attempt in range(2):
+            try:
+                response = self.session.post(
+                    f"{self.base_url}/v1/guidance/predict",
+                    files=files,
+                    headers=self.headers,
+                    timeout=self.timeout_seconds,
+                )
+                break
+            except requests.exceptions.ReadTimeout as exc:
+                # The server may already be generating after it has accepted
+                # the request. Replaying an ambiguous read timeout against the
+                # single-worker service duplicates inference and worsens the
+                # queue, so the caller must use a sufficient read timeout.
+                raise VLMGuidanceError(
+                    f"VLM prediction request exceeded the read timeout: {exc}"
+                ) from exc
+            except (
+                requests.exceptions.ConnectTimeout,
+                requests.exceptions.ConnectionError,
+            ) as exc:
+                if attempt == 1:
+                    raise VLMGuidanceError(
+                        f"VLM prediction request failed after one transport retry: {exc}"
+                    ) from exc
+                self.prediction_transport_retry_count += 1
+                self.prediction_http_request_count += 1
+                if len(items) > 1:
+                    self.batch_prediction_request_count += 1
+                else:
+                    self.singleton_prediction_request_count += 1
+                LOGGER.warning(
+                    "Retrying VLM prediction once after transient transport error: %s",
+                    exc,
+                )
+            except Exception as exc:
+                raise VLMGuidanceError(f"VLM prediction request failed: {exc}") from exc
         try:
             response.raise_for_status()
         except Exception as exc:
             try:
-                response_detail = json.dumps(response.json(), ensure_ascii=False)
+                response_payload = response.json()
+                response_detail = json.dumps(response_payload, ensure_ascii=False)
             except Exception:
+                response_payload = None
                 response_detail = str(getattr(response, "text", ""))
             response_detail = response_detail[:2048]
             suffix = f"; response={response_detail}" if response_detail else ""
@@ -199,6 +278,7 @@ class VLMGuidanceClient:
             raise VLMGuidanceError(
                 f"VLM prediction request failed: {exc}{suffix}",
                 status_code=(int(status_code) if status_code is not None else None),
+                response_payload=response_payload,
             ) from exc
         try:
             return response.json()
@@ -206,6 +286,66 @@ class VLMGuidanceClient:
             raise VLMGuidanceError(
                 f"VLM prediction response is not valid JSON: {exc}"
             ) from exc
+
+    def _recover_original_sft_singleton_422(
+        self,
+        error: VLMGuidanceError,
+        *,
+        item: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Recover a valid control prefix from one original-SFT 422 response."""
+
+        if error.status_code != 422 or self.ready_model_mode != "original_sft":
+            return None
+        response_payload = error.response_payload
+        if not isinstance(response_payload, dict):
+            return None
+        detail = response_payload.get("detail")
+        if not isinstance(detail, str) or "invalid generated JSON" not in detail:
+            return None
+        marker = "generated_text="
+        marker_index = detail.rfind(marker)
+        if marker_index < 0:
+            return None
+        try:
+            generated_text = ast.literal_eval(
+                detail[marker_index + len(marker) :].strip()
+            )
+        except (SyntaxError, ValueError):
+            return None
+        if not isinstance(generated_text, str):
+            return None
+        recovered = _parse_recoverable_generated_prefix(generated_text)
+        if recovered is None:
+            return None
+        skill, point_px = recovered
+        point_1000 = [point_px[0] / 319.0 * 1000.0, point_px[1] / 239.0 * 1000.0]
+        self.invalid_json_prefix_recovery_count += 1
+        LOGGER.warning(
+            "Recovered original-SFT %s from malformed JSON suffix using validated "
+            "skill=%s point_px=%s",
+            item["request_id"],
+            skill,
+            point_px,
+        )
+        return {
+            "model_revision": self.ready_model_revision or "unknown",
+            "policy_version": EXPECTED_POLICY_VERSION,
+            "model_mode": "original_sft",
+            "predictions": [
+                {
+                    "request_id": item["request_id"],
+                    "skill": skill,
+                    "skill_confidence": None,
+                    "skill_probabilities": None,
+                    "point_1000": point_1000,
+                    "point_px": point_px,
+                    "generated_text": generated_text,
+                    "recovered_from_invalid_json": True,
+                }
+            ],
+            "timing_ms": {},
+        }
 
     def predict(
         self,
@@ -237,49 +377,64 @@ class VLMGuidanceClient:
                 wrist_images=wrist_images,
             )
         except VLMGuidanceError as error:
-            should_retry_singletons = (
-                self.ready_model_mode == "original_sft"
-                and batch_size > 1
-                and error.status_code == 422
-            )
-            if not should_retry_singletons:
-                raise
-            self.batch_422_retry_count += 1
-            payloads = [
-                self._post_prediction_batch(
-                    task=task,
-                    items=[items[env_idx]],
-                    front_images=[front_images[env_idx]],
-                    wrist_images=[wrist_images[env_idx]],
+            if batch_size == 1:
+                recovered_payload = self._recover_original_sft_singleton_422(
+                    error, item=items[0]
                 )
-                for env_idx in range(batch_size)
-            ]
-            first_payload = payloads[0]
-            payload = {
-                "model_revision": first_payload.get("model_revision"),
-                "policy_version": first_payload.get("policy_version"),
-                "predictions": [],
-                "timing_ms": {},
-            }
-            for singleton_payload in payloads:
-                if (
-                    singleton_payload.get("model_revision")
-                    != payload["model_revision"]
-                    or singleton_payload.get("policy_version")
-                    != payload["policy_version"]
-                ):
-                    raise VLMGuidanceError(
-                        "VLM model contract changed across singleton requests"
+                if recovered_payload is not None:
+                    payload = recovered_payload
+                else:
+                    raise
+            else:
+                should_retry_singletons = (
+                    self.ready_model_mode == "original_sft"
+                    and error.status_code == 422
+                )
+                if not should_retry_singletons:
+                    raise
+                self.batch_422_retry_count += 1
+                payloads = []
+                for env_idx in range(batch_size):
+                    try:
+                        singleton_payload = self._post_prediction_batch(
+                            task=task,
+                            items=[items[env_idx]],
+                            front_images=[front_images[env_idx]],
+                            wrist_images=[wrist_images[env_idx]],
+                        )
+                    except VLMGuidanceError as singleton_error:
+                        singleton_payload = self._recover_original_sft_singleton_422(
+                            singleton_error, item=items[env_idx]
+                        )
+                        if singleton_payload is None:
+                            raise
+                    payloads.append(singleton_payload)
+                first_payload = payloads[0]
+                payload = {
+                    "model_revision": first_payload.get("model_revision"),
+                    "policy_version": first_payload.get("policy_version"),
+                    "predictions": [],
+                    "timing_ms": {},
+                }
+                for singleton_payload in payloads:
+                    if (
+                        singleton_payload.get("model_revision")
+                        != payload["model_revision"]
+                        or singleton_payload.get("policy_version")
+                        != payload["policy_version"]
+                    ):
+                        raise VLMGuidanceError(
+                            "VLM model contract changed across singleton requests"
+                        )
+                    payload["predictions"].extend(
+                        singleton_payload.get("predictions", [])
                     )
-                payload["predictions"].extend(
-                    singleton_payload.get("predictions", [])
-                )
-                for key, value in dict(
-                    singleton_payload.get("timing_ms", {})
-                ).items():
-                    payload["timing_ms"][str(key)] = payload["timing_ms"].get(
-                        str(key), 0.0
-                    ) + float(value)
+                    for key, value in dict(
+                        singleton_payload.get("timing_ms", {})
+                    ).items():
+                        payload["timing_ms"][str(key)] = payload["timing_ms"].get(
+                            str(key), 0.0
+                        ) + float(value)
 
         rows = payload.get("predictions")
         if payload.get("policy_version") != EXPECTED_POLICY_VERSION:
@@ -350,6 +505,9 @@ class VLMGuidanceClient:
                         if row.get("generated_text") is not None
                         else None
                     ),
+                    recovered_from_invalid_json=bool(
+                        row.get("recovered_from_invalid_json", False)
+                    ),
                 )
             )
         timing = {
@@ -364,7 +522,9 @@ class VLMGuidanceClient:
             "prediction_http_request_count": self.prediction_http_request_count,
             "batch_prediction_request_count": self.batch_prediction_request_count,
             "singleton_prediction_request_count": self.singleton_prediction_request_count,
+            "prediction_transport_retry_count": self.prediction_transport_retry_count,
             "batch_422_retry_count": self.batch_422_retry_count,
+            "invalid_json_prefix_recovery_count": self.invalid_json_prefix_recovery_count,
         }
 
 
@@ -392,6 +552,7 @@ def policy_bundles_from_vlm(
             "skill_probabilities": prediction.skill_probabilities,
             "point_1000": prediction.point_1000.copy(),
             "generated_text": prediction.generated_text,
+            "recovered_from_invalid_json": prediction.recovered_from_invalid_json,
             "query_step": prediction.query_step,
             "cache_age_steps": step_idx - prediction.query_step,
         }

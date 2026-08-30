@@ -48,6 +48,48 @@ def test_builder_uses_auto_eval_and_never_direct_evaluator(tmp_path):
     assert "--output-only-video" not in command
 
 
+def test_builder_and_validator_preserve_explicit_vlm_timeout(tmp_path):
+    args = _args(tmp_path)
+    args.vlm_timeout_seconds = 120.0
+    summary = tmp_path / "summary.json"
+    suffix = "formal/rgbd_gp/lamp"
+    command = build_auto_eval_command(
+        args=args,
+        condition="rgbd_gp",
+        task="lamp",
+        summary_path=summary,
+        rollout_suffix=suffix,
+        print_command=False,
+    )
+
+    assert command[command.index("--vlm-timeout-seconds") + 1] == "120"
+
+    expanded = [
+        "python", "-m", "src.eval.evaluate_model",
+        "--n-envs", "3", "--n-rollouts", "3", "-f", "lamp",
+        "--if-exists", "append", "--max-rollout-steps", "1000",
+        "--max-saved-rollouts", "10", "--action-type", "pos",
+        "--observation-space", "image", "--randomness", "low",
+        "--save-rollouts", "--save-failures", "--save-depth-image",
+        "--annotation-source", "vlm", "--tracking-metric-type", "pose",
+        "--vlm-base-url", args.vlm_base_url,
+        "--vlm-timeout-seconds", "120", "--vlm-query-interval", "0",
+        "--vlm-noise-projection-samples", "200", "--task-summary-out", str(summary),
+        "--guidance-point-on-image", "--rollout-suffix-model-name", suffix,
+        "--wt-path", str(CONDITIONS["rgbd_gp"]["checkpoint"]),
+    ]
+    validate_expanded_command(
+        expanded,
+        condition="rgbd_gp",
+        task="lamp",
+        n_rollouts=3,
+        summary_path=summary,
+        rollout_suffix=suffix,
+        vlm_base_url=args.vlm_base_url,
+        vlm_timeout_seconds=120.0,
+    )
+
+
 def test_preview_builder_runs_exactly_one_env_and_adds_review_overlays(tmp_path):
     args = _args(tmp_path)
     args.stage = "preview"

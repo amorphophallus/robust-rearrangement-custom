@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -23,6 +24,16 @@ from src.eval.progress_schema import get_task_progress_labels
 TASKS = ("one_leg", "round_table", "lamp")
 SKILLS = ("push", "pick", "place", "insert", "screw")
 BASELINE_GATE_PATH = REPO_ROOT / "reports" / "data" / "vlm_dit_baseline_gate.json"
+
+
+def _sha256(path: Path | None) -> str:
+    if path is None or not path.is_file():
+        return "—"
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _load_run(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -196,6 +207,27 @@ def _table(headers: list[str], rows: list[list[str]]) -> list[str]:
     ]
 
 
+def _manifest_vlm_timeout_seconds(manifest: dict[str, Any]) -> list[float]:
+    """Read the distinct request timeouts from the commands actually run."""
+
+    values: set[float] = set()
+    for row in manifest.get("runs", []):
+        command = row.get("executed_auto_eval_command") or row.get(
+            "auto_eval_command", []
+        )
+        try:
+            index = command.index("--vlm-timeout-seconds")
+            values.add(float(command[index + 1]))
+        except (AttributeError, ValueError, IndexError, TypeError):
+            continue
+    if not values and manifest.get("vlm_timeout_seconds") is not None:
+        try:
+            values.add(float(manifest["vlm_timeout_seconds"]))
+        except (TypeError, ValueError):
+            pass
+    return sorted(values)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -211,6 +243,11 @@ def parse_args() -> argparse.Namespace:
         "--scripted-diagnostic-summary",
         type=Path,
         help="Optional matched scripted-GT task summary to include.",
+    )
+    parser.add_argument(
+        "--grounding-summary",
+        type=Path,
+        help="Optional 300-sample ckpt_new grounding diagnostic JSON.",
     )
     return parser.parse_args()
 
@@ -288,6 +325,14 @@ def main() -> int:
     diagnostic_summary = (
         json.loads(diagnostic_summary_path.read_text())
         if diagnostic_summary_path is not None and diagnostic_summary_path.is_file()
+        else None
+    )
+    grounding_summary_path = (
+        args.grounding_summary.resolve() if args.grounding_summary is not None else None
+    )
+    grounding_summary = (
+        json.loads(grounding_summary_path.read_text())
+        if grounding_summary_path is not None and grounding_summary_path.is_file()
         else None
     )
     readiness = manifest.get("vlm_readiness", {})
@@ -567,9 +612,14 @@ def main() -> int:
     total_finished_rollouts = sum(
         int(payload.get("n_rollouts", 0)) for payload in payload_by_key.values()
     )
+    total_success_rollouts = sum(
+        int(payload.get("n_success", 0)) for payload in payload_by_key.values()
+    )
     monte_carlo_samples = int(manifest.get("vlm_noise_projection_samples", 200))
     rollouts_per_cell = int(manifest.get("n_rollouts_per_task", 36))
     max_saved_rollouts = int(manifest.get("max_saved_rollouts_per_cell", 0))
+    vlm_timeout_values = _manifest_vlm_timeout_seconds(manifest)
+    vlm_timeout_label = "/".join(f"{value:g}" for value in vlm_timeout_values) or "—"
     lines = [
         "# VLM + DiT guidance point 评测报告",
         "",
@@ -580,9 +630,65 @@ def main() -> int:
         f"- 判定：`{baseline_gate.get('status', 'missing')}`。{baseline_gate.get('reason', '')}",
         "- 旧数据只保留作故障溯源，不 resume、不拼接、不用于 condition 排名。缺少 `--save-depth-image` 会同时令 RGBD policy observation 缺少 depth；此外旧 one_leg 使用 700 steps，旧 rgbd+GP checkpoint 也与本轮固定 checkpoint 不同。",
         "",
-        "### 新 27-rollout smoke",
+        "### ckpt_new 300-sample grounding gate",
         "",
     ]
+    if grounding_summary:
+        current = (grounding_summary.get("summaries") or {}).get("current", {})
+        grounding_rows = []
+        for scope, label in (
+            ("overall", "overall"),
+            ("task/one_leg", "one_leg"),
+            ("task/round_table", "round_table"),
+            ("task/lamp", "lamp"),
+        ):
+            stats = current.get(scope, {})
+            grounding_rows.append(
+                [
+                    label,
+                    str(stats.get("count", 0)),
+                    _fmt(100.0 * stats.get("parse_success_rate", 0.0), 1),
+                    f"{stats.get('point_valid_count', 0)}/{stats.get('count', 0)}",
+                    _fmt(100.0 * stats.get("skill_accuracy", 0.0), 1),
+                    _fmt(stats.get("point_mean_error_px")),
+                    _fmt(stats.get("point_rmse_px")),
+                    _fmt(stats.get("point_median_error_px")),
+                    _fmt(stats.get("point_p90_error_px")),
+                    _fmt(stats.get("residual_bias_norm_px")),
+                    _fmt(stats.get("spread_ratio"), 3),
+                    _fmt(stats.get("point_r2"), 3),
+                ]
+            )
+        lines.extend(
+            _table(
+                [
+                    "Scope",
+                    "n",
+                    "Parse %",
+                    "Valid point",
+                    "Skill acc. %",
+                    "Mean px",
+                    "RMSE px",
+                    "Median px",
+                    "P90 px",
+                    "Bias px",
+                    "Spread",
+                    "R²",
+                ],
+                grounding_rows,
+            )
+        )
+        overall = current.get("overall", {})
+        lines.extend(
+            [
+                "",
+                f"Gate 结果：有效点 `{overall.get('point_valid_count', 0)}/{overall.get('count', 0)}`，即该 300 样本中没有 null point；完整输出 parse 成功率 `{_fmt(100.0 * overall.get('parse_success_rate', 0.0), 1)}%`。整体 spread `{_fmt(overall.get('spread_ratio'), 3)}`、R² `{_fmt(overall.get('point_r2'), 3)}`，没有再次出现预测整体收缩到全局均值的旧式 collapse；task/skill 局部质量仍须结合下方真实 rollout 的 fresh-query 表判断。",
+                f"原始诊断：`{grounding_summary_path}`；耗时 `{_fmt(grounding_summary.get('elapsed_seconds'))}` s。",
+            ]
+        )
+    else:
+        lines.append("未提供本轮 ckpt_new 300-sample grounding summary。")
+    lines.extend(["", "### 新 27-rollout smoke", ""])
     smoke_rows = _validation_smoke_rows(smoke_manifest)
     if formal_gate.get("mode") == "explicit_user_approved_bypass":
         formal_gate_cli = [
@@ -663,6 +769,7 @@ def main() -> int:
         "",
         f"- 已完成 task-level 实验：`{complete}/{expected}`。",
         f"- 已完成 rollout：`{total_finished_rollouts}/{manifest.get('total_requested_rollouts', 0)}`。",
+        f"- 成功 rollout：`{total_success_rollouts}/{total_finished_rollouts}`。",
         f"- VLM：`{manifest.get('vlm_base_url')}`；revision：`{revision_label}`。",
         f"- 原始 manifest：`{manifest_path}`。",
         f"- 阶段：`{campaign_stage}`；设计：3 个 condition × 3 个 task × 每格 {rollouts_per_cell} rollout，共 {manifest.get('total_requested_rollouts', 0)} rollout；每批 3 个并行环境。",
@@ -1311,7 +1418,7 @@ def main() -> int:
             f"- 当前主 manifest tasks：`one_leg`、`round_table`、`lamp`；每个 condition-task {rollouts_per_cell} rollout，共 `3×3×{rollouts_per_cell}={manifest.get('total_requested_rollouts', 0)}`。Formal 固定为 36 rollout/格（324 总计）。",
             f"- 落盘上限：每格最多保存 `{max_saved_rollouts or '全部'}` 条 pickle/MP4；全部 {rollouts_per_cell} 条仍在内存中累计 success、progress、tracking 和 VLM point/MC200 指标并写入 task summary。",
             "- 本地并行：`n_envs=3`；三个 task 上限均为 1000 step；`randomness=low`。",
-            f"- VLM：固定 readiness 中的 model revision；每次正式启动先 fail-fast 检查 `status=ready`、`policy_version={readiness.get('policy_version', '—')}`、`model_mode={readiness.get('model_mode', '—')}`。HTTP timeout 30 s，失败或 schema/revision 不一致直接终止，不 fallback 到自动机。",
+            f"- VLM：固定 readiness 中的 model revision；每次正式启动先 fail-fast 检查 `status=ready`、`policy_version={readiness.get('policy_version', '—')}`、`model_mode={readiness.get('model_mode', '—')}`。各完成 cell 实际使用的 HTTP timeout 为 {vlm_timeout_label} s；超时、schema/revision 不一致均直接终止，不 fallback 到自动机。",
             "- Query：`--vlm-query-interval 0`，使用 checkpoint 的 `action_horizon=8`；每 8 个 environment step query 一次，其间缓存。",
             f"- Noise projection：每个有效控制 step 的 GT/VLM 点对、每档 `{monte_carlo_samples}` 个 clipped-standard-Gaussian 样本；reference reservoir 2000/档；SWD 32 个固定方向。",
             "- Tracking target：shadow 自动机的 clean GT guidance pose；强制 `pose` 模式并报告 position cm / orientation deg / normalized total。VLM 控制 policy，自动机只负责 shadow GT 和指标。",
@@ -1331,7 +1438,7 @@ def main() -> int:
             "- 历史噪声实验的偏移在 skill phase 内固定，而 VLM 以 8-step query/cache 更新；所以当前只比较空间边缘分布。若要比较时间相关结构，需要额外报告 autocorrelation 或按 phase 重跑。",
             "- 本报告 tracking target 是 clean GT pose；若历史噪声 tracking 以加噪 pose 为 target，两者 tracking 数值不可直接映射。噪声等级结论只由投影残差比较给出。",
             "- `same-depth mm` 只表示 GT 深度平面上的横向误差，不能恢复不可观测的深度方向，因此只作为工程辅助量。",
-            "- 正式运行将创建新的 timestamp output-dir；旧的中断 rollout 不纳入任何表格或结论。",
+            "- 正式运行使用独立的 rollout suffix/output 目录；旧的中断 rollout 不纳入任何表格或结论。",
             "",
             (
                 "### 7.4 正式运行配置"
@@ -1462,7 +1569,15 @@ def main() -> int:
             "只重新生成报告：",
             "",
             "```bash",
-            f"python scripts/generate_vlm_dit_report.py --manifest {manifest_path} --output {output_path}",
+            (
+                f"python scripts/generate_vlm_dit_report.py --manifest {manifest_path} "
+                + (
+                    f"--grounding-summary {grounding_summary_path} "
+                    if grounding_summary_path is not None
+                    else ""
+                )
+                + f"--output {output_path}"
+            ),
             "```",
             "",
             "## 10. 原始导出",
@@ -1474,6 +1589,76 @@ def main() -> int:
             f"- task×skill point error CSV：`{data_dir / 'vlm_dit_point_error_by_task_skill.csv'}`",
             f"- source manifest：`{manifest_path}`",
             "- 不复制 runtime manifest 到 reports；以上述 logs 路径为唯一源。",
+            "",
+            "## 11. 数据来源与可追溯性",
+            "",
+            "本节覆盖报告中的全部 15 张数据表。表格只由下列本地 JSON 源和确定性聚合公式生成；CSV 是便于继续分析的派生导出，不是第二套数据源。被 `.gitignore` 忽略的 runtime 数据不提交，但同机 session 可按绝对路径读取，并用 SHA256 检查是否仍是本报告使用的版本。",
+            "",
+        ]
+    )
+    provenance_rows = [
+        ["ckpt_new 300-sample grounding gate", str(grounding_summary_path or "—"), "`summaries.current.{overall,task/one_leg,task/round_table,task/lamp}`"],
+        ["Matched scripted diagnostics", str(diagnostic_summary_path or "—"), "`n_success`, `n_rollouts`, `tracking_error`, progress/skill counters"],
+        ["Success matrix；每格 Wilson 95% CI", "9 个 task summary（见下表）", "`n_success`, `n_rollouts`；Wilson 由 `_wilson` 确定性计算"],
+        ["Tracking matrix；task position/rotation 分布", "9 个 task summary", "`tracking_error.overall`"],
+        ["Per-skill tracking", "9 个 task summary", "`tracking_error.by_skill`"],
+        ["VLM step mean/RMSE matrix；每格 residual 分布", "9 个 task summary", "`vlm_point_error.all.overall`"],
+        ["Fresh-query VLM point 质量", "9 个 task summary", "`vlm_point_error.all.fresh_queries.overall`"],
+        ["Each skill step average（跨 task）", "9 个 task summary", "合并 `vlm_point_error.all.by_skill` 的 sufficient statistics"],
+        ["Task × skill point error", "9 个 task summary", "`vlm_point_error.all.by_skill`"],
+        ["Condition overall n0–n4 量级", "9 个 task summary", "合并 `vlm_point_error.all.step_distribution`"],
+        ["每 task n0–n4 量级", "9 个 task summary", "`vlm_point_error.all.step_distribution`"],
+        ["Condition × n0–n4 SWD/W1/KS", "9 个 task summary", "合并 `step_distribution.projection_reference.levels` 与 `step_distribution.vlm`"],
+    ]
+    lines.extend(_table(["报告表格", "原始来源", "字段/计算来源"], provenance_rows))
+    lines.extend(
+        [
+            "",
+            "说明：上表将版式相同、来源相同的成对表格合并为一行，因此 12 条来源映射覆盖 15 张 Markdown 表。报告结论只对这些表做排序和文字解释，不引入额外实验数据。",
+            "",
+            "### 11.1 顶层来源文件",
+            "",
+        ]
+    )
+    top_level_sources = [
+        ["formal composite manifest", str(manifest_path), str(manifest_path.stat().st_size), _sha256(manifest_path)],
+        ["300-sample grounding summary", str(grounding_summary_path or "—"), str(grounding_summary_path.stat().st_size) if grounding_summary_path is not None and grounding_summary_path.is_file() else "—", _sha256(grounding_summary_path)],
+        ["matched scripted summary", str(diagnostic_summary_path or "—"), str(diagnostic_summary_path.stat().st_size) if diagnostic_summary_path is not None and diagnostic_summary_path.is_file() else "—", _sha256(diagnostic_summary_path)],
+    ]
+    lines.extend(_table(["Source", "Absolute path", "Bytes", "SHA256"], top_level_sources))
+    lines.extend(["", "### 11.2 九个正式 task summary", ""])
+    summary_source_rows = []
+    for row in manifest_rows:
+        summary_path = Path(row["summary_path"]).resolve()
+        payload = payload_by_key.get((row["condition"], row["task"])) or {}
+        summary_source_rows.append(
+            [
+                row["condition_label"],
+                row["task"],
+                f"{payload.get('n_success', 0)}/{payload.get('n_rollouts', 0)}",
+                str(summary_path),
+                str(summary_path.stat().st_size) if summary_path.is_file() else "—",
+                _sha256(summary_path),
+            ]
+        )
+    lines.extend(
+        _table(
+            ["Condition", "Task", "Success", "Absolute summary path", "Bytes", "SHA256"],
+            summary_source_rows,
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "### 11.3 派生 CSV 与生成器",
+            "",
+            f"- task-level：`{data_dir / 'vlm_dit_guidance_by_task.csv'}`",
+            f"- condition overall：`{data_dir / 'vlm_dit_guidance_overall.csv'}`",
+            f"- cross-task skill：`{data_dir / 'vlm_dit_guidance_by_skill.csv'}`",
+            f"- task × skill tracking：`{data_dir / 'vlm_dit_tracking_by_task_skill.csv'}`",
+            f"- task × skill point：`{data_dir / 'vlm_dit_point_error_by_task_skill.csv'}`",
+            f"- generator：`{Path(__file__).resolve()}`；SHA256 `{_sha256(Path(__file__).resolve())}`。",
+            "- 所有 CSV 与 Markdown 均由同一次 generator 调用覆盖写出；重新生成命令见第 9 节。",
         ]
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)

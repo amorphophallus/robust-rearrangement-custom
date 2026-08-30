@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import requests
 
 from src.eval.vlm_guidance import (
     VLMGuidanceClient,
@@ -99,6 +100,55 @@ class BatchErrorThenSingletonSession(FakeSession):
         return super().post(url, files=files, headers=headers, timeout=timeout)
 
 
+class BatchErrorThenMalformedSingletonSession(FakeSession):
+    malformed_text = (
+        '{"skill": "pick", "target_point_2d": [233.0, 116.0], '
+        '"target_point_3d": [0.580921, 0.124111, 0.43].0}'
+    )
+
+    def post(self, url, *, files, headers, timeout):
+        metadata = json.loads(files["metadata"][1])
+        if len(metadata["items"]) > 1:
+            self.last_files = files
+            self.posted_metadata.append(metadata)
+            return ErrorResponse({"detail": "invalid generated JSON"})
+        if metadata["items"][0]["request_id"].startswith("env2-"):
+            self.last_files = files
+            self.posted_metadata.append(metadata)
+            request_id = metadata["items"][0]["request_id"]
+            return ErrorResponse(
+                {
+                    "detail": (
+                        f"{request_id}: invalid generated JSON: expected ','; "
+                        f"generated_text={self.malformed_text!r}"
+                    )
+                }
+            )
+        return super().post(url, files=files, headers=headers, timeout=timeout)
+
+
+class ConnectTimeoutThenSuccessSession(FakeSession):
+    def __init__(self):
+        super().__init__()
+        self.attempts = 0
+
+    def post(self, url, *, files, headers, timeout):
+        self.attempts += 1
+        if self.attempts == 1:
+            raise requests.exceptions.ConnectTimeout("temporary proxy connect timeout")
+        return super().post(url, files=files, headers=headers, timeout=timeout)
+
+
+class ReadTimeoutSession(FakeSession):
+    def __init__(self):
+        super().__init__()
+        self.attempts = 0
+
+    def post(self, url, *, files, headers, timeout):
+        self.attempts += 1
+        raise requests.exceptions.ReadTimeout("slow accepted inference")
+
+
 def test_client_batches_images_and_restores_request_order():
     session = FakeSession()
     client = VLMGuidanceClient("http://vlm", session=session)
@@ -178,8 +228,104 @@ def test_original_sft_retries_batch_422_as_singletons():
         "prediction_http_request_count": 4,
         "batch_prediction_request_count": 1,
         "singleton_prediction_request_count": 3,
+        "prediction_transport_retry_count": 0,
         "batch_422_retry_count": 1,
+        "invalid_json_prefix_recovery_count": 0,
     }
+
+
+def test_original_sft_recovers_valid_control_prefix_from_malformed_3d_suffix():
+    session = BatchErrorThenMalformedSingletonSession()
+    client = VLMGuidanceClient("http://vlm", session=session)
+    client.check_ready()
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+
+    predictions, _ = client.predict(
+        task="lamp",
+        front_images=[image, image, image],
+        wrist_images=[image, image, image],
+        state_infos=[{"base": {}}, {"base": {}}, {"base": {}}],
+        step_idx=760,
+    )
+
+    recovered = predictions[2]
+    assert recovered.request_id == "env2-step760"
+    assert recovered.skill == "pick"
+    np.testing.assert_array_equal(recovered.point_px, [233.0, 116.0])
+    assert recovered.recovered_from_invalid_json is True
+    assert recovered.generated_text == session.malformed_text
+    assert client.transport_stats()["invalid_json_prefix_recovery_count"] == 1
+
+
+def test_original_sft_does_not_recover_invalid_control_prefix():
+    session = BatchErrorThenMalformedSingletonSession()
+    session.malformed_text = (
+        '{"skill": "pick", "target_point_2d": [333.0, 116.0], '
+        '"target_point_3d": [0.58, 0.12, 0.43].0}'
+    )
+    client = VLMGuidanceClient("http://vlm", session=session)
+    client.check_ready()
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+
+    try:
+        client.predict(
+            task="lamp",
+            front_images=[image, image, image],
+            wrist_images=[image, image, image],
+            state_infos=[{"base": {}}, {"base": {}}, {"base": {}}],
+            step_idx=760,
+        )
+    except Exception as error:
+        message = str(error)
+    else:
+        raise AssertionError("expected malformed out-of-bounds point to fail closed")
+
+    assert "invalid generated JSON" in message
+    assert client.transport_stats()["invalid_json_prefix_recovery_count"] == 0
+
+
+def test_client_retries_one_transient_transport_timeout():
+    session = ConnectTimeoutThenSuccessSession()
+    client = VLMGuidanceClient("http://vlm", session=session)
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+
+    predictions, _ = client.predict(
+        task="lamp",
+        front_images=[image, image, image],
+        wrist_images=[image, image, image],
+        state_infos=[{"base": {}}, {"base": {}}, {"base": {}}],
+        step_idx=200,
+    )
+
+    assert len(predictions) == 3
+    assert session.attempts == 2
+    stats = client.transport_stats()
+    assert stats["prediction_http_request_count"] == 2
+    assert stats["batch_prediction_request_count"] == 2
+    assert stats["prediction_transport_retry_count"] == 1
+
+
+def test_client_does_not_duplicate_an_ambiguous_read_timeout():
+    session = ReadTimeoutSession()
+    client = VLMGuidanceClient("http://vlm", session=session)
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+
+    try:
+        client.predict(
+            task="lamp",
+            front_images=[image, image, image],
+            wrist_images=[image, image, image],
+            state_infos=[{"base": {}}, {"base": {}}, {"base": {}}],
+            step_idx=200,
+        )
+    except Exception as error:
+        message = str(error)
+    else:
+        raise AssertionError("expected read timeout to fail without replay")
+
+    assert "exceeded the read timeout" in message
+    assert session.attempts == 1
+    assert client.transport_stats()["prediction_transport_retry_count"] == 0
 
 
 def test_structured_model_keeps_batched_request_after_readiness_check():
@@ -247,3 +393,4 @@ def test_policy_bundle_preserves_oracle_diagnostics_but_uses_vlm_outputs():
     assert bundle["vlm_annotation"]["cache_age_steps"] == 3
     assert bundle["vlm_annotation"]["skill_confidence"] is None
     assert "target_point_2d" in bundle["vlm_annotation"]["generated_text"]
+    assert bundle["vlm_annotation"]["recovered_from_invalid_json"] is False
