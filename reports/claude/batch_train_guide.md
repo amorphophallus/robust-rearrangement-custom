@@ -371,6 +371,10 @@ manifest 只是资产索引，不能作为生成完成 gate。恢复生成器看
 子进程继续持锁而使新实例静默退出。调度器启动后必须验证 supervisor 状态、日志
 时间戳和实际 PID，而不是只看启动命令返回成功。数据 ready marker 应放在 LMDB
 目录的同级资产目录，并让 validator、poller 和资产台账使用同一个 marker 路径约定。
+`systemd-run --user` 创建的 transient unit 可能在 user manager 重建后消失；每次 agent
+续接、上下文恢复或状态汇报都应先用 `systemctl --user is-active`、日志最新时间和实际
+PID 三项复核。unit 不存在时按原批准间隔和同一单实例锁重建，不能把历史的
+`systemctl start` 成功或旧 PID 当作当前监控仍存活的证据。
 
 `scripts/prepare_upload_med_0801.sh`、`scripts/schedule_med_0801_training.sh` 等旧入口如果仍引用旧 source/provenance、旧 host 或旧 GPU，标记为 `legacy/no-touch`，不得用于当前 campaign。旧 `rgbd` backup 也不能绕过当前 source manifest gate。
 
@@ -414,20 +418,41 @@ world size = 2 and both ranks alive
 
 W&B 初始化可能晚于 launcher 返回。若启动记录暂时只有 `run_id=-`，小时级监控必须按启动时间和完整实验 config 从 W&B 项目中对账，随后向 append-only registry 补写 run name/ID；不能让缺失 ID 的 run 脱离速度、恢复和完成监控。发现 run 已经 `finished` 时，先核对 config、目标 epoch、最终 checkpoint metadata 和进程退出，再写 completion marker；动态轮询器必须在检查 tmux 之前先检查该 marker，禁止把已完成实验重新从 epoch 0 启动。
 
+W&B 的远端 `state` 不是训练进程存活性的单一事实源。若 run 突然显示 `crashed` 或
+summary epoch 停止更新，先同时检查 tmux、torchrun/rank、GPU compute process、最近
+checkpoint metadata，以及本地 `wandb-core`/`debug-internal.log`。若进程仍存活、
+checkpoint 已超过 W&B epoch，且日志明确显示 `file_stream` HTTP 5xx、timeout 或其他
+同步故障，应登记为“训练存活、W&B sync degraded”，不能停止或重复启动训练。
+
 ### 8.1 训练时间预算与速度告警
 
-训练启动后必须记录当前 epoch、检查时间和从最近一次启动/恢复开始的有效训练时长，
-用至少两次观测得到的 epoch 增长率估算到目标 epoch 的 ETA。单个 run 的预计完成时间
-在 2--3 天内属于可接受范围；若 ETA 超过 72 小时，必须向用户告警并做一次诊断，
-不能静默修改审批过的参数或直接重启。诊断至少包括：两个 rank 是否持续推进、每张
-GPU 的 utilization/显存、CPU I/O wait、数据所在快盘余量和 I/O、LMDB dataloader
-是否报错，以及最近 checkpoint 的 mtime。
+训练启动或恢复时必须记录 `baseline_epoch`、`baseline_time` 和当前 run ID。稳定速度只
+使用至少两次观测计算：
 
-首个速度样本只有一个时间点时可以使用“当前 epoch / 本次启动或恢复时长”作粗略估计，
-但必须在下一次样本后用滑动速率复核。连续两个检查周期 epoch 不增长，或 checkpoint
-超过一个周期未更新时，标记为 `WARN_STALLED` 并先定位进程、数据加载或资源问题；
-没有证据前不得把它当成正常慢速。速度监控可以和数据生成、上传、GPU 轮询并行，
-稳定后维持小时级检查，只有状态变化或告警才输出通知。
+```text
+rate_epoch_h = (current_epoch - baseline_epoch) / elapsed_hours
+full_run_days = target_epoch / rate_epoch_h / 24
+remaining_eta_days = (target_epoch - current_epoch) / rate_epoch_h / 24
+```
+
+三天门禁使用 `full_run_days`，不是 `remaining_eta_days`。单个 3000-epoch run 的完整
+投影在 2--3 天内属于可接受范围；`full_run_days > 3` 时即使已经训练过半、剩余时间
+少于三天，也必须向用户告警并做一次诊断。诊断至少包括：两个 rank 是否持续推进、
+每张 GPU 的 utilization/显存、CPU load 和 I/O wait、数据所在快盘余量和吞吐、LMDB
+dataloader 是否阻塞或报错、其他用户的 CPU/GPU 竞争，以及最近 checkpoint 的 mtime。
+不能静默修改审批过的参数或直接重启。
+
+fresh run 可以用 baseline epoch 0；恢复 run 绝不能用累计 `current_epoch / 本次恢复时长`
+估速，否则会制造虚假高速。短于 15 分钟的手工复查只报告 live epoch，不更新稳定速度
+baseline；首个有效窗口仍标记为 `STARTING`。连续两个检查周期 epoch 不增长，或
+checkpoint 超过一个周期未更新时，标记为 `WARN_STALLED` 并先定位进程、数据加载或
+资源问题；没有证据前不得把它当成正常慢速。速度监控可以和数据生成、上传、GPU
+轮询并行，稳定后维持小时级检查，只有状态变化或告警才输出通知。
+
+W&B summary 落后时，速度监控可以使用经过解析的 NAS checkpoint metadata 中的
+`epoch/global_step` 作为进度源，但必须在台账记录 `progress_source=checkpoint`、
+W&B epoch、checkpoint 路径和哈希。首次从 W&B 切换到 checkpoint 时重新建立速度
+baseline，不能把两个来源的观测直接相减；最终完成前仍需直接加载 checkpoint 验证。
 
 恢复流程：
 
@@ -459,20 +484,62 @@ NAS checkpoint 绝对路径和原 W&B run ID。不要因为 checkpoint 最初由
 就无条件等待该服务器空卡。
 
 每次启动或恢复都要在 `logs/<campaign>_runs.md` 记录 host、GPU、tmux、W&B run name/ID、
-checkpoint 路径和 checkpoint epoch；`logs/med_0801_training_speed.tsv` 记录同一 run ID 的
-当前 epoch、有效速度 `rate_epoch_h`、ETA 和告警状态。恢复后的速度基线从恢复时间重新开始，
-不得把恢复前的速率混入新的 ETA。
+checkpoint 路径、epoch/global step、SHA256、训练代码 Git commit 和 Python/PyTorch/CUDA
+环境版本；`logs/<campaign>_training_speed.tsv` 记录同一 run ID 的当前 epoch、有效速度
+`rate_epoch_h`、`full_run_days`、`remaining_eta_days` 和告警状态。恢复后的速度 baseline
+从恢复时间和恢复起始 epoch 重新建立，不得把恢复前的速率混入新窗口，也不得让短周期
+人工检查覆盖最后一个稳定 baseline。
 
 收到 `SIGTERM` 时，先检查 `dmesg`、`journalctl`、`earlyoom`、`systemd-oomd`、GPU 进程和数据错误；不能仅凭 pane 中的 `Killed` 判断为 OOM，也不能因为 SSH 断开就删除数据。若 checkpoint 可用，恢复命令必须同时保留原 W&B run ID、数据 manifest、annotation flags 和训练配置。W&B 已有较后 log step 而 checkpoint 较早时，恢复初期可能出现 step 非单调警告；确认 epoch 和 loss 正常推进后再继续运行。
 
 资产/训练 registry 中最新状态为 `started` 或 `resumed` 时都表示该实验已经登记，轮询器不得重复创建新 run；只有在确认进程退出且存在可恢复 checkpoint 时，才按精确 run ID 执行恢复。
 
-完成验证不能只看 tmux 消失：必须同时检查最终 W&B config、目标 epoch、last checkpoint metadata 中的 epoch/global step、日志无未处理异常、远端训练进程退出和 W&B finished 状态。完成 marker 是调度终止锁，不是人工备注；只有上述证据齐全才能写入，写入后 poller 不得再次启动该 experiment。
+完成验证不能只看 tmux 消失：正常路径必须同时检查最终 W&B config、目标 epoch、last
+checkpoint metadata 中的 epoch/global step、日志无未处理异常、远端训练进程退出和
+W&B `finished` 状态。完成 marker 是调度终止锁，不是人工备注；只有上述证据齐全才能
+写入，写入后 poller 不得再次启动该 experiment。
+
+如果 W&B 已被证明发生持续同步故障，可使用严格的降级完成门禁替代远端
+`finished`：最终 checkpoint 必须可直接加载且精确达到目标 epoch/global step；已保存
+或仍可读取的最终配置必须通过全部实验映射校验；远端 tmux 和精确训练 PID 均已退出；
+训练日志没有未处理的 Traceback/NCCL/OOM；本地 W&B run bundle 与明确的 sync/API
+错误日志必须保留。完成 registry/event 必须记录原 run ID、`wandb_state` 和降级原因。
+任一证据缺失时不得写 completion marker，也不得把中间 checkpoint 当成完成。
 
 轮询器可能先观察到训练进程退出并追加 `failed/process-dead`，而 W&B 和异步 checkpoint
 随后已经完成收尾。完成监控不得因为这条失败行丢弃最近的 `started/resumed` run 身份；
 仍需用原 run ID 执行完整完成门禁。若 W&B `finished`、最终 epoch/checkpoint 和远端退出
 全部通过，应登记为 `finished` 并写 completion marker，而不是从最终 checkpoint 再启动一次。
+
+### 8.2 最终 checkpoint 本地归档
+
+每个 run 通过完成门禁后，使用 `/data/hy/gpu-snatcher/auto_eval.sh` 的 `download` step
+下载最终 checkpoint，并让脚本生成文件名；不要用 `--overwrite-wt-path` 绕过下载和命名。
+先运行 `--help` 核对当前 CLI。典型调用为：
+
+```bash
+bash /data/hy/gpu-snatcher/auto_eval.sh \
+  --steps download \
+  --run-id <models-directory中的run-name> \
+  --project <wandb-project> \
+  --local-path <local-checkout> \
+  --task one_leg+round_table+lamp \
+  --remote-ssh-host '' \
+  --checkpoint-pattern '*last*.pt'
+```
+
+当前脚本的 `--run-id` 用于匹配 outputs 路径；若 W&B ID 不出现在模型目录名中，应传
+实际 run name，并检查脚本打印的 selected output/checkpoint 正是完成门禁对应文件。
+NAS 在本机不可见时设置实际 SSH host；可见时使用空 host 从挂载路径复制。脚本的目标
+目录可能仍包含历史 randomness 默认值，资产台账必须记录实际绝对路径，不能凭目录名
+推断 checkpoint 配置。
+
+下载后逐个直接 `torch.load(..., map_location='cpu')` 核对 epoch/global step，比较源目标
+字节数和 SHA256，并在 `logs/<campaign>_checkpoint_downloads.tsv` 记录 experiment、run
+name/ID、源路径、脚本生成的目标路径、bytes、hash 和验证结果。若最终文件只存在于某台
+服务器本地盘，先直接加载和计算 hash，再用可续传 rsync 补入相同 NAS output 结构；NAS
+ACL 不允许保留 owner/group/perms 时显式关闭这些属性，临时文件通过 `cmp`/SHA256 后原子
+改名。之后仍由原 auto-eval download 流程发现和命名，不手工伪造本地归档文件名。
 
 ## 9. Agent 执行模板
 

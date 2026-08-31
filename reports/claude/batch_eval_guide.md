@@ -26,6 +26,7 @@ Agent 先从仓库、launcher、checkpoint 和现有日志中发现可推断项�
 | 环境 | controller、domain、action type、observation space |
 | 难度 | `low` / `med` / `high` 及 perturb 设置 |
 | 评估量 | 每任务 rollout 数或目标成功数、并行 env 数、最大步数 |
+| 比较公平性 | checkpoint 间是否共享初始状态；重复 seed/state bank 数；均值和方差口径 |
 | annotation | skill debug、skill text、guidance point、grasp、part、colored |
 | 资源 | 允许使用的服务器/GPU、是否串行、磁盘最低余量 |
 | 产物 | 是否保存 pickle、depth、video；保留数量和清理审批规则 |
@@ -61,7 +62,20 @@ rollout 同时有两套 annotation 开关，不能混用：
 - policy 输入图像：严格使用 checkpoint config 中的 `data.annotate_guidance_point`、`annotate_grasp`、`annotate_grasp_part` 及对应 colored 字段。它们改变 actor 的 observation contract。
 - 保存到最终 pickle 的图像：严格使用本次命令行的 `--guidance-point-on-image`、`--grasp-annotation-on-image`、`--grasp-part-annotate`、`--guidance-point-colored`、`--grasp-annotation-colored`。checkpoint 的同名 policy 设置不得泄漏到保存结果。
 
-因此，普通 state teacher 可以在不改变 policy 输入的情况下，用 CLI 选择独立 rollout campaign 的保存标注；但每个 campaign 仍必须重新 rollout，不能从已有 pickle 离线补标注。
+因此，普通 state teacher 可以在不改变 policy 输入的情况下，用 CLI 选择独立 rollout campaign 的保存标注。如果目标资产是 LMDB，且当前 `pickle_to_lmdb` 已明确复用项目 annotation util、通过样本和视频验收，则可以按批准方案从同一批 pickle 离线生成不同标注 LMDB；否则不能假定离线补标注与 rollout 标注等价。
+
+### 3.2 初始状态、公平比较与 seed
+
+先确认随机性来源。若任务随机性只发生在 reset 时的初始状态采样，checkpoint 间的公平比较应优先使用 common random numbers：同一 task、同一重复组使用相同的初始状态序列，不同 checkpoint 复用该序列；不要让各 checkpoint 独立抽到难度不同的测试集。
+
+建议方案是使用多个独立重复组，而不是只固定一个 seed：
+
+1. 每个 task 选择 `K` 个从未用于训练数据采集的 eval seed 或 state bank。
+2. 每个 seed/state bank 对每个 checkpoint 运行相同的 `N` 个初始状态。
+3. 表格报告每个 checkpoint-task 的 `mean ± sample std`，样本是 `K` 个重复组各自的成功率；同时保留 pooled 成功数 `sum(success) / (K*N)`。
+4. `K`、`N`、seed 列表、初始状态生成代码 commit 和 state bank 哈希必须入账。
+
+固定 eval seed 本身不会造成训练集泄漏。泄漏风险来自复用了训练 episode 的初始状态、为特定 checkpoint 反复挑 seed，或根据测试结果调参后仍把同一测试集当最终结果。若当前代码不能只固定 reset 随机性，或无法证明 state bank 对所有 checkpoint 一致，应在审批表中明确降级为普通独立采样；此时不能报告成 paired/fair-seed 比较。
 
 ## 4. 基础设施审计
 
@@ -118,6 +132,8 @@ PY
 3. 若保存 annotation，抽查视频或 pickle 中标注确实出现且语义正确。
 4. 记录耗时、显存和单轨迹磁盘占用。
 
+smoke 必须覆盖 RGB-only 和 RGBD 两种保存路径。当前 evaluator 的 rollout 视频 serializer 可能在 RGB-only policy 下仍要求合法 depth 数组；若不加 `--save-depth-image` 会在 rollout 完成后的 crop/save 阶段失败。允许内部采集 depth 时，应在批准矩阵中注明“仅供 policy/save contract 使用”，成功合成 RGB 视频后删除临时 depth 诊断，并验收最终目录没有残留 depth 文件。不要把“模型不使用 depth”和“保存器不需要 depth”混为一谈。
+
 正式命令必须由当前 launcher 的 CLI 参数构造。若 launcher 只能靠编辑 shell 常量切换实验，应先增加参数化 CLI 和 `--print-command`，再逐行打印并与批准矩阵比对。不要在共享脚本中反复手改常量后并发运行。
 
 每个运行至少保存：
@@ -165,7 +181,13 @@ OOM 后不要直接并发补跑；先确认旧进程是否仍存活。append 模
 
 删除任何旧数据或本批 rollout 前，先列出绝对路径、owner、文件数、字节数和所在文件系统，得到用户明确批准后再执行。权限不足的残留要如实记录，不得用不相关账号绕过。
 
-## 9. Agent 执行模板
+若采用多个 seed/state bank，成功率表必须明确 `mean ± sample std` 的重复组数量和每组 rollout 数。只有一个普通采样批次时，报告原始成功率与计数，不得伪造 seed 方差或把单次 rollout 的 Bernoulli 标准误写成跨 seed 标准差。
+
+## 9. 已验证参考案例（不可静默继承）
+
+`med_train_med_eval_0828` 于 2026-08-30 完成：8 个 checkpoint、3 个 task、每 cell 36 rollouts，共 864 rollouts；`randomness=med`，3 个并行环境，最大 1000 steps。该批最终按审批使用现有随机 reset，不固定 seed/state bank，因此报告原始成功率而不是 `mean ± std`。每个 cell 保留 3 个合成 RGB 视频，不保留 pickle 或 depth；24 个 cell 全部成功，最终 72 个视频。结果见 `reports/med_train_med_eval_0828.md`，运行清单见 `logs/med_train_med_eval_0828/formal_manifest.json`。
+
+## 10. Agent 执行模板
 
 用户可直接提供：
 
