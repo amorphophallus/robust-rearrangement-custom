@@ -71,6 +71,7 @@ from src.eval.progress_schema import (
     get_task_progress_labels,
     new_tracking_workspace_counts,
     normalize_progress_counts,
+    ordered_unique_non_null,
     tracking_histories_are_complete,
 )
 from src.eval.vlm_guidance import (
@@ -644,6 +645,31 @@ def _saved_media_env_count_for_round(
     return min(int(num_envs), int(accepted_env_count), remaining)
 
 
+def _gate_success_with_scripted_fsm(
+    reward_success_flags: torch.Tensor,
+    skill_state_histories,
+    task_name: str,
+    *,
+    enabled: bool,
+) -> torch.Tensor:
+    """Require the maintained scripted FSM before accepting physics success."""
+    if not enabled:
+        return reward_success_flags
+    expected_states = get_task_progress_labels(task_name, "skill_states")
+    if not expected_states:
+        return reward_success_flags
+    completion_flags = [
+        ordered_unique_non_null(history) == expected_states
+        for history in skill_state_histories
+    ]
+    completion_tensor = torch.as_tensor(
+        completion_flags,
+        dtype=torch.bool,
+        device=reward_success_flags.device,
+    ).reshape(reward_success_flags.shape)
+    return reward_success_flags & completion_tensor
+
+
 def _build_rollout_progress_summary(rollout_stats: RolloutStats) -> dict:
     return {
         "n_success": int(rollout_stats.n_success),
@@ -1118,6 +1144,9 @@ def rollout(
     current_oracle_annotations = oracle_initial_annotations
     current_annotations = initial_annotations
     active_skill_states = initial_skill_states
+    require_scripted_fsm_completion = (
+        annotation_source == "scripted" and annotate_skill
+    )
 
     # Verify history for summary at end of rollout
     from src.eval.skill_annotation_verify import VerifyHistory, verify_and_record
@@ -1456,9 +1485,18 @@ def rollout(
 
         # update progress bar
         step_idx += 1
+        reward_success = (
+            rewards[:, :step_idx].sum(dim=1, keepdim=True) >= n_parts_assemble
+        ).to(done.device)
+        current_success = _gate_success_with_scripted_fsm(
+            reward_success,
+            _transpose_step_env_annotations(skill_states, env.num_envs),
+            getattr(env, "furniture_name", ""),
+            enabled=require_scripted_fsm_completion,
+        )
         if pbar is not None:
             pbar.set_postfix(step=step_idx)
-            n_success = (rewards.sum(dim=1) == n_parts_assemble).sum().item()
+            n_success = current_success.sum().item()
             pbar.pbar_desc(n_success)
             pbar.update()
 
@@ -1467,13 +1505,12 @@ def rollout(
 
         done_for_break = done
         if rollout_after_success > 0 and not full_length_rollout:
-            current_success = (
-                rewards[:, :step_idx].sum(dim=1, keepdim=True) >= n_parts_assemble
-            ).to(done.device)
             new_success = current_success & (success_stop_step < 0)
             success_stop_step[new_success] = step_idx + rollout_after_success
             delayed_success_done = current_success & (step_idx >= success_stop_step)
-            done_for_break = torch.where(current_success, delayed_success_done, done)
+            done_for_break = torch.where(
+                current_success, delayed_success_done, done
+            )
 
         if not full_length_rollout:
             flattened_done = done_for_break.reshape(-1).detach().cpu().tolist()
@@ -1763,7 +1800,13 @@ def calculate_success_rate(
         )
 
         # Calculate the success rate
-        success_flags = rollout_data.rewards.sum(dim=1) == n_parts_assemble
+        reward_success_flags = rollout_data.rewards.sum(dim=1) == n_parts_assemble
+        success_flags = _gate_success_with_scripted_fsm(
+            reward_success_flags,
+            rollout_data.skill_states,
+            getattr(env, "furniture_name", ""),
+            enabled=annotation_source == "scripted" and annotate_skill,
+        )
         accepted_env_count = _accepted_env_count(
             num_envs=env.num_envs,
             completed_rollouts=n_total_rollouts,
