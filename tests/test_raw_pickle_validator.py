@@ -352,6 +352,8 @@ class RawPickleValidatorTest(unittest.TestCase):
                 depth_image1=depths,
                 depth_image2=depths,
                 skills=["pick"] * observations,
+                skill_states=["top-leg-pick"] * observations,
+                assembly_steps=["top-leg"] * observations,
                 guidance_points=[guidance] * observations,
                 guidance_points_clean=[guidance] * observations,
                 guidance_poses=None,
@@ -368,6 +370,16 @@ class RawPickleValidatorTest(unittest.TestCase):
                 action_type="delta",
                 rollout_save_dir=Path(tmpdir),
                 output_only_pickle=True,
+                collection_metadata={
+                    "schema": "rr-furniturebench-rollout-metadata-v1",
+                    "process_seed": 123,
+                    "env_index": 2,
+                    "global_attempt_index": 7,
+                    "batch_index": 2,
+                    "n_envs": 4,
+                    "randomness": "low",
+                    "randomness_semantics": "furniturebench-native",
+                },
             )
             output_path = next((Path(tmpdir) / "success").glob("*.pkl"))
             written = load_pickle_path(output_path)
@@ -380,6 +392,12 @@ class RawPickleValidatorTest(unittest.TestCase):
         np.testing.assert_array_equal(
             written["observations"][0]["guidance_point_clean"], guidance
         )
+        self.assertEqual(
+            written["observations"][0]["skill_state"], "top-leg-pick"
+        )
+        self.assertEqual(written["observations"][0]["assembly_step"], "top-leg")
+        self.assertEqual(written["collection_metadata"]["process_seed"], 123)
+        self.assertEqual(written["collection_metadata"]["global_attempt_index"], 7)
 
 
 if __name__ == "__main__":

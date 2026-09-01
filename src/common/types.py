@@ -9,6 +9,8 @@ class Observation(TypedDict):
     image_size: Tuple[int]
     parts_poses: np.ndarray
     skill: Optional[str]
+    skill_state: Optional[str]
+    assembly_step: Optional[str]
     guidance_point: Optional[np.ndarray]
     guidance_point_clean: Optional[np.ndarray]
     guidance_pose: Optional[np.ndarray]
@@ -34,6 +36,7 @@ class Trajectory(TypedDict):
     vlm_model_revision: Optional[str]
     guidance_frame: str
     guidance_schema_version: int
+    collection_metadata: Dict[str, Any]
 
 
 # Make type for the encoder name choices

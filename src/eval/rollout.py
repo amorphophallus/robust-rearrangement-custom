@@ -1477,6 +1477,8 @@ def calculate_success_rate(
     tracking_metric_type: Optional[str] = None,
     vlm_noise_projection_samples: int = DEFAULT_MONTE_CARLO_SAMPLES_PER_PAIR,
     eepose_frame: str = ROBOT_BASE,
+    process_seed: Optional[int] = None,
+    rollout_randomness: Optional[str] = None,
 ) -> RolloutStats:
 
     use_target_mode = target_successes is not None and target_successes > 0
@@ -1716,6 +1718,16 @@ def calculate_success_rate(
                 rewards = rollout_data.rewards[env_idx].numpy()
                 parts_poses = rollout_data.parts_poses[env_idx].numpy()
                 skills = rollout_data.skills[env_idx] if rollout_data.skills else []
+                skill_states = (
+                    rollout_data.skill_states[env_idx]
+                    if rollout_data.skill_states
+                    else []
+                )
+                assembly_steps = (
+                    rollout_data.assembly_steps[env_idx]
+                    if rollout_data.assembly_steps
+                    else []
+                )
                 guidance_points = (
                     rollout_data.guidance_points[env_idx]
                     if rollout_data.guidance_points
@@ -1896,6 +1908,8 @@ def calculate_success_rate(
                         depth_image2=depth_video2[trim_start_steps : n_steps + 1],
                         parts_poses=parts_poses[trim_start_steps : n_steps + 1],
                         skills=skills[trim_start_steps : n_steps + 1],
+                        skill_states=skill_states[trim_start_steps : n_steps + 1],
+                        assembly_steps=assembly_steps[trim_start_steps : n_steps + 1],
                         guidance_points=guidance_points[trim_start_steps : n_steps + 1],
                         guidance_points_clean=guidance_points_clean[trim_start_steps : n_steps + 1],
                         guidance_poses=guidance_poses[trim_start_steps : n_steps + 1],
@@ -1949,6 +1963,18 @@ def calculate_success_rate(
                         eepose_original_frame=SIM_LOCAL,
                         policy_eepose_frame=eepose_frame,
                         guidance_frame=ROBOT_BASE,
+                        collection_metadata={
+                            "schema": "rr-furniturebench-rollout-metadata-v1",
+                            "process_seed": process_seed,
+                            "env_index": env_idx,
+                            "global_attempt_index": (
+                                n_total_rollouts - env.num_envs + env_idx + 1
+                            ),
+                            "batch_index": n_total_rollouts // env.num_envs,
+                            "n_envs": env.num_envs,
+                            "randomness": rollout_randomness,
+                            "randomness_semantics": "furniturebench-native",
+                        },
                     )
                     saved_rollouts_count += 1
 

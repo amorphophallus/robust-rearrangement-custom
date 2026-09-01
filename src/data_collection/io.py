@@ -223,6 +223,8 @@ def save_raw_rollout(
     output_only_video: bool = False,
     guidance_points_clean: List[np.ndarray] = None,
     guidance_poses_clean: List[np.ndarray] = None,
+    skill_states: List[str] = None,
+    assembly_steps: List[str] = None,
     oracle_skills: List[str] = None,
     oracle_guidance_points_2d: List[dict] = None,
     vlm_annotations: List[dict] = None,
@@ -234,6 +236,7 @@ def save_raw_rollout(
     eepose_original_frame: str = SIM_LOCAL,
     policy_eepose_frame: str = ROBOT_BASE,
     guidance_frame: str = ROBOT_BASE,
+    collection_metadata: dict = None,
 ):
     source_shapes = {
         "color_image1": tuple(np.asarray(imgs1).shape[1:3]),
@@ -266,6 +269,10 @@ def save_raw_rollout(
 
     if skills is None:
         skills = [None] * len(robot_states)
+    if skill_states is None:
+        skill_states = [None] * len(robot_states)
+    if assembly_steps is None:
+        assembly_steps = [None] * len(robot_states)
     if guidance_points is None:
         guidance_points = [None] * len(robot_states)
     if guidance_points_clean is None:
@@ -321,6 +328,8 @@ def save_raw_rollout(
         parts_poses,
         pcs,
         skills,
+        skill_states,
+        assembly_steps,
         guidance_points,
         guidance_points_clean,
         guidance_poses,
@@ -342,6 +351,8 @@ def save_raw_rollout(
             parts_pose,
             pc,
             skill,
+            skill_state,
+            assembly_step,
             guidance_point,
             guidance_point_clean,
             guidance_pose,
@@ -381,6 +392,8 @@ def save_raw_rollout(
             "parts_poses": parts_pose,
             "point_cloud": pc,
             "skill": skill,
+            "skill_state": skill_state,
+            "assembly_step": assembly_step,
             "guidance_point": guidance_point,
             "guidance_point_clean": guidance_point_clean,
             "guidance_pose": guidance_pose,
@@ -479,6 +492,7 @@ def save_raw_rollout(
         "eepose_schema_version": 2,
         "guidance_frame": guidance_frame,
         "guidance_schema_version": GUIDANCE_SCHEMA_VERSION,
+        "collection_metadata": dict(collection_metadata or {}),
     }
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S.%f")

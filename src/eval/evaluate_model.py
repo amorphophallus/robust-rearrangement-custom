@@ -1601,6 +1601,8 @@ if __name__ == "__main__":
                         vlm_noise_projection_samples=(
                             args.vlm_noise_projection_samples
                         ),
+                        process_seed=args.seed,
+                        rollout_randomness=args.randomness,
                     )
 
                     if args.store_video_wandb:
