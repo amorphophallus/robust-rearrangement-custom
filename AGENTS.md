@@ -59,3 +59,19 @@
 - Create or rebuild an environment only if it is missing or demonstrably
   broken, or if the user explicitly asks for a clean rebuild. Before doing so,
   state why the configured environment cannot satisfy the task.
+
+## External source forks
+
+- Use the user's forks as `origin` for all continuing work:
+  `git@github.com:amorphophallus/ManiSkill.git` and
+  `git@github.com:amorphophallus/IsaacLab.git`. Their production changes are on
+  `main`; do not return to task-only branches for dataset collection.
+- Keep `git@github.com:hmnkapa/ManiSkill.git` and
+  `git@github.com:hmnkapa/IsaacLab.git` as read-only `upstream` remotes. Fetch
+  upstream changes when needed, but push project changes only to the user's
+  fork unless the user explicitly requests another destination.
+- FurnitureBench is the `furniture-bench` submodule backed by
+  `git@github.com:amorphophallus/FurnitureBench-custom.git`. Treat the root
+  repository gitlink as authoritative and use `git submodule update --init --
+  furniture-bench` to restore the recorded clean revision; do not silently move
+  the gitlink to whichever commit happens to be checked out locally.

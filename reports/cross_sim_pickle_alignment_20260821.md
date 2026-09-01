@@ -475,7 +475,7 @@ git diff --check:            pass
 
 ManiSkill trajectory 与 skill-annotation 测试结果为 `105 passed, 13 deselected`；AutoMate 纯数据采集测试结果为 `15 passed`。
 
-尚未 push 到两个 GitHub 仓库的外部补丁保存在 `logs/cross-sim-alignment-20260821/patches/`。它们对 fresh clone 通过 `git apply --check --whitespace=error`，并已应用到 `/data/hy/ManiSkill` 和 `/data/hy/IsaacLab` 的本地任务分支；上文测试与 rollout 结果来自这些 working-tree 修改。
+历史外部补丁仍保存在 `logs/cross-sim-alignment-20260821/patches/`，用于复现最初的 alignment 审计；它们对 fresh clone 通过 `git apply --check --whitespace=error`。后续 production 修复已经合并并推送到用户 fork：`amorphophallus/ManiSkill` 的 `main@b751bb1` 与 `amorphophallus/IsaacLab` 的 `main@3a9018f5`。本地这两个仓库均以用户 fork 为 `origin`、原 `hmnkapa` 仓库为只读 `upstream`；后续不再依赖未推送的本地任务分支。
 
 ```text
 maniskill_alignment.patch

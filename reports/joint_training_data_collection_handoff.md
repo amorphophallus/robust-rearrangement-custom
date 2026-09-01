@@ -37,7 +37,7 @@
 
 本地与服务器是两套独立环境。服务器只使用 NAS Conda；不要再创建 camera/task 临时环境。Isaac Sim 必须设置 `OMNI_KIT_ACCEPT_EULA=YES`，并设置 `PYTHONNOUSERSITE=1`。
 
-生产源码 pin：ManiSkill `rr-cross-sim-alignment` commit `b751bb1`；IsaacLab `rr-cross-sim-alignment` commit `3a9018f5`。正式 launch 仍须记录完整 40 位 commit 和实际文件 SHA；236 的同步 snapshot 已通过本地/远端逐文件 SHA 对账。
+生产源码 pin：[`amorphophallus/ManiSkill`](https://github.com/amorphophallus/ManiSkill) `main` commit `b751bb1`；[`amorphophallus/IsaacLab`](https://github.com/amorphophallus/IsaacLab) `main` commit `3a9018f5`；FurnitureBench 使用主仓库 gitlink 固定的 [`amorphophallus/FurnitureBench-custom`](https://github.com/amorphophallus/FurnitureBench-custom) commit `dc7f435`。本地 ManiSkill/IsaacLab 均以用户 fork 为 `origin`、`hmnkapa` 仓库为只读 `upstream`，后续从 fork 的 `main` 继续。正式 launch 仍须记录完整 40 位 commit 和实际文件 SHA；236 的同步 snapshot 已通过本地/远端逐文件 SHA 对账。
 
 ## 3. 相机合同
 
