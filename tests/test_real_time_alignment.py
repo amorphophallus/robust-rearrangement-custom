@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from src.real.time_alignment import (
+    CoordinatedActionBuffer,
     LatencyProfile,
     TimestampedActionBuffer,
     contiguous_segments,
@@ -94,6 +95,46 @@ class RealTimeAlignmentTest(unittest.TestCase):
             )
             profile = LatencyProfile.load(path)
             self.assertEqual(profile.robot_action_ms, 12)
+
+    def test_v2_estimated_latency_profile_records_stale_guard(self):
+        profile = LatencyProfile.from_mapping(
+            {
+                "schema_version": 2,
+                "measured_at": "2026-09-01T12:00:00+08:00",
+                "latency_source": "estimated",
+                "basis": "Deoxys command_latency=0.01s",
+                "action_stale_guard_ms": 10,
+                "front_observation_ms": 0,
+                "wrist_observation_ms": 0,
+                "robot_observation_ms": 4,
+                "gripper_observation_ms": 6,
+                "robot_action_ms": 10,
+                "gripper_action_ms": 10,
+            }
+        )
+
+        self.assertEqual(profile.common_action_lead_ms, 20)
+        self.assertEqual(profile.latency_source, "estimated")
+
+    def test_coordinated_buffer_uses_one_common_stale_prefix(self):
+        buffer = CoordinatedActionBuffer(period_ns=100)
+
+        accepted, stale = buffer.update(
+            [[1, -1], [2, 1], [3, 1]],
+            [100, 200, 300],
+            query_id=4,
+            admission_cutoff_ns=150,
+        )
+
+        self.assertEqual((accepted, stale), (2, 1))
+        scheduled = buffer.next()
+        self.assertEqual(scheduled.target_time_ns, 200)
+        buffer.mark_dispatched(200, "gripper")
+        self.assertFalse(buffer.next().complete)
+        buffer.mark_dispatched(200, "robot")
+        self.assertTrue(buffer.next().complete)
+        buffer.remove(200)
+        self.assertEqual(buffer.next().target_time_ns, 300)
 
 
 if __name__ == "__main__":

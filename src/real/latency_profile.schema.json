@@ -6,6 +6,9 @@
   "required": [
     "schema_version",
     "measured_at",
+    "latency_source",
+    "basis",
+    "action_stale_guard_ms",
     "front_observation_ms",
     "wrist_observation_ms",
     "robot_observation_ms",
@@ -14,8 +17,11 @@
     "gripper_action_ms"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "measured_at": {"type": "string", "minLength": 1},
+    "latency_source": {"enum": ["estimated", "measured"]},
+    "basis": {"type": "string", "minLength": 1},
+    "action_stale_guard_ms": {"type": "number", "minimum": 0},
     "front_observation_ms": {"type": "number", "minimum": 0},
     "wrist_observation_ms": {"type": "number", "minimum": 0},
     "robot_observation_ms": {"type": "number", "minimum": 0},

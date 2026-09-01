@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sys
 import time
 from datetime import datetime
@@ -33,7 +34,7 @@ from src.real.deoxys_runtime import (
     interpolate_robot_state,
     robot_sample_from_record,
 )
-from src.real.time_alignment import LatencyProfile, TimestampedActionBuffer
+from src.real.time_alignment import CoordinatedActionBuffer, LatencyProfile
 
 
 def _json_value(value):
@@ -341,8 +342,10 @@ def _parse_args(argv=None):
     parser.add_argument("--query-interval-steps", type=int, default=4)
     parser.add_argument("--min-future-actions", type=int, default=2)
     parser.add_argument("--max-observation-age-ms", type=float, default=300.0)
-    parser.add_argument("--max-action-lateness-ms", type=float, default=20.0)
+    parser.add_argument("--max-action-lateness-ms", type=float, default=10.0)
     parser.add_argument("--max-steps", type=int, default=1200)
+    parser.add_argument("--max-wall-time-s", type=float, default=180.0)
+    parser.add_argument("--max-consecutive-rejections", type=int, default=20)
     parser.add_argument("--start-delay-s", type=float, default=3.0)
     parser.add_argument("--controller-time-fraction", type=float, default=2.0)
     parser.add_argument("--prompt-depth-model", choices=("vits", "vitl", "vits-transparent"), default="vitl")
@@ -360,6 +363,8 @@ def _parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.frequency <= 0 or args.query_interval_steps <= 0:
         parser.error("frequency and query interval must be positive")
+    if args.max_wall_time_s <= 0 or args.max_consecutive_rejections <= 0:
+        parser.error("watchdog limits must be positive")
     if args.execute:
         if args.latency_profile is None:
             parser.error("--execute requires --latency-profile")
@@ -413,7 +418,18 @@ def main(argv=None) -> int:
     latency = (
         LatencyProfile.load(args.latency_profile)
         if args.latency_profile is not None
-        else LatencyProfile(0, 0, 0, 0, 0, 0, measured_at="dry-run-zero-profile")
+        else LatencyProfile(
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            measured_at="dry-run-zero-profile",
+            schema_version=2,
+            latency_source="estimated",
+            basis="dry-run zero-latency profile",
+        )
     )
     default_min = [0.2, -0.5, 0.02]
     default_max = [0.8, 0.5, 0.8]
@@ -430,7 +446,7 @@ def main(argv=None) -> int:
     event_log = EvalEventLog(
         log_path,
         {
-            "schema": "rr_deoxys_absolute_policy_eval_v1",
+            "schema": "rr_deoxys_absolute_policy_eval_v2_umi_time",
             "mode": "execute" if args.execute else "dry_run",
             "checkpoint": str(args.checkpoint.expanduser().resolve()),
             "task": args.task,
@@ -438,6 +454,9 @@ def main(argv=None) -> int:
             "action_horizon": actor.action_horizon,
             "query_interval_steps": args.query_interval_steps,
             "latency_profile": None if args.latency_profile is None else str(args.latency_profile),
+            "latency_source": latency.latency_source,
+            "latency_basis": latency.basis,
+            "action_stale_guard_ms": latency.action_stale_guard_ms,
             "workspace_min": limits.workspace_min,
             "workspace_max": limits.workspace_max,
             "min_ee_z": limits.min_ee_z,
@@ -449,8 +468,8 @@ def main(argv=None) -> int:
     worker = None
     robot = None
     controller_cfg = _absolute_controller_config(args.controller_time_fraction)
-    robot_buffer = TimestampedActionBuffer(period_ns)
-    gripper_buffer = TimestampedActionBuffer(period_ns)
+    action_buffer = CoordinatedActionBuffer(period_ns)
+    validated_actions = {}
     annotation_mode = _annotation_mode(cfg)
     annotation_session = None
     last_prompt_token = None
@@ -460,6 +479,15 @@ def main(argv=None) -> int:
     executed_steps = 0
     next_query_ns = 0
     next_hold_ns = 0
+    consecutive_rejections = 0
+    rollout_started_monotonic = None
+    stop_request = {"signal": None}
+    previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+
+    def request_stop(signum, _frame):
+        stop_request["signal"] = int(signum)
+
+    signal.signal(signal.SIGTERM, request_stop)
     try:
         camera = DualRealSenseSnapshotter(
             front_serial=args.front_camera_serial,
@@ -497,7 +525,7 @@ def main(argv=None) -> int:
             args.interface_cfg,
             control_freq=args.frequency,
             state_freq=100.0,
-            has_gripper=False,
+            has_gripper=True,
             use_visualizer=False,
             automatic_gripper_reset=False,
         )
@@ -537,7 +565,11 @@ def main(argv=None) -> int:
                 -1.0,
             ]
             warm_timing = robot.control(
-                "OSC_POSE", warm_action, controller_cfg=controller_cfg
+                "OSC_POSE",
+                warm_action,
+                controller_cfg=controller_cfg,
+                control_gripper=False,
+                enforce_control_frequency=False,
             )
             last_target_pose = warm_pose.copy()
             next_hold_ns = time.time_ns() + period_ns
@@ -547,8 +579,32 @@ def main(argv=None) -> int:
                 **warm_timing,
             )
         time.sleep(args.start_delay_s)
+        rollout_started_monotonic = time.monotonic()
         event_log.write("rollout_started")
         while executed_steps < args.max_steps:
+            if stop_request["signal"] is not None:
+                event_log.write(
+                    "signal_stop",
+                    signal=stop_request["signal"],
+                )
+                break
+            if (
+                time.monotonic() - rollout_started_monotonic
+                >= args.max_wall_time_s
+            ):
+                event_log.write(
+                    "watchdog_stop",
+                    reason="max_wall_time",
+                    consecutive_rejections=consecutive_rejections,
+                )
+                break
+            if consecutive_rejections >= args.max_consecutive_rejections:
+                event_log.write(
+                    "watchdog_stop",
+                    reason="consecutive_rejections",
+                    consecutive_rejections=consecutive_rejections,
+                )
+                break
             camera_sample = camera.latest()
             worker.submit(camera_sample)
             prompt_result = worker.latest()
@@ -597,43 +653,38 @@ def main(argv=None) -> int:
                     ) * period_ns
                     robot_latency_ns = int(round(latency.robot_action_ms * 1e6))
                     gripper_latency_ns = int(round(latency.gripper_action_ms * 1e6))
-                    robot_accepted, robot_stale = robot_buffer.update(
+                    stale_guard_ns = int(
+                        round(latency.action_stale_guard_ms * 1e6)
+                    )
+                    common_lead_ns = (
+                        max(robot_latency_ns, gripper_latency_ns)
+                        + stale_guard_ns
+                    )
+                    accepted, stale = action_buffer.update(
                         chunk,
                         target_times,
                         query_id=query_id,
-                        now_ns=inference_end_ns + robot_latency_ns,
+                        admission_cutoff_ns=inference_end_ns + common_lead_ns,
                     )
-                    gripper_accepted, gripper_stale = gripper_buffer.update(
-                        chunk,
-                        target_times,
-                        query_id=query_id,
-                        now_ns=inference_end_ns + gripper_latency_ns,
-                    )
-                    coverage_end = robot_buffer.coverage_end_ns(inference_end_ns)
+                    validated_actions.clear()
+                    coverage_end = action_buffer.coverage_end_ns()
                     minimum_coverage = (
                         inference_end_ns
-                        + robot_latency_ns
-                        + args.min_future_actions * period_ns
-                    )
-                    gripper_coverage_end = gripper_buffer.coverage_end_ns(
-                        inference_end_ns
-                    )
-                    gripper_minimum_coverage = (
-                        inference_end_ns
-                        + gripper_latency_ns
+                        + common_lead_ns
                         + args.min_future_actions * period_ns
                     )
                     scheduled = (
-                        robot_accepted > 0
-                        and gripper_accepted > 0
+                        accepted > 0
                         and coverage_end is not None
                         and coverage_end >= minimum_coverage
-                        and gripper_coverage_end is not None
-                        and gripper_coverage_end >= gripper_minimum_coverage
                     )
                     if not scheduled:
-                        robot_buffer.clear()
-                        gripper_buffer.clear()
+                        action_buffer.clear()
+                        validated_actions.clear()
+                        consecutive_rejections += 1
+                        next_query_ns = 0
+                    else:
+                        consecutive_rejections = 0
                     event_log.write(
                         "policy_query",
                         query_id=query_id,
@@ -643,133 +694,231 @@ def main(argv=None) -> int:
                         inference_latency_ms=(inference_end_ns - inference_start_ns) / 1e6,
                         target_times_ns=target_times,
                         action_chunk=chunk,
-                        robot_actions_accepted=robot_accepted,
-                        robot_stale_prefix=robot_stale,
-                        gripper_actions_accepted=gripper_accepted,
-                        gripper_stale_prefix=gripper_stale,
+                        actions_accepted=accepted,
+                        common_stale_prefix=stale,
+                        common_admission_lead_ms=common_lead_ns / 1e6,
                         scheduled=scheduled,
                         robot_state=observation["robot_state"],
                         skill=observation.get("skill"),
                     )
                     query_id += 1
-                    next_query_ns = now_ns + args.query_interval_steps * period_ns
+                    next_query_ns = (
+                        now_ns + args.query_interval_steps * period_ns
+                        if scheduled
+                        else 0
+                    )
                 except Exception as exc:
-                    robot_buffer.clear()
-                    gripper_buffer.clear()
+                    action_buffer.clear()
+                    validated_actions.clear()
+                    consecutive_rejections += 1
+                    next_query_ns = 0
                     event_log.write(
                         "observation_or_query_rejected",
                         error=f"{type(exc).__name__}: {exc}",
                     )
                 last_prompt_token = prompt_token
 
-            robot_latency_ns = int(round(latency.robot_action_ms * 1e6))
-            scheduled_robot = robot_buffer.pop_due(
-                time.time_ns(), tolerance_ns=robot_latency_ns
-            )
-            if scheduled_robot is not None:
-                command_deadline_ns = (
-                    scheduled_robot.target_time_ns - robot_latency_ns
-                )
-                command_start_ns = time.time_ns()
-                if (
-                    command_start_ns - command_deadline_ns
-                    > args.max_action_lateness_ms * 1e6
-                ):
-                    robot_buffer.clear()
-                    gripper_buffer.clear()
-                    event_log.write(
-                        "stale_robot_action_discarded",
-                        target_time_ns=scheduled_robot.target_time_ns,
-                        command_deadline_ns=command_deadline_ns,
-                        lateness_ms=(command_start_ns - command_deadline_ns) / 1e6,
+            scheduled_action = action_buffer.next()
+            if scheduled_action is not None:
+                target_time_ns = scheduled_action.target_time_ns
+                validated = validated_actions.get(target_time_ns)
+                if validated is None:
+                    reference = (
+                        last_target_pose
+                        if last_target_pose is not None
+                        else np.asarray(robot.last_eef_pose, dtype=np.float64)
                     )
-                    continue
-                reference = (
-                    last_target_pose
-                    if last_target_pose is not None
-                    else np.asarray(robot.last_eef_pose, dtype=np.float64)
-                )
-                try:
-                    validated = validate_absolute_action(
-                        scheduled_robot.action,
-                        reference_pose=reference,
-                        period_s=period_s,
-                        limits=limits,
-                    )
-                    target_pose = np.eye(4)
-                    target_pose[:3, :3] = validated.rotation_matrix
-                    target_pose[:3, 3] = validated.position
-                    send_ns = time.time_ns()
-                    if args.execute:
-                        command_result = robot.control(
-                            controller_type="OSC_POSE",
-                            action=validated.deoxys_action(),
-                            controller_cfg=controller_cfg,
+                    try:
+                        validated = validate_absolute_action(
+                            scheduled_action.action,
+                            reference_pose=reference,
+                            period_s=period_s,
+                            limits=limits,
                         )
-                        send_ns = command_result["robot_command_wall_time_ns"]
-                    last_target_pose = target_pose
-                    next_hold_ns = scheduled_robot.target_time_ns + period_ns
-                    executed_steps += 1
-                    event_log.write(
-                        "robot_action",
-                        target_time_ns=scheduled_robot.target_time_ns,
-                        send_wall_time_ns=send_ns,
-                        send_residual_ms=(send_ns - scheduled_robot.target_time_ns) / 1e6,
-                        query_id=scheduled_robot.query_id,
-                        chunk_index=scheduled_robot.chunk_index,
-                        policy_action=scheduled_robot.action,
-                        deoxys_action=validated.deoxys_action(),
-                        executed=args.execute,
-                    )
-                except Exception as exc:
-                    robot_buffer.clear()
-                    gripper_buffer.clear()
-                    event_log.write(
-                        "action_rejected",
-                        target_time_ns=scheduled_robot.target_time_ns,
-                        error=f"{type(exc).__name__}: {exc}",
-                    )
+                        validated_actions[target_time_ns] = validated
+                    except Exception as exc:
+                        action_buffer.clear()
+                        validated_actions.clear()
+                        consecutive_rejections += 1
+                        next_query_ns = 0
+                        event_log.write(
+                            "action_rejected",
+                            target_time_ns=target_time_ns,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+                        scheduled_action = None
 
-            gripper_latency_ns = int(round(latency.gripper_action_ms * 1e6))
-            scheduled_gripper = gripper_buffer.pop_due(
-                time.time_ns(), tolerance_ns=gripper_latency_ns
-            )
-            if scheduled_gripper is not None:
-                command_deadline_ns = (
-                    scheduled_gripper.target_time_ns - gripper_latency_ns
+            if scheduled_action is not None:
+                robot_latency_ns = int(round(latency.robot_action_ms * 1e6))
+                gripper_latency_ns = int(round(latency.gripper_action_ms * 1e6))
+                channels = sorted(
+                    (
+                        ("robot", robot_latency_ns),
+                        ("gripper", gripper_latency_ns),
+                    ),
+                    key=lambda item: scheduled_action.target_time_ns - item[1],
                 )
-                command_start_ns = time.time_ns()
-                if (
-                    command_start_ns - command_deadline_ns
-                    > args.max_action_lateness_ms * 1e6
-                ):
-                    gripper_buffer.clear()
-                    event_log.write(
-                        "stale_gripper_action_discarded",
-                        target_time_ns=scheduled_gripper.target_time_ns,
-                        command_deadline_ns=command_deadline_ns,
-                        lateness_ms=(command_start_ns - command_deadline_ns) / 1e6,
+                dispatch_failed = False
+                for channel, channel_latency_ns in channels:
+                    if (
+                        channel == "robot"
+                        and scheduled_action.robot_dispatched
+                    ) or (
+                        channel == "gripper"
+                        and scheduled_action.gripper_dispatched
+                    ):
+                        continue
+                    command_deadline_ns = (
+                        scheduled_action.target_time_ns - channel_latency_ns
                     )
-                    continue
-                sign = float(np.sign(scheduled_gripper.action[-1]) or -1.0)
-                changed = last_gripper_sign is None or sign != last_gripper_sign
-                send_ns = time.time_ns()
-                if changed and args.execute:
-                    robot.gripper_control(sign)
-                    send_ns = robot.last_gripper_command_wall_time_ns
-                if changed:
-                    last_gripper_sign = sign
-                event_log.write(
-                    "gripper_action",
-                    target_time_ns=scheduled_gripper.target_time_ns,
-                    send_wall_time_ns=send_ns,
-                    send_residual_ms=(send_ns - scheduled_gripper.target_time_ns) / 1e6,
-                    gripper_sign=sign,
-                    sign_changed=changed,
-                    executed=bool(args.execute and changed),
-                )
+                    command_start_ns = time.time_ns()
+                    if command_start_ns < command_deadline_ns:
+                        continue
+                    lateness_ns = command_start_ns - command_deadline_ns
+                    expired = (
+                        command_start_ns >= scheduled_action.target_time_ns
+                        or lateness_ns > args.max_action_lateness_ms * 1e6
+                    )
+                    if expired:
+                        partial = bool(
+                            scheduled_action.robot_dispatched
+                            or scheduled_action.gripper_dispatched
+                        )
+                        action_buffer.clear()
+                        validated_actions.clear()
+                        consecutive_rejections += 1
+                        next_query_ns = 0
+                        event_log.write(
+                            "stale_coordinated_action_discarded",
+                            channel=channel,
+                            partial_dispatch=partial,
+                            target_time_ns=scheduled_action.target_time_ns,
+                            command_deadline_ns=command_deadline_ns,
+                            lateness_ms=lateness_ns / 1e6,
+                        )
+                        dispatch_failed = True
+                        break
+                    try:
+                        if channel == "robot":
+                            target_pose = np.eye(4)
+                            target_pose[:3, :3] = validated.rotation_matrix
+                            target_pose[:3, 3] = validated.position
+                            send_ns = command_start_ns
+                            if args.execute:
+                                command_result = robot.control(
+                                    controller_type="OSC_POSE",
+                                    action=validated.deoxys_action(),
+                                    controller_cfg=controller_cfg,
+                                    control_gripper=False,
+                                    enforce_control_frequency=False,
+                                )
+                                send_ns = command_result[
+                                    "robot_command_wall_time_ns"
+                                ]
+                            last_target_pose = target_pose
+                            action_buffer.mark_dispatched(
+                                scheduled_action.target_time_ns, "robot"
+                            )
+                            event_log.write(
+                                "robot_action",
+                                target_time_ns=scheduled_action.target_time_ns,
+                                command_deadline_ns=command_deadline_ns,
+                                send_wall_time_ns=send_ns,
+                                deadline_residual_ms=(
+                                    send_ns - command_deadline_ns
+                                )
+                                / 1e6,
+                                target_residual_ms=(
+                                    send_ns - scheduled_action.target_time_ns
+                                )
+                                / 1e6,
+                                query_id=scheduled_action.query_id,
+                                chunk_index=scheduled_action.chunk_index,
+                                policy_action=scheduled_action.action,
+                                deoxys_action=validated.deoxys_action(),
+                                executed=args.execute,
+                            )
+                        else:
+                            sign = float(
+                                np.sign(scheduled_action.action[-1]) or -1.0
+                            )
+                            changed = (
+                                last_gripper_sign is None
+                                or sign != last_gripper_sign
+                            )
+                            send_ns = command_start_ns
+                            if changed and args.execute:
+                                robot.gripper_control(sign)
+                                send_ns = (
+                                    robot.last_gripper_command_wall_time_ns
+                                )
+                            if changed:
+                                last_gripper_sign = sign
+                            action_buffer.mark_dispatched(
+                                scheduled_action.target_time_ns, "gripper"
+                            )
+                            event_log.write(
+                                "gripper_action",
+                                target_time_ns=scheduled_action.target_time_ns,
+                                command_deadline_ns=command_deadline_ns,
+                                send_wall_time_ns=send_ns,
+                                deadline_residual_ms=(
+                                    send_ns - command_deadline_ns
+                                )
+                                / 1e6,
+                                target_residual_ms=(
+                                    send_ns - scheduled_action.target_time_ns
+                                )
+                                / 1e6,
+                                gripper_sign=sign,
+                                sign_changed=changed,
+                                executed=bool(args.execute and changed),
+                            )
+                    except Exception as exc:
+                        partial = bool(
+                            scheduled_action.robot_dispatched
+                            or scheduled_action.gripper_dispatched
+                        )
+                        action_buffer.clear()
+                        validated_actions.clear()
+                        consecutive_rejections += 1
+                        next_query_ns = 0
+                        event_log.write(
+                            "action_dispatch_failed",
+                            channel=channel,
+                            partial_dispatch=partial,
+                            target_time_ns=scheduled_action.target_time_ns,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+                        dispatch_failed = True
+                        break
 
-            if args.execute and last_target_pose is not None and time.time_ns() >= next_hold_ns:
+                if not dispatch_failed:
+                    refreshed = action_buffer.next()
+                    if (
+                        refreshed is not None
+                        and refreshed.target_time_ns
+                        == scheduled_action.target_time_ns
+                        and refreshed.complete
+                    ):
+                        action_buffer.remove(refreshed.target_time_ns)
+                        validated_actions.pop(refreshed.target_time_ns, None)
+                        executed_steps += 1
+                        consecutive_rejections = 0
+                        next_hold_ns = refreshed.target_time_ns + period_ns
+                        event_log.write(
+                            "coordinated_action_complete",
+                            target_time_ns=refreshed.target_time_ns,
+                            query_id=refreshed.query_id,
+                            chunk_index=refreshed.chunk_index,
+                        )
+
+            if (
+                args.execute
+                and last_target_pose is not None
+                and len(action_buffer) == 0
+                and time.time_ns() >= next_hold_ns
+            ):
                 hold = np.concatenate(
                     [
                         last_target_pose[:3, 3],
@@ -777,13 +926,20 @@ def main(argv=None) -> int:
                         [last_gripper_sign if last_gripper_sign is not None else -1.0],
                     ]
                 )
-                robot.control("OSC_POSE", hold, controller_cfg=controller_cfg)
+                robot.control(
+                    "OSC_POSE",
+                    hold,
+                    controller_cfg=controller_cfg,
+                    control_gripper=False,
+                    enforce_control_frequency=False,
+                )
                 next_hold_ns = time.time_ns() + period_ns
                 event_log.write("controller_hold", target_pose=last_target_pose)
             time.sleep(0.002)
     except KeyboardInterrupt:
         event_log.write("keyboard_interrupt")
     finally:
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
         event_log.write("rollout_stopped", executed_steps=executed_steps)
         if robot is not None:
             try:
@@ -798,6 +954,8 @@ def main(argv=None) -> int:
                         termination,
                         controller_cfg=controller_cfg,
                         termination=True,
+                        control_gripper=False,
+                        enforce_control_frequency=False,
                     )
             finally:
                 robot.close()

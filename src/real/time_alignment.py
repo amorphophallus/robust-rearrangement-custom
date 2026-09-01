@@ -179,7 +179,7 @@ def interpolate_quaternion_xyzw(
 
 @dataclass(frozen=True)
 class LatencyProfile:
-    """Measured delays used to timestamp observations and send commands early."""
+    """Delays used to timestamp observations and send commands early."""
 
     front_observation_ms: float
     wrist_observation_ms: float
@@ -189,9 +189,13 @@ class LatencyProfile:
     gripper_action_ms: float
     measured_at: str
     schema_version: int = 1
+    latency_source: str = "measured"
+    basis: str = "legacy v1 measured profile"
+    action_stale_guard_ms: float = 10.0
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> "LatencyProfile":
+        schema_version = int(value.get("schema_version", 1))
         profile = cls(
             front_observation_ms=float(value["front_observation_ms"]),
             wrist_observation_ms=float(value["wrist_observation_ms"]),
@@ -200,7 +204,12 @@ class LatencyProfile:
             robot_action_ms=float(value["robot_action_ms"]),
             gripper_action_ms=float(value["gripper_action_ms"]),
             measured_at=str(value["measured_at"]),
-            schema_version=int(value.get("schema_version", 1)),
+            schema_version=schema_version,
+            latency_source=str(
+                value.get("latency_source", "measured")
+            ),
+            basis=str(value.get("basis", "legacy v1 measured profile")),
+            action_stale_guard_ms=float(value.get("action_stale_guard_ms", 10.0)),
         )
         profile.validate()
         return profile
@@ -213,7 +222,7 @@ class LatencyProfile:
         return cls.from_mapping(value)
 
     def validate(self) -> None:
-        if self.schema_version != 1:
+        if self.schema_version not in {1, 2}:
             raise ValueError(f"unsupported latency profile schema {self.schema_version}")
         for name in (
             "front_observation_ms",
@@ -222,12 +231,21 @@ class LatencyProfile:
             "gripper_observation_ms",
             "robot_action_ms",
             "gripper_action_ms",
+            "action_stale_guard_ms",
         ):
             latency = getattr(self, name)
             if not np.isfinite(latency) or latency < 0:
                 raise ValueError(f"{name} must be finite and non-negative")
         if not self.measured_at.strip():
             raise ValueError("latency profile must record measured_at")
+        if self.latency_source not in {"estimated", "measured"}:
+            raise ValueError("latency_source must be 'estimated' or 'measured'")
+        if not self.basis.strip():
+            raise ValueError("latency profile must record its basis")
+
+    @property
+    def common_action_lead_ms(self) -> float:
+        return max(self.robot_action_ms, self.gripper_action_ms) + self.action_stale_guard_ms
 
 
 @dataclass(frozen=True)
@@ -308,6 +326,89 @@ class TimestampedActionBuffer:
 
     def coverage_end_ns(self, now_ns: int) -> Optional[int]:
         self.prune(now_ns)
+        return max(self._slots) if self._slots else None
+
+    def clear(self) -> None:
+        self._slots.clear()
+
+    def __len__(self) -> int:
+        return len(self._slots)
+
+
+@dataclass
+class CoordinatedScheduledAction:
+    """One policy action shared by arm and gripper dispatch channels."""
+
+    target_time_ns: int
+    action: np.ndarray
+    query_id: int
+    chunk_index: int
+    robot_dispatched: bool = False
+    gripper_dispatched: bool = False
+
+    @property
+    def complete(self) -> bool:
+        return self.robot_dispatched and self.gripper_dispatched
+
+
+class CoordinatedActionBuffer:
+    """One UMI target-time queue with common arm/gripper admission semantics."""
+
+    def __init__(self, period_ns: int):
+        if period_ns <= 0:
+            raise ValueError("period_ns must be positive")
+        self.period_ns = int(period_ns)
+        self._slots: Dict[int, CoordinatedScheduledAction] = {}
+
+    def update(
+        self,
+        actions: Sequence[Sequence[float]],
+        target_times_ns: Sequence[int],
+        *,
+        query_id: int,
+        admission_cutoff_ns: int,
+    ) -> Tuple[int, int]:
+        action_array = np.asarray(actions)
+        times = np.asarray(target_times_ns, dtype=np.int64).reshape(-1)
+        if action_array.shape[0] != times.size:
+            raise ValueError("actions and target_times_ns must have equal length")
+        if times.size and np.any(np.diff(times) <= 0):
+            raise ValueError("target_times_ns must increase strictly")
+        stale = int(
+            np.searchsorted(times, int(admission_cutoff_ns), side="right")
+        )
+        if stale < times.size:
+            overwrite_from = int(times[stale]) - self.period_ns // 2
+            for old_time in [time for time in self._slots if time >= overwrite_from]:
+                del self._slots[old_time]
+        for chunk_index in range(stale, times.size):
+            target = int(times[chunk_index])
+            self._slots[target] = CoordinatedScheduledAction(
+                target_time_ns=target,
+                action=np.asarray(action_array[chunk_index]).copy(),
+                query_id=int(query_id),
+                chunk_index=chunk_index,
+            )
+        return times.size - stale, stale
+
+    def next(self) -> Optional[CoordinatedScheduledAction]:
+        if not self._slots:
+            return None
+        return self._slots[min(self._slots)]
+
+    def mark_dispatched(self, target_time_ns: int, channel: str) -> None:
+        scheduled = self._slots[int(target_time_ns)]
+        if channel == "robot":
+            scheduled.robot_dispatched = True
+        elif channel == "gripper":
+            scheduled.gripper_dispatched = True
+        else:
+            raise ValueError(f"unsupported action channel {channel!r}")
+
+    def remove(self, target_time_ns: int) -> CoordinatedScheduledAction:
+        return self._slots.pop(int(target_time_ns))
+
+    def coverage_end_ns(self) -> Optional[int]:
         return max(self._slots) if self._slots else None
 
     def clear(self) -> None:

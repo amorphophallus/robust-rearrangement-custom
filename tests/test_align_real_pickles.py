@@ -100,6 +100,52 @@ class AlignRealPicklesTest(unittest.TestCase):
         self.assertEqual(report["action_time_source"], "action_timestamps_ns")
         self.assertEqual(report["steps"][0]["action_time_ns"], 10_000_000)
 
+    def test_v5_prefers_target_time_and_interpolates_timestamped_state(self):
+        observations = [_observation(index, index) for index in range(3)]
+        for index, observation in enumerate(observations):
+            timestamp_ns = index * 100_000_000
+            pose = np.eye(4, dtype=np.float64)
+            pose[0, 3] = float(index)
+            observation["robot_state_receive_wall_time_ns"] = timestamp_ns
+            observation["gripper_state_receive_wall_time_ns"] = timestamp_ns
+            observation["robot_state"]["ee_pose"] = pose
+            observation["robot_state"]["wrist_pose"] = pose
+            observation["robot_state"]["ee_pos"] = pose[:3, 3]
+            observation["robot_state"]["ee_quat"] = [0.0, 0.0, 0.0, 1.0]
+            observation["robot_state"]["gripper_width"] = 0.08 - index * 0.02
+        trajectory = {
+            "observations": observations,
+            "actions": [_action(), _action()],
+            "actions_absolute": [_action(), _action()],
+            "action_timestamps_ns": [0, 100_000_000],
+            "action_target_timestamps_ns": [100_000_000, 200_000_000],
+            "action_type": "delta",
+            "metadata": {
+                "schema": "deoxys_furniturebench_raw_v5_target_time",
+                "robot_observation_latency_ms": 0,
+                "gripper_observation_latency_ms": 0,
+            },
+        }
+
+        outputs, report = align_trajectory(
+            trajectory,
+            max_camera_residual_ms=10,
+            max_camera_pair_skew_ms=10,
+            min_segment_steps=1,
+            rerun_annotations=False,
+        )
+
+        self.assertEqual(
+            report["action_time_source"], "action_target_timestamps_ns"
+        )
+        self.assertEqual(report["retained_actions"], 2)
+        self.assertEqual(outputs[0]["action_target_timestamps_ns"], [100_000_000, 200_000_000])
+        self.assertIsNone(outputs[0]["observations"][0]["state_source_index"])
+        np.testing.assert_allclose(
+            outputs[0]["observations"][1]["robot_state"]["wrist_pose"][:3, 3],
+            [2.0, 0.0, 0.0],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

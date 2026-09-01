@@ -1,0 +1,13 @@
+{
+  "schema_version": 2,
+  "measured_at": "2026-09-01T00:00:00+08:00",
+  "latency_source": "estimated",
+  "basis": "Initial Deoxys/UMI command_latency=0.01s estimate; replace after calibration",
+  "action_stale_guard_ms": 10.0,
+  "front_observation_ms": 0.0,
+  "wrist_observation_ms": 0.0,
+  "robot_observation_ms": 0.0,
+  "gripper_observation_ms": 0.0,
+  "robot_action_ms": 10.0,
+  "gripper_action_ms": 10.0
+}
