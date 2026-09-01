@@ -1948,6 +1948,7 @@ def calculate_success_rate(
                         eepose_frame=ROBOT_BASE,
                         eepose_original_frame=SIM_LOCAL,
                         policy_eepose_frame=eepose_frame,
+                        guidance_frame=ROBOT_BASE,
                     )
                     saved_rollouts_count += 1
 

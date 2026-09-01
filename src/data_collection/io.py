@@ -306,6 +306,11 @@ def save_raw_rollout(
         for record in (vlm_point_error_records or [])
     }
     sim_local_to_base = legacy_sim_local_to_robot_base_matrix(robot_states[0])
+    if guidance_frame not in {ROBOT_BASE, SIM_LOCAL}:
+        raise ValueError(
+            f"Unsupported guidance_frame {guidance_frame!r}; expected "
+            f"{ROBOT_BASE!r} or {SIM_LOCAL!r}."
+        )
 
     rows = zip(
         robot_states,
@@ -351,16 +356,21 @@ def save_raw_rollout(
         parts_pose = flattened_poses_to_robot_base(
             parts_pose, sim_local_to_base
         )
-        guidance_point = point_to_robot_base(
-            guidance_point, sim_local_to_base
-        )
-        guidance_point_clean = point_to_robot_base(
-            guidance_point_clean, sim_local_to_base
-        )
-        guidance_pose = pose_to_robot_base(guidance_pose, sim_local_to_base)
-        guidance_pose_clean = pose_to_robot_base(
-            guidance_pose_clean, sim_local_to_base
-        )
+        # The maintained scripted annotator has emitted robot-base guidance
+        # since guidance schema v2.  Only legacy sim-local inputs need the
+        # frame conversion here; converting canonical inputs a second time
+        # breaks the saved same-frame 3-D/2-D projection contract.
+        if guidance_frame == SIM_LOCAL:
+            guidance_point = point_to_robot_base(
+                guidance_point, sim_local_to_base
+            )
+            guidance_point_clean = point_to_robot_base(
+                guidance_point_clean, sim_local_to_base
+            )
+            guidance_pose = pose_to_robot_base(guidance_pose, sim_local_to_base)
+            guidance_pose_clean = pose_to_robot_base(
+                guidance_pose_clean, sim_local_to_base
+            )
         robot_state = robot_state_with_base_frame_aliases(robot_state)
         observation = {
             "robot_state": robot_state,

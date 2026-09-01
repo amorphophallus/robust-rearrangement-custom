@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 
 from src.common.pickle_compat import load_pickle_file, load_pickle_path
+from src.common.eepose import SIM_LOCAL
 from src.data_collection.pickle_migration import (
     canonicalize_furniturebench_trajectory,
 )
@@ -282,6 +283,7 @@ class RawPickleValidatorTest(unittest.TestCase):
                 action_type="delta",
                 rollout_save_dir=Path(tmpdir),
                 output_only_pickle=True,
+                guidance_frame=SIM_LOCAL,
             )
             output_path = next((Path(tmpdir) / "success").glob("*.pkl"))
             written = load_pickle_path(output_path)
@@ -305,6 +307,78 @@ class RawPickleValidatorTest(unittest.TestCase):
             written["observations"][0]["guidance_point"],
             [0.5, 0.0, 0.085],
             atol=1.0e-6,
+        )
+
+    def test_furniturebench_writer_does_not_reconvert_robot_base_guidance(self):
+        observations = 3
+        robot_states = []
+        for _ in range(observations):
+            state = _state()
+            state["ee_pos_sim"] = state["ee_pos"] + np.array(
+                [-0.3, 0.0, 0.415], dtype=np.float32
+            )
+            robot_states.append(state)
+        colors = np.zeros((observations, 240, 320, 3), dtype=np.uint8)
+        depths = -np.ones((observations, 240, 320), dtype=np.float32)
+        part_pose = np.array(
+            [0.2, 0.0, 0.1, 0.0, 0.0, 0.0, 1.0], dtype=np.float32
+        )
+        camera_to_world = np.eye(4, dtype=np.float32)
+        camera_to_world[:3, 3] = [0.9, 0.0, 0.65]
+        calibration = {
+            "image_size": np.array([320, 240], dtype=np.int32),
+            "intrinsics": np.array(
+                [[307.6, 0, 160], [0, 308.0, 120], [0, 0, 1]],
+                dtype=np.float32,
+            ),
+            "camera_to_sim_local": camera_to_world,
+            "sim_local_to_camera": np.linalg.inv(camera_to_world).astype(np.float32),
+        }
+        guidance = np.array([1.2, 0.0, 1.235], dtype=np.float32)
+        point_2d = {"color_image2": np.array([160.0, 120.0], dtype=np.float32)}
+        actions = np.array(
+            [
+                [0.01, 0, 0, 0, 0, 0, 1, -1],
+                [0, 0.01, 0, 0, 0, 0, 1, 1],
+            ],
+            dtype=np.float32,
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            save_raw_rollout(
+                robot_states=np.asarray(robot_states, dtype=object),
+                imgs1=colors,
+                imgs2=colors,
+                depth_image1=depths,
+                depth_image2=depths,
+                skills=["pick"] * observations,
+                guidance_points=[guidance] * observations,
+                guidance_points_clean=[guidance] * observations,
+                guidance_poses=None,
+                guidance_poses_clean=None,
+                guidance_gripper_widths=None,
+                guidance_points_2d=[point_2d] * observations,
+                grasp_annotations_2d=None,
+                camera_infos=[{"color_image2": calibration}] * observations,
+                actions=actions,
+                rewards=np.array([0.0, 1.0], dtype=np.float32),
+                parts_poses=np.repeat(part_pose[None], observations, axis=0),
+                success=True,
+                task="one_leg",
+                action_type="delta",
+                rollout_save_dir=Path(tmpdir),
+                output_only_pickle=True,
+            )
+            output_path = next((Path(tmpdir) / "success").glob("*.pkl"))
+            written = load_pickle_path(output_path)
+
+        summary = validate_pickle_trajectory(written)
+        self.assertEqual(summary["observations_checked"], observations)
+        np.testing.assert_array_equal(
+            written["observations"][0]["guidance_point"], guidance
+        )
+        np.testing.assert_array_equal(
+            written["observations"][0]["guidance_point_clean"], guidance
         )
 
 
