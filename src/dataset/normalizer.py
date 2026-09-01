@@ -3,8 +3,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from ipdb import set_trace as bp
-
 
 class LinearNormalizer(nn.Module):
     def __init__(self):

@@ -958,8 +958,19 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
             image1: torch.Tensor = batch["color_image1"]
             image2: torch.Tensor = batch["color_image2"]
 
-            # Images now have the channels first
-            assert image1.shape[-3:] == (3, 240, 320)
+            # Images now have the channels first. Both legacy 240x320 and the
+            # canonical cross-simulator 224x224 storage contract are valid.
+            image_shapes = {
+                "color_image1": tuple(image1.shape[-3:]),
+                "color_image2": tuple(image2.shape[-3:]),
+            }
+            if image1.shape[-3] != 3 or image2.shape[-3] != 3:
+                raise ValueError(f"RGB images must have three channels: {image_shapes}")
+            if min(*image1.shape[-2:], *image2.shape[-2:]) < 224:
+                raise ValueError(
+                    "RGB images must be at least 224x224 before model transforms: "
+                    f"{image_shapes}"
+                )
 
             # Reshape the images to (B * obs_horizon, C, H, W) for the encoder
             image1 = image1.reshape(B * self.obs_horizon, *image1.shape[-3:])
@@ -1025,8 +1036,29 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
             # assert 1 == 0
 
             # Images now have the channels first
-            assert image1.shape[-3:] == (3, 240, 320)
-            assert depth1.shape[-3:] == (1, 240, 320)
+            image_shapes = {
+                "color_image1": tuple(image1.shape[-3:]),
+                "color_image2": tuple(image2.shape[-3:]),
+                "depth_image1": tuple(depth1.shape[-3:]),
+                "depth_image2": tuple(depth2.shape[-3:]),
+            }
+            if image1.shape[-3] != 3 or image2.shape[-3] != 3:
+                raise ValueError(f"RGB images must have three channels: {image_shapes}")
+            if depth1.shape[-3] != 1 or depth2.shape[-3] != 1:
+                raise ValueError(f"Depth images must have one channel: {image_shapes}")
+            if (
+                image1.shape[-2:] != depth1.shape[-2:]
+                or image2.shape[-2:] != depth2.shape[-2:]
+            ):
+                raise ValueError(
+                    "RGB and depth spatial shapes must match per camera: "
+                    f"{image_shapes}"
+                )
+            if min(*image1.shape[-2:], *image2.shape[-2:]) < 224:
+                raise ValueError(
+                    "RGB-D images must be at least 224x224 before model transforms: "
+                    f"{image_shapes}"
+                )
             # print(f'image1.shape: {image1.shape}', flush=True)
             # print(f'image2.shape: {image2.shape}', flush=True)
             # print(f'depth1.shape: {depth1.shape}', flush=True)

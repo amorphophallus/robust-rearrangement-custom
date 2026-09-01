@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from src.dataset.base import EpisodeRef
+from src.dataset.dataloader import build_dataloader
 from src.dataset.source_sampling import (
     SourceWeightedSampler,
     allocate_rank_source_quotas,
@@ -99,6 +100,30 @@ class SourceWeightedSamplerTest(unittest.TestCase):
         epoch_one = list(sampler)
         self.assertNotEqual(epoch_zero_a, epoch_one)
         self.assertEqual(self._counts(epoch_one), self._counts(epoch_zero_a))
+
+    def test_fixed_step_dataloader_preserves_exact_single_gpu_quota(self):
+        sampler = SourceWeightedSampler(
+            self.dataset,
+            self.weights,
+            samples_per_rank=100,
+            seed=321,
+        )
+        loader = build_dataloader(
+            dataset=self.dataset,
+            batch_size=10,
+            num_workers=0,
+            shuffle=False,
+            pin_memory=False,
+            drop_last=False,
+            sampler=sampler,
+            steps_per_epoch=10,
+        )
+        indices = torch.cat(list(loader)).tolist()
+        self.assertEqual(len(indices), 100)
+        self.assertEqual(
+            self._counts(indices),
+            Counter({"FB": 50, "AutoMate": 35, "ManiSkill": 15}),
+        )
 
     def test_rank_quota_allocator_respects_source_availability(self):
         quotas = allocate_rank_source_quotas(

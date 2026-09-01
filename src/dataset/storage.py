@@ -3,10 +3,26 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 import numpy as np
-import zarr
 
 from src.dataset import lmdb as lmdb_backend
-from src.dataset import zarr as zarr_backend
+
+try:
+    import zarr
+    from src.dataset import zarr as zarr_backend
+except ModuleNotFoundError as error:
+    zarr = None
+    zarr_backend = None
+    _ZARR_IMPORT_ERROR = error
+else:
+    _ZARR_IMPORT_ERROR = None
+
+
+def _require_zarr_backend():
+    if zarr is None or zarr_backend is None:
+        raise ModuleNotFoundError(
+            "Zarr datasets require the optional zarr and numcodecs packages."
+        ) from _ZARR_IMPORT_ERROR
+    return zarr_backend
 
 
 def detect_dataset_format(path: Union[str, Path]) -> str:
@@ -39,7 +55,7 @@ def dataset_tuple(path: Path):
 def combine_datasets(dataset_paths, keys, max_episodes=None, max_ep_cnt=None):
     dataset_format = ensure_homogeneous_dataset_format(dataset_paths)
     if dataset_format == "zarr":
-        return zarr_backend.combine_zarr_datasets(
+        return _require_zarr_backend().combine_zarr_datasets(
             dataset_paths,
             keys,
             max_episodes=max_episodes,
@@ -63,7 +79,7 @@ def combine_episode_subset(
 ):
     dataset_format = ensure_homogeneous_dataset_format(dataset_paths)
     if dataset_format == "zarr":
-        return zarr_backend.combine_zarr_episode_subset(
+        return _require_zarr_backend().combine_zarr_episode_subset(
             dataset_paths,
             episode_refs,
             keys,
@@ -84,7 +100,7 @@ def combine_episode_subset(
 def build_episode_manifest(dataset_paths, max_episodes=None, max_ep_cnt=None):
     dataset_format = ensure_homogeneous_dataset_format(dataset_paths)
     if dataset_format == "zarr":
-        return zarr_backend.build_episode_manifest(
+        return _require_zarr_backend().build_episode_manifest(
             dataset_paths,
             max_episodes=max_episodes,
             max_ep_cnt=max_ep_cnt,
@@ -97,11 +113,39 @@ def build_episode_manifest(dataset_paths, max_episodes=None, max_ep_cnt=None):
 
 
 def split_episode_manifest(manifest, test_split: float, seed: int):
-    return zarr_backend.split_episode_manifest(manifest, test_split, seed)
+    if not 0.0 <= test_split <= 1.0:
+        raise ValueError(f"test_split must be in [0, 1], got {test_split}.")
+    if len(manifest) == 0:
+        return [], []
+
+    rng = np.random.default_rng(int(seed))
+    indices = rng.permutation(len(manifest))
+    train_episode_count = int(len(manifest) * (1 - test_split))
+    train_indices = indices[:train_episode_count]
+    val_indices = indices[train_episode_count:]
+    return (
+        [manifest[idx] for idx in train_indices],
+        [manifest[idx] for idx in val_indices],
+    )
 
 
 def balance_episode_manifest_by_frames(manifest, world_size: int):
-    return zarr_backend.balance_episode_manifest_by_frames(manifest, world_size)
+    if world_size <= 0:
+        raise ValueError(f"world_size must be positive, got {world_size}.")
+
+    shards = [[] for _ in range(world_size)]
+    shard_loads = [0 for _ in range(world_size)]
+    ordered_manifest = sorted(
+        manifest,
+        key=lambda ref: (-ref.frame_count, ref.path_idx, ref.episode_idx),
+    )
+    for ref in ordered_manifest:
+        shard_idx = min(
+            range(world_size), key=lambda idx: (shard_loads[idx], idx)
+        )
+        shards[shard_idx].append(ref)
+        shard_loads[shard_idx] += ref.frame_count
+    return shards
 
 
 def compute_global_minmax_stats(
@@ -115,7 +159,7 @@ def compute_global_minmax_stats(
 ):
     dataset_format = ensure_homogeneous_dataset_format(dataset_paths)
     if dataset_format == "zarr":
-        return zarr_backend.compute_global_minmax_stats(
+        return _require_zarr_backend().compute_global_minmax_stats(
             dataset_paths,
             episode_refs,
             stats_key_map,
@@ -160,6 +204,7 @@ def compute_global_depth_stats(
 def read_dataset_attrs(path: Union[str, Path]) -> dict:
     dataset_format = detect_dataset_format(path)
     if dataset_format == "zarr":
+        _require_zarr_backend()
         return zarr.open(path, mode="r").attrs.asdict()
     return lmdb_backend.read_lmdb_attrs(path)
 
@@ -221,6 +266,7 @@ class ZarrImageStore:
     def _ensure_dataset(self):
         current_pid = os.getpid()
         if self._dataset is None or self._pid != current_pid:
+            _require_zarr_backend()
             self._dataset = zarr.open(self.path, mode="r")
             self._pid = current_pid
         return self._dataset
@@ -262,5 +308,6 @@ def build_lazy_image_stores(dataset_paths):
 
     dataset_format = ensure_homogeneous_dataset_format(dataset_paths)
     if dataset_format == "zarr":
+        _require_zarr_backend()
         return [ZarrImageStore(path) for path in dataset_paths]
     return [lmdb_backend.LMDBImageStore(path) for path in dataset_paths]

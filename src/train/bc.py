@@ -18,7 +18,7 @@ from diffusers.optimization import get_scheduler
 from gymnasium import Env
 from ipdb import set_trace as bp
 from omegaconf import DictConfig, OmegaConf
-from torch.utils.data import random_split
+from torch.utils.data import Subset, random_split
 from tqdm import tqdm, trange
 
 from src.behavior import get_actor
@@ -39,7 +39,12 @@ from src.common.pytorch_util import dict_to_device
 from src.common.skills import SKILL_ORDER
 from src.dataset.dataloader import AsyncDevicePrefetchLoader, build_dataloader
 from src.dataset.dataset import ImageDataset, StateDataset, RGBDDataset
-from src.dataset.source_sampling import validate_env_sampling_mode
+from src.dataset.source_sampling import (
+    SourceWeightedSampler,
+    dataset_sample_envs,
+    normalize_env_sampling_weights,
+    stratified_split_indices,
+)
 from src.dataset.storage import (
     build_episode_manifest,
     compute_global_depth_stats,
@@ -568,9 +573,6 @@ def main(cfg: DictConfig):
     set_dryrun_params(cfg)
     OmegaConf.resolve(cfg)
     configure_observation_annotation_flags(cfg)
-    validate_env_sampling_mode(
-        cfg.data.get("env_sampling_weights", None), ddp_shard_enabled=False
-    )
     job_start_perf = perf_counter()
 
     # Set the random seed
@@ -687,11 +689,38 @@ def main(cfg: DictConfig):
 
     validate_guidance_point_dataset(cfg, dataset)
 
+    raw_env_sampling_weights = cfg.data.get("env_sampling_weights", None)
+    if raw_env_sampling_weights is not None and cfg.data.get(
+        "minority_class_power", False
+    ):
+        raise ValueError(
+            "data.env_sampling_weights and data.minority_class_power cannot be "
+            "enabled together; both alter the training sample distribution."
+        )
+    env_sampling_weights = normalize_env_sampling_weights(
+        raw_env_sampling_weights,
+        dataset_sample_envs(dataset),
+    )
+
     # Split the dataset into train and test (effective, meaning that this is after upsampling).
     train_size = int(len(dataset) * (1 - cfg.data.test_split))
     test_size = len(dataset) - train_size
     print(f"Splitting dataset into {train_size} train and {test_size} test samples.")
-    train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+    if env_sampling_weights is None:
+        train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+    else:
+        train_indices, test_indices = stratified_split_indices(
+            dataset_sample_envs(dataset),
+            cfg.data.test_split,
+            cfg.seed,
+            positive_sources={
+                source
+                for source, weight in env_sampling_weights.items()
+                if weight > 0
+            },
+        )
+        train_dataset = Subset(dataset, train_indices)
+        test_dataset = Subset(dataset, test_indices)
 
     depth_normalizer_stats = None
     if cfg.observation_type == "rgbd":
@@ -754,16 +783,32 @@ def main(cfg: DictConfig):
             else checkpoint_payload
         )
 
-    # Create dataloaders
+    # Create dataloaders. SourceWeightedSampler draws with replacement when a
+    # configured source quota is larger than that source's split, so the exact
+    # requested mixture is preserved independently of raw dataset size.
+    train_sampler = None
+    if env_sampling_weights is not None:
+        train_samples_per_epoch = (
+            len(train_dataset)
+            if cfg.training.steps_per_epoch == -1
+            else cfg.training.steps_per_epoch * cfg.training.batch_size
+        )
+        train_sampler = SourceWeightedSampler(
+            train_dataset,
+            env_sampling_weights,
+            train_samples_per_epoch,
+            seed=cfg.seed,
+        )
     trainloader = build_dataloader(
         dataset=train_dataset,
         batch_size=cfg.training.batch_size,
         num_workers=cfg.data.dataloader_workers,
-        shuffle=True,
+        shuffle=train_sampler is None,
         pin_memory=True,
         drop_last=False,
         persistent_workers=cfg.data.get("persistent_workers", False),
         prefetch_factor=cfg.data.get("prefetch_factor", None),
+        sampler=train_sampler,
         steps_per_epoch=cfg.training.steps_per_epoch,
     )
 
@@ -772,15 +817,29 @@ def main(cfg: DictConfig):
         if cfg.training.steps_per_epoch != -1
         else -1
     )
+    test_sampler = None
+    if env_sampling_weights is not None:
+        test_samples_per_epoch = (
+            len(test_dataset)
+            if test_steps_per_epoch == -1
+            else test_steps_per_epoch * cfg.training.batch_size
+        )
+        test_sampler = SourceWeightedSampler(
+            test_dataset,
+            env_sampling_weights,
+            test_samples_per_epoch,
+            seed=cfg.seed + 1_000_000,
+        )
     testloader = build_dataloader(
         dataset=test_dataset,
         batch_size=cfg.training.batch_size,
         num_workers=cfg.data.dataloader_workers,
-        shuffle=True,
+        shuffle=test_sampler is None,
         pin_memory=True,
         drop_last=False,
         persistent_workers=cfg.data.get("persistent_workers", False),
         prefetch_factor=cfg.data.get("prefetch_factor", None),
+        sampler=test_sampler,
         steps_per_epoch=test_steps_per_epoch,
     )
 
@@ -975,6 +1034,8 @@ def main(cfg: DictConfig):
         torch.save(build_save_dict(), str(path))
 
     for epoch_idx in tglobal:
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch_idx)
         epoch_start_perf = perf_counter()
         epoch_loss = list()
         test_loss = list()

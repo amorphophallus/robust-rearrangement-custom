@@ -40,7 +40,8 @@ data:
   minority_class_power: false
   # Optional exact per-epoch sampling weights keyed by the pickle top-level
   # `env` value, e.g. {FurnitureBench: 0.5, AutoMate: 0.35, ManiSkill: 0.15}.
-  # Supported only by multi-rank bc_ddp.py with ddp_shard_enabled=true.
+  # Supported by single-GPU bc.py and by multi-rank bc_ddp.py when
+  # ddp_shard_enabled=true. It cannot be combined with minority_class_power.
   # Every selected episode must have a non-empty env value in dataset metadata.
   # The new LMDB converter writes it; Zarr inputs must already provide it.
   env_sampling_weights: null

@@ -35,11 +35,30 @@ class FrontCameraTransform(nn.Module):
             else:
                 x = self.rgb_augment(x)
             
-            # 几何变换：对整体进行裁剪
-            x = F.center_crop(x, (self.input_size[0], self.input_size[1] - 2 * self.margin))
-            # 注意：RandomCrop.get_params 对 Batch 里的所有图生成同一组坐标，保证同步
-            i, j, h, w = transforms.RandomCrop.get_params(x, output_size=self.crop_size)
-            x = F.crop(x, i, j, h, w)
+            # A canonical cross-simulator frame is already 224x224. Applying
+            # the legacy 240x280 pre-crop would pad it before random cropping,
+            # introducing artificial black borders.
+            if tuple(x.shape[-2:]) != self.crop_size:
+                if x.shape[-2] < self.crop_size[0] or x.shape[-1] < self.crop_size[1]:
+                    raise ValueError(
+                        "Front camera input is too small for a 224x224 crop: "
+                        f"{tuple(x.shape[-2:])}"
+                    )
+                if (
+                    x.shape[-2] >= self.input_size[0]
+                    and x.shape[-1] >= self.input_size[1] - 2 * self.margin
+                ):
+                    # Preserve the historical augmentation for 240x320 inputs.
+                    x = F.center_crop(
+                        x,
+                        (self.input_size[0], self.input_size[1] - 2 * self.margin),
+                    )
+                # RandomCrop.get_params uses one crop for the whole batch, so
+                # RGB and depth stay geometrically synchronized.
+                i, j, h, w = transforms.RandomCrop.get_params(
+                    x, output_size=self.crop_size
+                )
+                x = F.crop(x, i, j, h, w)
         else:
             x = F.center_crop(x, self.crop_size)
         return x
