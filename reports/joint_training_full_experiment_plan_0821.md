@@ -1,6 +1,6 @@
 # 联合训练完整实验规划 0821
 
-状态：数据配额已由用户于 2026-08-23 通过；2026-08-31 用户将本 campaign 及后续 rollout 的 annotation source 固定为 `scripted/geometry GT`，不使用 VLM，后续 launch 不再逐次确认。FurnitureBench 三任务已确认通过。ManiSkill 11 个 task 均已有成功轨迹与 strict 2D 验证；最新四个 MP 难项各选择 10 条新成功轨迹，最终 40/40 审计通过，随后修复版 Peg/Plug 又各用 10 条全新 strict success 完成生产吞吐复测。**这里的 10 条只代表当前 task 检查门槛；正式数据集仍为 ManiSkill 100 条/task、合计 1,100 条。** AutoMate 已对训练 final success 最低的 20 个模型做 fresh 抽查：19 个 hardest-init 可产成功数据；`00755` hardest-init 不能成功，已由用户明确从正式任务集合中排除，AutoMate 正式任务数固定为 99。
+状态：数据配额已由用户于 2026-08-23 通过；2026-08-31 用户将本 campaign 及后续 rollout 的 annotation source 固定为 `scripted/geometry GT`，不使用 VLM，后续 launch 不再逐次确认。FurnitureBench 三任务已确认通过。ManiSkill 11 个 task 均已有成功轨迹与 strict 2D 验证；最新四个 MP 难项各选择 10 条新成功轨迹，最终 40/40 审计通过，随后修复版 Peg/Plug 又各用 10 条全新 strict success 完成生产吞吐复测。**这里的 10 条只代表当前 task 检查门槛；正式数据集仍为 ManiSkill 100 条/task、合计 1,100 条。** AutoMate 已对训练 final success 最低的 20 个模型做 fresh 抽查：19 个 hardest-init 可产成功数据；`00755` hardest-init 不能成功，已由用户明确从正式任务集合中排除，AutoMate 正式任务数固定为 99。2026-09-01 用户将 AutoMate 正式配额下调为 **50 条/task**，并要求以 attempted rollouts/hour 为并行速度指标；本文已加入 1/2/4/8/16/32 env 实测、资源调度、NAS/LMDB/PPU96 容量与 ETA。**当前仍是规划阶段，未获用户再次批准前不创建 production 目录、不造数据、不转换 LMDB、不上传。**
 
 新 Codex session 不应从历史日志反推生产参数；唯一执行交接为 `reports/joint_training_data_collection_handoff.md`。本文保留任务证据、资源规划和历史诊断，若执行配置与交接文档冲突，以交接文档为准。
 
@@ -8,18 +8,20 @@
 
 ### 1.1 总量与口径
 
-本轮只生成新数据，不复用或补标旧 pickle。排除 AutoMate `00755` 后，用户已确认物理数据集为 **113 个 task、11,600 条成功轨迹、约 62.5 万个训练 transition**：
+本轮只生成新数据，不复用或补标旧 pickle。排除 AutoMate `00755` 后，物理数据集更新为 **113 个 task、6,650 条成功轨迹、约 526,386 个训练 transition**：
 
 | Environment | Task 数 | 每 task 成功轨迹 | 成功轨迹合计 | 预计 transition | 数量来源 |
 |---|---:|---:|---:|---:|---|
 | FurnitureBench | 3 | 200 | 600 | 约 328,000 | 历史正式 campaign 就是 200/task；600 条曾产生 328,386 transitions |
 | ManiSkill | 11 | 100 | 1,100 | 约 99,000 | 100/task 已由用户确认；step 按当前成功 pilot 或 task horizon 外推 |
-| AutoMate | 99 | 100 | 9,900 | 约 198,000 | 明确排除 `00755`；collector 默认 `--num-successes=100`；step 按 `00211` GPU pilot 向上取整为 20/trajectory |
-| 合计 | 113 | — | **11,600** | **约 625,000** | transition 指落盘 action step，不是 PhysX substep |
+| AutoMate | 99 | **50** | **4,950** | 约 99,000 | 明确排除 `00755`；按 20 transitions/trajectory 规划 |
+| 合计 | 113 | — | **6,650** | **约 526,386** | transition 指落盘 action step，不是 PhysX substep |
 
 物理条数和训练时的 source sampling 是两件事。历史讨论中的主训练权重为 `FurnitureBench / AutoMate / ManiSkill = 50% / 35% / 15%`；精确来源是 `/home/hy/.codex/sessions/2026/08/21/rollout-2026-08-21T11-55-44-01a02275-dcb7-7191-83f8-48bfc936542f.jsonl` ordinal 10。该比例已有 sampler/DDP smoke，但仍是工程配置，不是已证明最优的比例。
 
-规划容量为：canonical raw 约 **445 GB**，一个 224×224 RGB-D point-conditioned LMDB 约 **534 GB**；manifest、失败样本隔离区、转换临时空间和余量合计按 **1.2 TB** 预留。旧数据只作为步数、大小和吞吐参考，不进入本轮 manifest。
+randomness 合同按仿真器原生语义记录：FurnitureBench=`low`；ManiSkill 保留每个 task 的 native randomized reset，并写 `randomness_semantics=task_native`；AutoMate=`hardest_init`、deterministic specialist policy、no SBC，变化只来自不重复的 reset seed。manifest 必须记录 process seed、env index、global attempt index 和初始状态 hash，不能把 ManiSkill/AutoMate 都伪装成 FurnitureBench 的 `low/med/high`。
+
+物理配额下降不改变训练时的 source sampler 权重。容量改按区间管理：canonical raw 约 **350–450 GiB**，三个 zstd level-1 LMDB 合计约 **145–230 GiB**；加上 `.building.lmdb`、本地 staging、manifest、reject 和安全余量，NAS campaign 仍预留 **1.2 TiB**。旧数据只作为步数、大小和吞吐参考，不进入本轮 manifest。
 
 ### 1.2 FurnitureBench：3 个 task
 
@@ -150,7 +152,7 @@ tmux new-session -d -s rr_joint0821_maniskill_problem_videos_gpu2 \
 
 ### 1.4 AutoMate：99 个 assembly task（排除 `00755`）
 
-每个保留 ID 的生产目标相同：**100 条新成功轨迹、暂按 2,000 transitions/task 规划**。原始 100 个 ID 都有两个 checkpoint 文件、抓取参数和 `disassemble_traj.json`；排除 `00755` 后，正式 99-task 子集的这些输入也是 99/99 完整。按训练 TensorBoard 的 `successes/iter ≥ 0.8` 门槛，正式子集中有 69 个 final-ready，18 个训练末尾回落，12 个从未达阈值。这里的“回落/低成功率”来源是各 task `summaries/events.out.tfevents.*` 中的训练标量，不是本轮重新 rollout 的实测成功率。训练时 `if_sbc=true`，而标准 play/采集关闭 SBC、直接使用最难初始分布，因此两者不能直接等同。
+每个保留 ID 的生产目标相同：**50 条新成功轨迹、暂按 1,000 transitions/task 规划**。原始 100 个 ID 都有两个 checkpoint 文件、抓取参数和 `disassemble_traj.json`；排除 `00755` 后，正式 99-task 子集的这些输入也是 99/99 完整。按训练 TensorBoard 的 `successes/iter ≥ 0.8` 门槛，正式子集中有 69 个 final-ready，18 个训练末尾回落，12 个从未达阈值。这里的“回落/低成功率”来源是各 task `summaries/events.out.tfevents.*` 中的训练标量，不是本轮重新 rollout 的实测成功率。训练时 `if_sbc=true`，而正式采集固定关闭 SBC、使用 hardest-init 和 deterministic specialist policy；训练标量只用于估算获得 50 条成功轨迹所需的 attempts，不作为并行速度指标。
 
 低指标 20 task 的历史 checkpoint 已进一步逐一检查：训练根及 NAS 镜像中每个 task 只保留 `Assembly.pth` 和 `last_Assembly_ep_100_*.pth`；两者都记录 epoch 100，且 20/20 的模型 tensor 完全一致（最大绝对差为 0）。`Assembly.pth` 是 rl_games 按 rolling mean reward 覆盖的 best 文件，不是按 `successes/iter` 峰值保存；因此即使 TensorBoard 显示更早 epoch 的 success 更高，也没有对应权重可直接换用。本轮按用户决定保留这些模型，接受较低采集产率，以真实 hardest-distribution rollout 决定 attempts/成功率。
 
@@ -158,9 +160,9 @@ tmux new-session -d -s rr_joint0821_maniskill_problem_videos_gpu2 \
 
 | 类别 | ID（已覆盖正式 99 task） | 每 ID 目标/step | 成功与 GPU/2D 结论 |
 |---|---|---|---|
-| final-ready，69 个 | `00004 00007 00014 00015 00021 00028 00030 00042 00074 00077 00078 00083 00103 00133 00138 00143 00163 00175 00186 00187 00190 00211 00213 00255 00256 00293 00296 00308 00319 00320 00329 00340 00345 00346 00417 00422 00426 00437 00470 00471 00480 00499 00514 00553 00559 00581 00597 00615 00649 00652 00659 00681 00686 00700 00726 00731 00768 00783 00831 00860 01036 01041 01053 01079 01092 01102 01125 01129 01136` | 100 / 约 2,000 | `00211` 四卡各 1/1 仅为 pipeline smoke；69 个 task 均需足量 task pilot |
-| 曾达标但 final 回落，18 个 | `00016 00032 00062 00141 00210 00318 00360 00444 00446 00486 00506 00537 00614 00638 00648 01026 01029 01132` | 100 / 约 2,000 | NAS 未保留 success 峰值 epoch；先用现存 `Assembly.pth` 实测，只有无法产出时才进入续训/补 checkpoint 分支 |
-| 从未达阈值，12 个 | `00081 00110 00117 00192 00271 00301 00388 00410 00703 00741 00855 00863` | 100 / 约 2,000 | 不再以 0.8 阈值阻塞；先用保留的 `Assembly.pth` 实测采集，低产率按真实 attempts 进入 ETA |
+| final-ready，69 个 | `00004 00007 00014 00015 00021 00028 00030 00042 00074 00077 00078 00083 00103 00133 00138 00143 00163 00175 00186 00187 00190 00211 00213 00255 00256 00293 00296 00308 00319 00320 00329 00340 00345 00346 00417 00422 00426 00437 00470 00471 00480 00499 00514 00553 00559 00581 00597 00615 00649 00652 00659 00681 00686 00700 00726 00731 00768 00783 00831 00860 01036 01041 01053 01079 01092 01102 01125 01129 01136` | 50 / 约 1,000 | `00211` 四卡各 1/1 仅为 pipeline smoke；69 个 task 均需进入正式 attempt manifest |
+| 曾达标但 final 回落，18 个 | `00016 00032 00062 00141 00210 00318 00360 00444 00446 00486 00506 00537 00614 00638 00648 01026 01029 01132` | 50 / 约 1,000 | NAS 未保留 success 峰值 epoch；先用现存 `Assembly.pth` 实测，只有无法产出时才进入续训/补 checkpoint 分支 |
+| 从未达阈值，12 个 | `00081 00110 00117 00192 00271 00301 00388 00410 00703 00741 00855 00863` | 50 / 约 1,000 | 不再以 0.8 阈值阻塞；低产率只通过 `ceil(50/p_i)` 增加 attempt 预算 |
 
 AutoMate 的 annotation 对正式 99 个 task 使用同一个几何合同：skill=`insert`，3D target 为 fixed asset insertion tip，2D 为保存标定下的同帧 front 投影。NAS 中正式子集 99/99 的 checkpoint、抓取参数和 disassembly JSON 完整，但通用 AutoMate USD/OBJ 原先依赖官方 Omniverse S3，236 无法直连；本轮由 r218 从同一官方 URL 下载低指标 review 20 task 的 200 个资产文件，并合入隔离的本地 Isaac 5.1 bundle。整个 bundle 共 227 个文件、约 97 MiB，runner 在接管 GPU 前执行 SHA-256 全量校验，不修改既有 `00211` 最小包。
 
@@ -168,7 +170,24 @@ AutoMate 的共享 front camera 调试流程已固化为 `scripts/data_collectio
 
 历史低指标 20 个视频位于 `logs/joint-training-full-0821/videos/automate_low_success_review_20260831_v1/mp4/`，固定三栏为 wrist raw｜front raw｜pickle→video 阶段离线绘制的 front GT point。保留的 19 个 hardest-init fresh pickle 均为 `annotation_source=scripted`、`image_annotation_mode=none`、success=true，所有 observation 的 front point 在 224×224 内，内容哈希唯一；MP4 19/19 可解码。`00755.mp4` 的 2 帧 SBC diagnostic 和完整 75-transition hardest failure 只保留为排除依据，均不得进入正式 manifest。
 
-本轮 236 runner 固化为 `logs/joint-training-full-0821/tools/run_automate_review_chain_then_reserve_236.sh`。CLI 显式区分 `POLICY_MODE=deterministic|stochastic` 与 `INIT_MODE=hardest|sbc`；正式数据只允许 `hardest`。collector 在独立进程组中运行，收到 `EXIT/HUP/INT/TERM` 时先终止精确 collector 进程组，再确认 full reservation ready 后释放 2 GiB handoff，避免 Isaac 子进程延迟退出造成显存占用随后跌落。
+#### 多 env attempted-rollout 吞吐与生产选择
+
+速度基准固定统计 **attempted rollouts/hour**；成功率不参与“是否加速”的判断，只在后续用 `attempts_i=ceil(50/p_i)` 把每 task 的 50 条成功配额换算成 attempt 数。长 horizon 任务 `00110` 的 attempted rollout 通常跑满 75 steps；collection wall time 包含 reset、policy/render、record、episode finalization，以及碰巧保存成功轨迹时的同步 xz 写入，不含 Isaac app 启动和进程退出。
+
+| envs/GPU | Attempts | Collection wall time | Attempted rollouts/hour | 去掉首 batch 后 | 峰值显存 | 相对 1 env |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 8 | 172.722 s | 166.7 | — | 约 10.2 GiB | 1.00× |
+| 2 | 8 | 94.505 s | 304.7 | — | 约 10.3 GiB | 1.83× |
+| 4 | 32 | 214.243 s | 537.7 | 543.8/h | 10,442 MiB | 3.22× |
+| 8 | 32 | 152.783 s | 754.0 | 765.7/h | 10,856 MiB | 4.52× |
+| 16 | 32 | 115.989 s | **993.2** | **1009.5/h** | 11,646 MiB | **5.96×** |
+| 32 | 64 | 219.439 s | 1049.9 | 1150.8/h | 13,656 MiB | 6.30× |
+
+easy task `00211` 的固定 16-attempt 对照也得到 1/2/4/8 env 分别 472.5/632.1/902.3/1057.8 attempts/hour。64/64 保存文件通过独立 RR strict audit，payload hash 64/64 唯一；每个 env 设置内部 initial-state hash 16/16 唯一；3D→2D 误差为 0，camera geometry 未混入 env origin。由此生产默认值定为 **每张 4090 一个 Isaac 进程、每进程 16 env**。32 env 相对 16 env 的总增益仅 5.7%，只用于预计至少需要约 256 attempts 的长任务；不要在同一张 4090 上起多个 Isaac 进程。
+
+当前多 env collector 是 diagnostic process-local override，**不能直接进入生产**。正式开跑前必须在 IsaacLab 的维护入口实现 `--num-envs`、regex parent cameras、per-env recorder、精确 50-save cap、bounded background validation/xz writer，并保持 `num_envs=1` 向后兼容；随后重跑 schema/provenance/camera/重复性 gate。同步 batch 多出的 success 只能记为 `excluded`，正式 selected 必须恰好 50。
+
+本轮 236 runner 固化为 `logs/joint-training-full-0821/tools/run_automate_review_chain_then_reserve_236.sh`。CLI 显式区分 `POLICY_MODE=deterministic|stochastic` 与 `INIT_MODE=hardest|sbc`；正式数据固定 `deterministic + hardest`。collector 在独立进程组中运行，收到 `EXIT/HUP/INT/TERM` 时先终止精确 collector 进程组，再确认 full reservation ready 后释放 2 GiB handoff，避免 Isaac 子进程延迟退出造成显存占用随后跌落。
 
 ## 2. 生产前最小验证与需用户讨论的问题
 
@@ -176,9 +195,9 @@ AutoMate 的共享 front camera 调试流程已固化为 `scripts/data_collectio
 
 1. 每个 task 先生成至少 1 条本轮新 success；失败 task 记录 attempts、wall time 和明确错误后停止。FurnitureBench 使用 `gpu-snatcher/auto_data_preparation.sh` 的标准 4-env batch，因此首批实际得到 4/4/3 条。
 2. 每条都验证 `annotation_source=scripted`、active frame 有有限且在 224×224 内的 2D point，并由同帧 GT 3D point/相机标定重投影一致。
-3. 日志证明使用 GPU physics/render，没有 CPU fallback；保存 transitions、字节数和 successes/hour。
+3. 日志证明使用 GPU physics/render，没有 CPU fallback；保存 attempted rollouts、attempted rollouts/hour、transitions、字节数和 selected/excluded 数。成功率只用于配额所需 attempt 数，不作为并行速度指标。
 4. 每个 environment 选样本生成三栏视频（wrist raw｜front raw｜annotation util front point）供用户目检。FurnitureBench v2 与 ManiSkill 11/11 task 已确认；AutoMate 历史低指标 20 模型完成抽查，19 个保留 task 有 hardest success，`00755` 失败并排除。该抽查完成了用户要求的验证范围，但不等价于正式 99 个 ID 逐 task fresh rollout。
-5. 当前检查阶段每 task 最多选择 10 条新 strict success，用它更新逐任务 step、成功率、文件大小和 ETA；正式 quota 仍为 100/task。历史已完成的 20/task pilot 只作为既有证据，不要求剩余 task 再扩到 20，也不用旧 smoke 替代新结论。
+5. ManiSkill 当前检查阶段每 task 最多选择 10 条新 strict success，正式 quota 仍为 100/task；AutoMate 正式 quota 已改为 50/task，其并行 gate 使用固定 attempted-rollout 数，不能为了测速度先造一批未批准的 production 数据。历史 pilot 只作为既有证据，不进入新 manifest。
 
 LiftPegUpright 的相机项已经关闭：原始 40° 相机能完整覆盖修复后的 GT target；旧 1/20 是 FSM reset 状态泄漏，随后发现的横向跳点/随夹爪漂移则来自 target 每帧重算。两者均已在 annotation 实现中修复，不需要用户继续手调相机。最新 pickle 的 pick 帧 0–4 中，3D point 固定为 `[0.76677674, 0.06642199, 0.02500001]`，front 2D 固定为 `[156.04062, 196.89694]`；用户目检中“pick 没有点”来自标准 annotation util 的 2 px、50% alpha 标记与蓝色 peg 对比不足，而不是点缺失。另生成白色外环加红色十字的 review-only 视频用于目检，既不修改 raw pickle，也不改变正式 pickle→LMDB 标注定义。
 
@@ -194,40 +213,93 @@ LiftPegUpright 的相机项已经关闭：原始 40° 相机能完整覆盖修�
 
 | 节点 | GPU | 当前状态 | 环境/用途 |
 |---|---|---|---|
-| r218 | RTX 3060 12 GB ×1 | 可做本地 GUI、solver 诊断和 FurnitureBench；本轮 OBB 诊断已用现有环境验证 | FurnitureBench 使用现有 `/home/hy/anaconda3/envs/rr`；ManiSkill 使用现有 `/home/hy/anaconda3/envs/rr-maniskill` |
-| 236 | RTX 4090 24 GB ×4（GPU0–3） | 四卡当前均由本任务 full reservation 持有，各约 18.3 GB | AutoMate/ManiSkill 使用 NAS Conda；FurnitureBench 使用现有 NAS `rr` |
-| NAS | `/mnt/nas/share` | 104 TB 总量、约 2.9 TB 可用、98% 已用；r218 durable flush 当前异常 | 容量够单份 raw + LMDB，但正式开跑前既要锁定 1.2 TB，也要恢复 I/O 健康 |
+| r218 | RTX 3060 12 GB ×1 | FurnitureBench 4 env、`low` randomness；也承担本地检查 | 使用既有 `/home/hy/anaconda3/envs/rr`，本地 NVMe `/tmp` 约 202 GiB 可用 |
+| 236 | RTX 4090 24 GB ×4（GPU0–3） | AutoMate 每卡一个 16-env Isaac 进程；释放的卡再跑 ManiSkill | AutoMate/ManiSkill 使用既有 NAS Conda；本地 SSD 仅约 68 GiB 可用 |
+| NAS | `/mnt/nas/datasets_tmp` | 236 实测为 `10.71.106.245:/volume2/datasets_tmp` NFSv4.1，约 19 TiB 可用 | 作为 canonical raw、LMDB、manifest 和日志存储；预留 1.2 TiB |
 
-建议 campaign 根为 `/mnt/nas/share/home/hy/rr_joint_training_0821/`，下分 `raw/{furniturebench,maniskill,automate}`、`processed/lmdb-shards`、`manifests` 和 `logs`。正式创建路径和开跑前记录精确命令；`annotation_source=scripted` 已固定，不再询问。
+用户批准后才创建 campaign 根：
+
+```text
+/mnt/nas/datasets_tmp/rr_joint_training_0821_scripted_prod_<launch-date>_v1/
+  raw/{furniturebench,maniskill,automate}/
+  processed/lmdb/{furniturebench,maniskill,automate}/
+  manifests/
+  logs/
+  staging/
+```
+
+当前 r218 的 `/mnt/nas/datasets_tmp` **不是 NAS mount**，`findmnt -T` 会落到本机根文件系统；恢复正确挂载前禁止从 r218 往该路径写 production 数据。若不能及时恢复，则 r218 只在本地 NVMe 做有界 staging，经验证后直接传到 236 可见的 volume2 路径。
 
 GPU0–3 是共享资源。collector 暂停、退出或 task 切换时，必须先恢复占卡脚本并确认显存，或用一个串行 runner 无空窗衔接下一 task；不得让卡在两个进程之间空出来。只停止精确 tmux session/run ID，不按用户名杀进程。
 
 ### 3.2 NAS 瓶颈和落盘方式
 
-r218 与 236 访问同一 NAS，但挂载不同：r218 是 NFSv4.1（`10.71.106.246`），236 是 NFSv3（`10.71.106.245`）。2026-08-22 在 r218 做 512 MiB 单文件 durable-write 探针时，payload 已提交 536,870,912 bytes，但 `fdatasync` 超过 400 秒仍处于 NFS `D` 状态，当前等效 durable throughput 低于约 **1.3 MB/s**；测试已发 TERM，待内核 I/O 返回后精确清理。这说明当前路径发生了 stall，不应把该单点当稳定带宽。历史 62–102 MB/s 是 r218→服务器本地 SSD 的 rsync，不代表 NAS。
+此前卡住的是 volume1 `/mnt/nas/share` 的 durable flush，不能直接外推到本次 volume2 `/mnt/nas/datasets_tmp`。正式启动 gate 是从 r218（挂载恢复后）和 236 分别对 **精确 volume2 路径**做 disposable write→`fdatasync`→read→SHA-256 探针，并记录 durable MiB/s；探针不通过就不启动生产。
 
-因此不能把 NAS 当作“无限快的本地盘”直接由四个 collector 无界写入。生产采用：
+生产落盘使用有界流水线：
 
-- 每个 collector 先写本机 10–20 GB 有界 staging，atomic validate 后由单独 uploader 顺序写 NAS。
-- 236 只有约 83 GB 本地余量，四卡同时运行时每卡 staging 上限约 10 GB；r218 根 NVMe 约 262 GB 可用，但也不能积压完整 352 GB FurnitureBench。
-- uploader backlog 接近上限时暂停 collector；暂停前先启动占卡器。NAS 恢复后从 manifest 断点继续。
-- LMDB 按 20–40 GB shard 构建并逐片上传，不在 NAS 上原地进行高并发随机写；训练前再复制所需 shard 到训练节点本地 SSD/NVMe。
-
-下面 ETA 暂按 NAS 恢复后能够维持 **3–20 MB/s durable aggregate** 估算：445 GB raw 单独落 NAS 约 **6–41 小时**；再写 534 GB LMDB 约 **7–49 小时**。两者不能都假定被 GPU 计算完全掩盖。若当前 stall 持续，则该 ETA 失效、正式采集不启动。20/task pilot 必须同时记录 `collector wall time`、`staging bytes`、`NAS durable completion time`，再替换该区间。
+- 每个 collector 写本地 fresh staging，完成 strict audit 后由独立 uploader 传 NAS；不在 NAS 上做四路无界随机写。
+- 236 四卡 aggregate staging 上限约 **16–20 GiB**，uploader backlog 接近上限时暂停对应 lane，并先恢复精确 GPU reservation。
+- r218 优先使用约 202 GiB 空闲的 NVMe `/tmp`，不用约 179 GiB 空闲的旋转 `/data` 盘构建大 LMDB。
+- 每个 closed shard 记录源文件列表、字节数和 manifest hash；上传后按 `du -sh`、manifest/SHA 对账，再释放 staging。
+- volume2 的实际 durable throughput 记为 `B` MiB/s 后，传输 ETA 用 `bytes/B` 更新；在探针前不沿用旧 volume1 的 3–20 MB/s 区间。
 
 ### 3.3 采集 ETA
 
-| 工作 | 当前可估范围 | 不包含的阻塞 |
+AutoMate 第 `i` 个 task 的计划公式为：
+
+```text
+attempts_i = ceil(50 / p_i)
+total_attempts = sum(attempts_i)
+pure_rollout_hours = total_attempts / sum(active GPU attempted-rollout throughput)
+```
+
+四张 4090 均按 16 env、每卡实测 993.2 attempts/hour 估算。下表是对 4,950 总配额的一次性 aggregate scenario 换算；正式执行仍按 task 分别取 ceiling，因此最终 attempts 可能略高：
+
+| 用于换算配额的 aggregate success rate | 4,950 success 所需 attempts | 纯 4-GPU rollout 时间 |
+|---:|---:|---:|
+| 80% | 6,188 | 1.56 h |
+| 50% | 9,900 | 2.49 h |
+| 30% | 16,500 | 4.15 h |
+| 10% | 49,500 | 12.46 h |
+
+另加约 0.7–1.7 小时同步 strict validation/xz 写入，以及 99 个 task 的 app 启停/NFS tail 约 0.5–2 小时。当前 AutoMate 中心窗口为 **6–9 小时**；若 aggregate attempts 接近 10% 场景，则为 **15–20 小时**。这里始终以 attempted rollouts/hour 报告并行速度；`p_i` 只改变 attempts 总量。
+
+| 工作 | 当前计算窗口 | 说明 |
 |---|---:|---|
-| FurnitureBench 600 success | 6–12 小时 | r218 标准 gate 的纯采集下界约 4.8 小时；历史同规模 campaign 为 9 小时 35 分，NAS flush 仍可能拉长 |
-| AutoMate 9,900 success / 4×4090 | 低指标保留 19 task 的实测说明旧 12–36 小时区间偏乐观；需在全 99 task 小批 gate 后重算 | `00755` 已排除；其余低产率 task 的 attempt 开销仍必须计入 |
-| ManiSkill 相机/annotation 已通过的高产率 task ×100 | 3–8 小时 | PullCubeTool 的 MP solver 偶发失败和 Stack 的剩余失败计入吞吐 |
-| ManiSkill `PegInsertionSide` / `PlugCharger` ×100 | 修复后单卡纯采集约 **0.87 小时 / 3.38 小时** | Peg fresh strict 10/11、314 秒；Plug fresh strict 10/97、1,215 秒。线性外推含 RGB-D render、pickle 压缩与本地 staging 写入，不含 NAS durable upload |
-| raw→LMDB 分片转换 + NAS durable write | 14–90 小时 I/O 下界区间 | NAS 吞吐恢复情况；可与一部分采集重叠 |
+| FurnitureBench 600 success / r218 3060 | 6–12 h | 历史同规模 9 h 35 min；low randomness、4 env |
+| AutoMate 4,950 success / 4×4090 | 6–9 h 中心；15–20 h 低产率情形 | 默认每卡 16 env；最长 predicted work first |
+| ManiSkill 1,100 success | 3–8 h | AutoMate lane 提前结束后移 1–2 张 4090；Peg/Plug 单卡外推 0.87/3.38 h |
+| 全 campaign 纯计算 | **约 8–16 h** | 3060 与四张 4090 重叠；极低 AutoMate 产率另计 |
 
-资源全部可用、NAS durable-write gate 恢复且正文阻塞项解决后，首版完整 113-task 数据的端到端规划窗口为 **2–5 天**。该范围包含采集、strict validation、分片转换和 NAS durable 落盘，但不包含 AutoMate 30 个保留低指标 checkpoint 的重新训练，也不包含重新开发 ManiSkill expert。若这两项要纳入，必须在各自 3/task gate 后另加时间，当前不能诚实地给出总完成日期。
+调度采用 longest-processing-time-first：四个低产率 AutoMate task 先分散到四卡，每个 lane 完成后从剩余队列领取 predicted attempts 最大的 task；AutoMate 长尾收缩后，把 1–2 张卡切给 ManiSkill 难项。每个 lane 使用具名 tmux，记录 host、物理 GPU、Git commit、环境绝对路径、checkpoint hash、seed、env index、global attempt index、selected/excluded 和滚动 ETA。运行中每关闭一个 task 就用实际 attempts/time 更新剩余 ETA；不等整批结束才汇报。
 
-推荐调度是：r218 3060 独立采 FurnitureBench；236 四张 4090 优先串行覆盖 AutoMate task，空出的单卡运行 ManiSkill；NAS uploader 独立运行。这样 FB 与 AutoMate 计算可以并行，NAS 成为主要关键路径。若 r218→NAS 持续出现 durable flush 卡顿，则 FurnitureBench 改为小批写 r218 NVMe、批次验收后再传 NAS。
+### 3.4 三个 LMDB 的构建与大小
+
+最新 RR writer 使用 per-frame lossless zstd：`--frame-compression zstd --frame-compression-level 1`；图像点只在转换时用 `--image-annotation-mode guidance-point` 离线绘制，source pickle 始终保持 `image_annotation_mode=none`。PPU96 runbook 的真实 LMDB 对照中，zstd level 1 节省 58.3%，当前按下列区间预留：
+
+| LMDB | Episodes | Transitions | 预计 zstd 大小 |
+|---|---:|---:|---:|
+| FurnitureBench | 600 | 约 328k | 90–140 GiB |
+| ManiSkill | 1,100 | 约 99k | 28–45 GiB |
+| AutoMate | 4,950 | 约 99k | 28–45 GiB |
+| 合计 | 6,650 | 约 526k | **145–230 GiB** |
+
+默认每个 source 合成一个物理 LMDB。先转换 representative shard，用实际 compressed bytes/frame 替换区间；若 FurnitureBench 预计超过约 120–140 GiB，或本地构建时无法保留 40 GiB 安全余量，则按三个 task 或 30–40 GiB balanced shard 拆分。ManiSkill 和 AutoMate 各保持一个 LMDB，除非实测大小推翻该选择。
+
+每个输出从 fresh `.building.lmdb` 开始，禁止 overwrite；依次验证精确 episode/task/count、source manifest/hash、`scripted`/source mode `none`/output mode `guidance-point`/zstd metadata、全量 stats、action/state/depth/order 等价、loader/training-reader smoke，最后记录 `data.mdb` bytes 和 SHA-256 后再原子改名。
+
+### 3.5 PPU96 容量与交付
+
+正式执行前完整阅读 `reports/claude/ppu96_single_card_4way_zstd_runbook.md`。规划时 RR `main` 为 `bfc2ca8`，已包含该 runbook 及 native zstd writer/reader；上传前在 PPU96 用 clean worktree/clone materialize 审计后的最新 commit，不能覆盖远端 RR 现有 tracked/untracked 修改。
+
+PPU96 `/root` 实测约 **660 GiB 可用**，现有 `/root/rr-local-data` 约 180 GiB、`/root/rr-runs` 约 0.9 GiB。145–230 GiB 最终集放入后预计仍余 **430–515 GiB**，高于 runbook 的 100 GiB 安全线，因此当前**不需要用户先迁走已有数据集**。
+
+每个闭合 LMDB 从实际持有数据的机器直接传到 `/root/rr-local-data/processed/joint_training_0821/<source>.lmdb.incoming/`，使用 resumable `rsync -aP --partial --append-verify`。目标端核对 bytes、`data.mdb` SHA-256、metadata/full validator 和 loader smoke 后原子改名并写 `.transfer-complete`。NAS 是 canonical copy；PPU96 根盘只是训练用快速副本。
+
+### 3.6 开跑审批 gate
+
+本文提交和 push 后暂停。只有用户明确批准本版规划后，才依次实施：维护版 AutoMate multi-env collector→严格回归→volume2 durable I/O probe→创建 production campaign 根→采集与滚动监督→三个 LMDB→PPU96 传输与验收。规划批准本身不授权开始造数或上传。
 
 ## 4. 附录：此前实现细节的验证结论
 
@@ -247,7 +319,7 @@ r218 与 236 访问同一 NAS，但挂载不同：r218 是 NFSv4.1（`10.71.106.
 
 ### C. GPU 与 2D point 已验证的范围
 
-- AutoMate `00211` 在四张物理 4090 上分别 1/1 success，transitions 15/18/13/19，无 CUDA illegal access；4 条均为 scripted 且 strict pass。该结果仅为 pipeline smoke，不能代表 `00211` 或其余 98 个保留 task 逐项通过。
+- AutoMate `00211` 在四张物理 4090 上分别 1/1 success，transitions 15/18/13/19，无 CUDA illegal access；4 条均为 scripted 且 strict pass。后续固定 attempted-rollout benchmark 覆盖 1/2/4/8 env，并以 `00110` 覆盖 1/2/4/8/16/32 env；64 条 `00211` multi-env 输出全量 strict/unique/camera audit 通过。该结果证明 multi-env 方向可行，但 process-local override 仍不能代表维护版 production collector 已通过。
 - ManiSkill 11/11 task 的 SAPIEN RGB-D/schema/action/active-point render 与成功轨迹路径均已跑通。最新四个 MP 难项各选择 10 条，40/40 strict audit 通过；随后 Peg 3 mm 与 Plug 0.5 mm 插入补偿的生产吞吐 gate 分别得到 fresh strict 10/11 和 10/97，均 10/10 文件审计通过。按当前实测纯采集线性外推，Peg/Plug 100 条分别约 0.87/3.38 小时；这仍不包含 NAS durable upload。
 - ManiSkill 2026-08-23 的 132 条、8,042 transitions 全量投影审计通过，但其中 Pick/Poke/PullCubeTool 发生在 reset guard 前，只保留为历史诊断。2026-08-31 reset 修复后 Lift、Pick 均 strict 20/20；Poke 在 task-specific 相机总后退 0.42 m 后新 20/20；PullCubeTool 最终采用相同的 0.42 m，相机定向复核覆盖上一轮全部三个失败 seed，其中两个实际 strict pass、另一个旧成功记录 259/259 重投影可见而本次仅 solver 失败。所有 recorded-vs-geometry projection 分歧均为 0。
 - AutoMate 历史低指标 20 模型中，19 个保留 task 的 hardest-init fresh success 已通过 raw/GT/2D/video 审计；`00755` 的 SBC diagnostic 与 hardest failure 只保留为排除依据。历史 20 个成功/诊断视频位于 `logs/joint-training-full-0821/videos/automate_low_success_review_20260831_v1/mp4/`，完整 `00755` failure 位于 `logs/joint-training-full-0821/videos/automate_00755_full_failure_20260901_v1/mp4/`，两处的 `00755` 文件均不得进入正式数据。ManiSkill 11/11 task 各一条的统一目录为 `logs/joint-training-full-0821/videos/maniskill_all_tasks_20260831_v1/mp4/`；其中 Lift 已由 `lift_guidance_semantics_fix_20260901_v1/mp4/` 的 fresh 修复版取代。
@@ -266,3 +338,5 @@ r218 与 236 访问同一 NAS，但挂载不同：r218 是 NFSv4.1（`10.71.106.
 - ManiSkill 当前 MP 独立审计：`logs/joint-training-full-0821/maniskill_mp_gate_audit_manifest.json`。
 - FurnitureBench 标准 gate runner/audit：`logs/joint-training-full-0821/furniturebench_standard_gate_r218_20260823/runtime/runner.log` 与 `all.audit.jsonl`。
 - FurnitureBench metadata-only v2：`logs/joint-training-full-0821/furniturebench_metadata_v2_gate_r218_20260823/runtime/runner.log`、`all.audit.jsonl` 与 `lmdb_annotation.audit.log`。
+- AutoMate multi-env 独立审计：`logs/automate-parallel-benchmark-20260901/audit.json`；长 horizon 原始 metrics 位于 `hard00110-v1/`、`v2-runs/hard00110_warm_gpu1_v2/` 和 `v2-runs/hard00110_env32_gpu1_v2/`。env4/8/16/32 metrics SHA-256 依次为 `1342c30d8e5ecc5aa2af079962b352d98d525c7407c7ed3bf6fb64e9c74fb352`、`4512eb235befdf0165007d7e8fd421bc1ee97ea4407abe612701698f72cc21c5`、`f371208579c599b1710b0eb6cc68238e5f993b8f66904bdeeff2252f880818bb`、`e20048392d3ae655ae8563128a5ee636f0ba3edda34df7fb605266935ff7e88a`。
+- PPU96 压缩、容量与上传合同：`reports/claude/ppu96_single_card_4way_zstd_runbook.md`。

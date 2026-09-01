@@ -15,10 +15,12 @@
 | 正式点样式 | 统一 annotation util：红色 2 px、50% alpha；高对比 review marker 不得进入训练数据 |
 | 数据复用 | 本轮全部重新采集；旧 pickle、失败样本和 diagnostic 文件不得进入 production manifest |
 | 成功口径 | task success 后仍须通过 schema、source/mode、active 3D/2D、画内和重投影 strict gate |
-| AutoMate 初始化 | `hardest`；禁止 `--enable-sbc`。正式默认使用 stochastic PPO（不传 `--deterministic`） |
+| FurnitureBench randomness | `low`；task/lane 使用互不重叠的 reset seed |
+| ManiSkill randomness | task-native randomized reset；manifest 写 `randomness_semantics=task_native` 和精确 simulator seed |
+| AutoMate rollout | `hardest` + deterministic specialist policy；显式传 `--deterministic`，禁止 `--enable-sbc` |
 | AutoMate 排除项 | `00755` 永久排除；collector 已 fail-closed，不能用于采集、相机、配额或 manifest |
 
-正式物理数据集为 113 个 task、11,600 条 success、约 625,000 transitions：FurnitureBench 3×200=600，ManiSkill 11×100=1,100，AutoMate 99×100=9,900。验证阶段的“最多 10 条/task”不是正式 quota。
+正式物理数据集为 113 个 task、6,650 条 success、约 526,386 transitions：FurnitureBench 3×200=600，ManiSkill 11×100=1,100，AutoMate 99×50=4,950。ManiSkill 验证阶段的“最多 10 条/task”不是正式 quota；AutoMate 的 speed gate 固定 attempted-rollout 数，不以成功率作为并行速度指标。
 
 训练 source sampling 固定起始配置为 FurnitureBench / AutoMate / ManiSkill = 50% / 35% / 15%。这是训练 sampler 权重，不改变物理采集条数。
 
@@ -135,9 +137,9 @@ convention="opengl"
 - checkpoint `/mnt/nas/share2/home/lq/logs/rl_games/Assembly/automate_assembly_<ID>_2x_noise/nn/Assembly.pth`；
 - disassembly `/mnt/nas/share/home/lq/IsaacLab/AutoMate/<ID>/disassemble_traj.json`；
 - `RR_ISAAC_ASSET_ROOT=<verified-local-Isaac-root>`，它必须包含 ground、table、Franka、共享 AutoMate 文件和该 ID 的 10 个官方 USD/OBJ/config 文件；
-- v2 shared camera；`hardest`、stochastic policy、`--skip-dense-reward`、raw `none`。
+- v2 shared camera；`hardest`、deterministic policy、`--skip-dense-reward`、raw `none`。
 
-单 task 精确 collector 模板：
+下面是维护版 multi-env collector 完成并通过 gate 后的单 task 模板；当前 process-local diagnostic override 不得代替它启动生产：
 
 ```bash
 export OMNI_KIT_ACCEPT_EULA=YES
@@ -149,16 +151,18 @@ export RR_ISAAC_ASSET_ROOT=<verified-local-Isaac-root>
   --assembly-id <ID> --annotation-source scripted \
   --disassembly-path /mnt/nas/share/home/lq/IsaacLab/AutoMate/<ID>/disassemble_traj.json \
   --output-dir <fresh-local-staging-root>/<ID> \
-  --num-successes 100 --max-attempts 10000 \
-  --compress --skip-dense-reward --seed <fresh-seed> \
+  --num-envs 16 --num-successes 50 --max-attempts 10000 \
+  --deterministic --compress --skip-dense-reward --seed <fresh-seed> \
   env.camera.gpu_collision_stack_size=134217728
 ```
 
-不传 `--enable-sbc` 或 `--deterministic`。10,000 是低产率 task 的安全 cap，不是成功 quota；高产率 task 达到 100 后立即退出。
+不传 `--enable-sbc`。10,000 是低产率 task 的安全 cap，不是成功 quota；collector 必须精确 selected 50 条后退出，同步 batch 多出的 success 记录为 `excluded`。默认 16 env；只有预计至少需要约 256 attempts 的 task 才改为 32 env。
+
+生产实现必须支持 regex parent cameras、per-env recorder、精确 50-save cap、bounded background validation/xz writer 和 `num_envs=1` 向后兼容。实现后先重跑 multi-env schema、`scripted` provenance、same-frame camera geometry、payload/initial-state uniqueness 和 selected/excluded 审计，未通过前不得开正式 campaign。
 
 ## 5. 共享 4090 与落盘规则
 
-236 GPU0–3 是公共资源。正式 collector 不能裸启动，必须沿用 `logs/joint-training-full-0821/tools/run_automate_review_chain_then_reserve_236.sh` 和 `run_maniskill_mp_chain_then_reserve_236.sh` 已验证的交接协议，并为正式 campaign 改成独立 production root/100-success target：
+236 GPU0–3 是公共资源。正式 collector 不能裸启动，必须沿用 `logs/joint-training-full-0821/tools/run_automate_review_chain_then_reserve_236.sh` 和 `run_maniskill_mp_chain_then_reserve_236.sh` 已验证的交接协议，并为正式 campaign 改成独立 production root/50-success target：
 
 1. 启动 2 GiB handoff 并确认 ready；
 2. 只释放精确旧 reservation tmux/PID；
@@ -167,9 +171,13 @@ export RR_ISAAC_ASSET_ROOT=<verified-local-Isaac-root>
 5. 看到 `reserved_bytes=` 后才释放 handoff；full reservation 失败则保留 handoff；
 6. collector 暂停时必须占卡或无空窗串行下一 task。
 
-不要按用户名或模糊进程名杀进程。每个 run 记录 host、GPU、Git commit、环境路径、checkpoint 路径+SHA、source/schema hash、seed、attempt、success、wall time 和输出 manifest。
+不要按用户名或模糊进程名杀进程。每个 run 记录 host、物理 GPU、Git commit、环境路径、checkpoint 路径+SHA、source/schema hash、process seed、env index、global attempt index、result、selected/excluded、wall time 和输出 manifest；不同 lane 不得复用 base seed。
 
-建议 NAS campaign 根为 `/mnt/nas/share/home/hy/rr_joint_training_0821/`，结构为 `raw/{furniturebench,maniskill,automate}`、`processed/lmdb-shards`、`manifests`、`logs`。collector 先写每卡 10–20 GB 有界本地 staging，strict/atomic validate 后由单 uploader 顺序上传；不要在 NAS 上做高并发随机写。r218 的 NFS durable flush 曾卡住超过 400 秒，正式开跑前必须重新过 512 MiB durable-write gate并记录吞吐。
+AutoMate 每张 4090 只运行一个 Isaac 进程，默认 16 env。长 horizon `00110` 实测 1/2/4/8/16/32 env 为 166.7/304.7/537.7/754.0/993.2/1049.9 attempted rollouts/hour；32 env 比 16 env 总吞吐只高 5.7%，仅用于预计至少约 256 attempts 的任务。四卡任务队列按 predicted attempts 从大到小调度，低产率 task 起始分散到四卡；lane 结束后领取剩余最长 task，避免单卡长尾。
+
+每个 task 用 `attempts_i=ceil(50/p_i)` 估 attempt 数，但运行速度始终报告 attempted rollouts/hour。四卡均按 16 env 时，aggregate `p=0.8/0.5/0.3/0.1` 对应纯 rollout 约 1.56/2.49/4.15/12.46 小时；加入 strict/xz 和 99 次 app 启停后，AutoMate 中心 ETA 为 6–9 小时，极低产率情形 15–20 小时。每关闭一个 task 就根据实际 attempts/time 更新滚动 ETA。
+
+NAS campaign 根固定为 `/mnt/nas/datasets_tmp/rr_joint_training_0821_scripted_prod_<launch-date>_v1/`，结构为 `raw/{furniturebench,maniskill,automate}`、`processed/lmdb/{furniturebench,maniskill,automate}`、`manifests`、`logs`、`staging`。236 上该路径是 volume2 NFSv4.1、约 19 TiB 可用；r218 当前未正确挂载该路径，恢复前禁止直接写。collector 使用 16–20 GiB aggregate 有界本地 staging，strict/atomic validate 后由 uploader 上传；正式开跑前必须从两台实际机器对精确 volume2 路径完成 durable write/read/hash gate。
 
 ## 6. pickle→LMDB
 
@@ -184,7 +192,9 @@ FurnitureBench 使用专用 wrapper：
   --episodes-per-task 200
 ```
 
-ManiSkill/AutoMate 分 shard 使用通用入口；`--task` 必须列出该 shard manifest 中的精确 task，不得用占位或超集：
+该 wrapper 当前调用通用 converter 的 zstd/1 默认值；正式转换前先运行 `--dry-run`，确认展开命令对应最新 RR 默认 `frame_compression=zstd`、level 1。若后续给 wrapper 增加显式 pass-through，再在 launch metadata 中记录完整 flag；不能向当前 wrapper 传它尚不支持的参数。
+
+ManiSkill/AutoMate 使用通用入口；`--task` 必须列出该 source manifest 中的精确 task，不得用占位或超集：
 
 ```bash
 /home/hy/anaconda3/envs/rr/bin/python -m src.data_processing.process_pickles_to_lmdb \
@@ -194,6 +204,7 @@ ManiSkill/AutoMate 分 shard 使用通用入口；`--task` 必须列出该 shard
   --image-size 224 \
   --image-annotation-mode guidance-point \
   --require-source-image-annotation-mode none \
+  --frame-compression zstd --frame-compression-level 1 \
   --input-dir <strict-selected-raw-shard> \
   --output-dir <fresh-lmdb-shard> \
   --provenance-json <source-manifest-summary.json> \
@@ -201,17 +212,24 @@ ManiSkill/AutoMate 分 shard 使用通用入口；`--task` 必须列出该 shard
   --map-size-gb <shard-map-size>
 ```
 
-源 pickle 不原地修改。每个 LMDB shard 记录 source manifest/hash、任务 episode 数、`source_image_annotation_mode=none` 和 `image_annotation_mode=guidance-point`。
+通用 converter 的 `--randomness low` 当前只是 legacy 路径/枚举字段，不得覆盖真实仿真语义；`provenance-json` 必须对 ManiSkill 写 `task_native`、对 AutoMate 写 `hardest_init`，并保存精确 seed/initial-state 清单。若 converter 在正式实现前支持新的 canonical enum，应改用新 enum 并保留向后兼容映射。
+
+源 pickle 不原地修改。默认合成 FurnitureBench、ManiSkill、AutoMate 各一个 LMDB，预计分别 90–140、28–45、28–45 GiB，总计 145–230 GiB。若 representative shard 显示 FurnitureBench 会超过约 120–140 GiB，或本地构建无法保留 40 GiB 安全余量，才按 task 或 30–40 GiB shard 拆分；ManiSkill/AutoMate 默认不拆。
+
+输出必须从 fresh `.building.lmdb` 开始，禁止 overwrite。每个 LMDB 记录 source manifest/hash、精确 task/episode/frame 数、`source_image_annotation_mode=none`、`image_annotation_mode=guidance-point`、zstd level 1、source commit 和 teacher hash；完成 full validator、loader smoke、`data.mdb` bytes/SHA-256 后才能原子改名。
+
+PPU96 `/root` 当前约 660 GiB 可用，145–230 GiB 最终集放入后预计余 430–515 GiB，无需预先迁走现有数据。先完整阅读 `reports/claude/ppu96_single_card_4way_zstd_runbook.md`，在远端用 clean worktree/clone 更新到审计后的最新 RR，不覆盖其 dirty worktree。每个 LMDB 直接 rsync 到 `/root/rr-local-data/processed/joint_training_0821/<source>.lmdb.incoming/`，核对 bytes/SHA、validator 和 loader 后原子改名并写 `.transfer-complete`。
 
 ## 7. 启动 gate 与验证边界
 
 用户要求的检查范围已经完成：FurnitureBench 3/3、ManiSkill 11/11 均有成功轨迹、strict 2D 与视频；AutoMate 对历史 final 指标最低的 20 个模型做了 fresh 抽查，保留的 19 个 hardest task 可产生 strict success，`00755` 被排除；`00211` 另完成四卡 pipeline smoke。AutoMate v2 shared camera 的 `00410` 无 override 回归为 44/44 点画内。
 
-这不等于 AutoMate 99/99 已逐 task fresh rollout。正式 campaign 前仍需：
+这不等于 AutoMate 99/99 已逐 task fresh rollout。当前仍是 planning-only；用户批准本文档前禁止创建 production NAS 目录、造数据、转换 LMDB 或上传。批准后按下列顺序执行：
 
-1. 补齐并 SHA 验证正式 99 task 的官方 Isaac 5.1 本地资产 bundle；现有 review bundle只覆盖历史低指标样本；
-2. 每个保留 ID 先跑 1 条 success 的小批 gate，记录真实 attempts、step、相机覆盖和 ETA；失败 task 隔离后继续其他 task，不擅自改相机；
-3. NAS durable-write gate 通过；
-4. 三个仓库的本轮源码均 commit/push，并把 commit/hash写入 launch metadata。
+1. 实现并提交维护版 AutoMate multi-env collector，完成 1/16/32 env 严格回归；
+2. 补齐并 SHA 验证正式 99 task 的官方 Isaac 5.1 本地资产 bundle；现有 review bundle只覆盖历史低指标样本；
+3. r218 恢复 `/mnt/nas/datasets_tmp` 正确挂载，并与 236 一起通过 volume2 durable write/read/hash gate；
+4. 每个保留 ID 的首个新 strict success 同时作为 per-task camera/schema gate；失败 task 隔离后继续其他 task，不擅自改相机，attempted-rollout 吞吐和剩余 ETA持续写入 manifest；
+5. 三个仓库的生产源码均 commit/push，并把 commit/hash写入 launch metadata；PPU96 使用 clean worktree/clone，不覆盖远端修改。
 
 只有 task success 且 raw contract/active point/3D→2D/内容哈希全部通过的文件才能进入 production manifest。任何 diagnostic、SBC、failure、旧 pickle、camera candidate 和 validation 超采文件都必须被 manifest 排除。
