@@ -104,7 +104,11 @@ class PickleImageSizeTest(unittest.TestCase):
             np.array([[0.0, 0.0, 0.10], [0.0, 0.0, 0.50]], dtype=np.float32)
         ).as_quat()
 
-        clipped = clip_quat_xyzw_magnitude(quaternions, clip_mag=0.35)
+        clipped = clip_quat_xyzw_magnitude(
+            quaternions,
+            clip_mag=0.35,
+            per_action=True,
+        )
         magnitudes = np.linalg.norm(R.from_quat(clipped).as_rotvec(), axis=-1)
 
         np.testing.assert_allclose(magnitudes, [0.10, 0.35], atol=1e-7)

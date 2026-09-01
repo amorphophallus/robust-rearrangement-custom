@@ -7,28 +7,34 @@ unset LD_LIBRARY_PATH
 ACTION="all"
 VLM_DIR="${VLM_DIR:-/data/hy/robust-rearrangement/data/processed/vlm}"
 UPLOAD_DIR="${UPLOAD_DIR:-/data/hy/robust-rearrangement/data/processed/vlm_modelscope_upload}"
-MAX_WORKERS="${MAX_WORKERS:-16}"
+MAX_WORKERS="${MAX_WORKERS:-1}"
+MODELSCOPE_BYPASS_PROXY="${MODELSCOPE_BYPASS_PROXY:-0}"
 COMMIT_MESSAGE="${COMMIT_MESSAGE:-Upload robust rearrangement VLM SFT dataset}"
 
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  scripts/upload_vlm_to_modelscope.sh [prepare|upload|upload-readme|upload-light|all] [--local-dir DIR] [--upload-dir DIR]
+  scripts/upload_vlm_to_modelscope.sh [prepare|upload|upload-index-update|upload-readme|upload-light|all] [--local-dir DIR] [--upload-dir DIR]
   scripts/upload_vlm_to_modelscope.sh --action all --local-dir DIR
 
 Environment:
-  MODELSCOPE_TOKEN   Required for upload.
+  MODELSCOPE_TOKEN   Optional compatibility token passed as a global CLI option.
+  MODELSCOPE_API_TOKEN
+                     Optional official ModelScope token environment variable.
+                     If neither is set, the CLI uses `modelscope login` credentials.
   REPO_ID            Required for upload, e.g. <namespace>/<dataset_name>.
   VLM_DIR            Optional. Default: /data/hy/robust-rearrangement/data/processed/vlm
   UPLOAD_DIR         Optional. Default: /data/hy/robust-rearrangement/data/processed/vlm_modelscope_upload
-  MAX_WORKERS        Optional. Default: 16
+  MAX_WORKERS        Optional. Default: 1 (serial uploads are more reliable for large files).
+  MODELSCOPE_BYPASS_PROXY
+                     Set to 1 to connect directly and ignore all HTTP(S)/ALL proxy variables.
   COMMIT_MESSAGE     Optional.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    prepare|upload|upload-readme|upload-light|all)
+    prepare|upload|upload-index-update|upload-readme|upload-light|all)
       ACTION="$1"
       shift
       ;;
@@ -61,6 +67,22 @@ require_file() {
   if [[ ! -f "${path}" ]]; then
     echo "Missing required file: ${path}" >&2
     exit 1
+  fi
+}
+
+modelscope_cli() {
+  local -a command=(modelscope)
+  if [[ -n "${MODELSCOPE_TOKEN:-}" ]]; then
+    command+=(--token "${MODELSCOPE_TOKEN}")
+  fi
+
+  if [[ "${MODELSCOPE_BYPASS_PROXY}" == "1" ]]; then
+    env -u http_proxy -u https_proxy -u all_proxy \
+      -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+      -u no_proxy -u NO_PROXY \
+      "${command[@]}" "$@"
+  else
+    "${command[@]}" "$@"
   fi
 }
 
@@ -100,10 +122,6 @@ upload_to_modelscope() {
     echo "Set REPO_ID, for example: export REPO_ID='<namespace>/<dataset_name>'" >&2
     exit 1
   fi
-  if [[ -z "${MODELSCOPE_TOKEN:-}" ]]; then
-    echo "Set MODELSCOPE_TOKEN before upload." >&2
-    exit 1
-  fi
   if [[ ! -d "${UPLOAD_DIR}" ]]; then
     echo "Upload directory does not exist: ${UPLOAD_DIR}" >&2
     echo "Run: $0 prepare --local-dir '${VLM_DIR}'" >&2
@@ -112,10 +130,37 @@ upload_to_modelscope() {
 
   python -m pip show modelscope >/dev/null 2>&1 || python -m pip install -U modelscope
 
-  modelscope upload "${REPO_ID}" "${UPLOAD_DIR}" \
+  modelscope_cli upload "${REPO_ID}" "${UPLOAD_DIR}" \
     --repo-type dataset \
-    --token "${MODELSCOPE_TOKEN}" \
     --commit-message "${COMMIT_MESSAGE}" \
+    --use-cache \
+    --max-workers "${MAX_WORKERS}"
+}
+
+upload_index_update_to_modelscope() {
+  if [[ -z "${REPO_ID:-}" ]]; then
+    echo "Set REPO_ID before uploading the index-only update." >&2
+    exit 1
+  fi
+  require_file "${UPLOAD_DIR}/README.md"
+  require_file "${UPLOAD_DIR}/manifest.json"
+  require_file "${UPLOAD_DIR}/messages.jsonl"
+  require_file "${UPLOAD_DIR}/qwen_llava_sharegpt.json"
+  require_file "${UPLOAD_DIR}/llamafactory_base.json"
+  require_file "${UPLOAD_DIR}/llamafactory_base_dataset_info.json"
+  require_file "${UPLOAD_DIR}/preview/llamafactory_preview.jsonl"
+  require_file "${UPLOAD_DIR}/rotation6d_enrichment_audit_20260831.json"
+
+  if find "${UPLOAD_DIR}" -type f \( -name '*.tar' -o -name '*.tmp' \) -print -quit | grep -q .; then
+    echo "Index-only update directory must not contain tar or temporary files: ${UPLOAD_DIR}" >&2
+    exit 1
+  fi
+
+  python -m pip show modelscope >/dev/null 2>&1 || python -m pip install -U modelscope
+  modelscope_cli upload "${REPO_ID}" "${UPLOAD_DIR}" \
+    --repo-type dataset \
+    --commit-message "${COMMIT_MESSAGE}" \
+    --use-cache \
     --max-workers "${MAX_WORKERS}"
 }
 
@@ -124,17 +169,12 @@ upload_readme_to_modelscope() {
     echo "Set REPO_ID, for example: export REPO_ID='<namespace>/<dataset_name>'" >&2
     exit 1
   fi
-  if [[ -z "${MODELSCOPE_TOKEN:-}" ]]; then
-    echo "Set MODELSCOPE_TOKEN before upload." >&2
-    exit 1
-  fi
   require_file "${UPLOAD_DIR}/README.md"
 
   python -m pip show modelscope >/dev/null 2>&1 || python -m pip install -U modelscope
 
-  modelscope upload "${REPO_ID}" "${UPLOAD_DIR}/README.md" \
+  modelscope_cli upload "${REPO_ID}" "${UPLOAD_DIR}/README.md" \
     --repo-type dataset \
-    --token "${MODELSCOPE_TOKEN}" \
     --commit-message "${COMMIT_MESSAGE}"
 }
 
@@ -143,23 +183,17 @@ upload_light_to_modelscope() {
     echo "Set REPO_ID, for example: export REPO_ID='<namespace>/<dataset_name>'" >&2
     exit 1
   fi
-  if [[ -z "${MODELSCOPE_TOKEN:-}" ]]; then
-    echo "Set MODELSCOPE_TOKEN before upload." >&2
-    exit 1
-  fi
   require_file "${UPLOAD_DIR}/README.md"
   require_file "${UPLOAD_DIR}/preview/llamafactory_preview.jsonl"
 
   python -m pip show modelscope >/dev/null 2>&1 || python -m pip install -U modelscope
 
-  modelscope upload "${REPO_ID}" "${UPLOAD_DIR}/README.md" "README.md" \
+  modelscope_cli upload "${REPO_ID}" "${UPLOAD_DIR}/README.md" "README.md" \
     --repo-type dataset \
-    --token "${MODELSCOPE_TOKEN}" \
     --commit-message "${COMMIT_MESSAGE}: README metadata"
 
-  modelscope upload "${REPO_ID}" "${UPLOAD_DIR}/preview/llamafactory_preview.jsonl" "preview/llamafactory_preview.jsonl" \
+  modelscope_cli upload "${REPO_ID}" "${UPLOAD_DIR}/preview/llamafactory_preview.jsonl" "preview/llamafactory_preview.jsonl" \
     --repo-type dataset \
-    --token "${MODELSCOPE_TOKEN}" \
     --commit-message "${COMMIT_MESSAGE}: preview subset"
 }
 
@@ -169,6 +203,9 @@ case "${ACTION}" in
     ;;
   upload)
     upload_to_modelscope
+    ;;
+  upload-index-update)
+    upload_index_update_to_modelscope
     ;;
   upload-readme)
     upload_readme_to_modelscope
@@ -181,7 +218,7 @@ case "${ACTION}" in
     upload_to_modelscope
     ;;
   *)
-    echo "Usage: $0 [prepare|upload|upload-readme|upload-light|all]" >&2
+    echo "Usage: $0 [prepare|upload|upload-index-update|upload-readme|upload-light|all]" >&2
     exit 1
     ;;
 esac

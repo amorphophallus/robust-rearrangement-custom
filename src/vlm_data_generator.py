@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import lzma
 import os
@@ -48,6 +49,16 @@ COORDINATE_FRAMES = {
     "state_info.base.ee_quat": "robot-base end-effector orientation quaternion [x, y, z, w]",
     "state_info.base.ee_pos_vel": "end-effector linear velocity from rollout robot_state",
     "state_info.base.ee_ori_vel": "end-effector angular velocity from rollout robot_state",
+}
+ROTATION_6D_KEY = "target_rotation_6d"
+ROTATION_6D_DESCRIPTION = (
+    "sim_local target orientation using the first two rows of the 3x3 rotation "
+    "matrix flattened row-major as [r00, r01, r02, r10, r11, r12]; recover a "
+    "proper SO(3) matrix with Gram--Schmidt orthogonalization"
+)
+POSE_COORDINATE_FRAMES = {
+    **COORDINATE_FRAMES,
+    ROTATION_6D_KEY: ROTATION_6D_DESCRIPTION,
 }
 
 TASK_ALIASES = {
@@ -149,6 +160,36 @@ DEFAULT_USER_PROMPT = (
     "Please analyze the images and state information, then provide the current skill "
     "and target point. Return the answer in JSON format exactly like this example: "
     f"{OUTPUT_JSON_EXAMPLE}"
+)
+
+POSE_BASE_SYSTEM_PROMPT = (
+    BASE_SYSTEM_PROMPT.replace(
+        "predict the current skill and the next target point.",
+        "predict the current skill, the next target point, and the target orientation.",
+    )
+    + " target_rotation_6d is the target end-effector orientation in the same "
+    "sim_local frame, encoded by the first two rows of its rotation matrix in "
+    "row-major order: [r00, r01, r02, r10, r11, r12]."
+)
+POSE_TASK_SYSTEM_PROMPTS = {
+    task: prompt.replace(BASE_SYSTEM_PROMPT, POSE_BASE_SYSTEM_PROMPT, 1)
+    for task, prompt in TASK_SYSTEM_PROMPTS.items()
+}
+POSE_OUTPUT_JSON_EXAMPLE = (
+    '{"skill": "pick", "target_point_2d": [160.0, 153.0], '
+    '"target_point_3d": [0.160508, 0.000166, 0.430685], '
+    '"target_rotation_6d": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]}'
+)
+POSE_DEFAULT_USER_PROMPT = (
+    "This is the front camera image:\n"
+    "<image>\n"
+    "This is the wrist camera image:\n"
+    "<image>\n"
+    "This is the robot proprioceptive state information:\n"
+    f"{STATE_INFO_PLACEHOLDER}\n"
+    "Please analyze the images and state information, then provide the current skill, "
+    "target point, and target orientation. Return the answer in JSON format exactly "
+    f"like this example: {POSE_OUTPUT_JSON_EXAMPLE}"
 )
 
 
@@ -285,6 +326,10 @@ def _system_prompt_for_task(task: Optional[str], override: Optional[str]) -> str
     return TASK_SYSTEM_PROMPTS.get(str(task), BASE_SYSTEM_PROMPT)
 
 
+def _pose_system_prompt_for_task(task: Optional[str]) -> str:
+    return POSE_TASK_SYSTEM_PROMPTS.get(str(task), POSE_BASE_SYSTEM_PROMPT)
+
+
 def _has_robot_base_eepose(robot_state: Any) -> bool:
     return (
         isinstance(robot_state, dict)
@@ -312,6 +357,95 @@ def _numeric_vector_error(value: Any, *, field: str, length: int) -> Optional[st
     ):
         return f"{field}_non_finite"
     return None
+
+
+def _rotation_6d_to_matrix(rotation_6d: Any) -> np.ndarray:
+    values = np.asarray(rotation_6d, dtype=np.float64).reshape(-1)
+    if values.shape != (6,) or not np.isfinite(values).all():
+        raise ValueError("rotation_6d must contain six finite values")
+    first = values[:3]
+    second = values[3:]
+    first_norm = np.linalg.norm(first)
+    if first_norm <= 1e-12:
+        raise ValueError("rotation_6d first row is degenerate")
+    first = first / first_norm
+    second = second - np.dot(first, second) * first
+    second_norm = np.linalg.norm(second)
+    if second_norm <= 1e-12:
+        raise ValueError("rotation_6d second row is degenerate")
+    second = second / second_norm
+    third = np.cross(first, second)
+    return np.stack((first, second, third), axis=0)
+
+
+def _target_rotation_6d_payload(
+    guidance_pose: Any,
+    *,
+    target_point_3d: Any,
+    clean_guidance_pose: Any = None,
+    orthogonality_atol: float = 1e-4,
+    translation_atol: float = 1e-5,
+) -> tuple[Optional[list[float]], Optional[str], dict[str, float]]:
+    """Validate a scripted guidance pose and return its Zhou-style 6D rotation."""
+    if guidance_pose is None:
+        return None, "guidance_pose_null", {}
+    try:
+        pose = np.asarray(guidance_pose, dtype=np.float64)
+    except (TypeError, ValueError):
+        return None, "guidance_pose_non_numeric", {}
+    if pose.shape != (4, 4):
+        return None, "guidance_pose_shape", {}
+    if not np.isfinite(pose).all():
+        return None, "guidance_pose_non_finite", {}
+    if not np.allclose(
+        pose[3],
+        np.array([0.0, 0.0, 0.0, 1.0]),
+        atol=orthogonality_atol,
+        rtol=0.0,
+    ):
+        return None, "guidance_pose_last_row", {}
+
+    rotation = pose[:3, :3]
+    orthogonality_error = float(
+        np.max(np.abs(rotation @ rotation.T - np.eye(3)))
+    )
+    determinant = float(np.linalg.det(rotation))
+    metrics = {
+        "orthogonality_max_error": orthogonality_error,
+        "determinant": determinant,
+    }
+    if orthogonality_error > orthogonality_atol:
+        return None, "guidance_pose_rotation_not_orthogonal", metrics
+    if abs(determinant - 1.0) > orthogonality_atol:
+        return None, "guidance_pose_rotation_bad_determinant", metrics
+
+    try:
+        point = np.asarray(target_point_3d, dtype=np.float64).reshape(-1)
+    except (TypeError, ValueError):
+        return None, "target_point_3d_non_numeric", metrics
+    if point.shape != (3,) or not np.isfinite(point).all():
+        return None, "target_point_3d_invalid", metrics
+    translation_error = float(np.max(np.abs(pose[:3, 3] - point)))
+    metrics["translation_max_error_m"] = translation_error
+    if translation_error > translation_atol:
+        return None, "guidance_pose_translation_mismatch", metrics
+
+    if clean_guidance_pose is not None:
+        clean = np.asarray(clean_guidance_pose, dtype=np.float64)
+        if clean.shape != (4, 4) or not np.isfinite(clean).all():
+            return None, "guidance_pose_clean_invalid", metrics
+        clean_error = float(np.max(np.abs(clean - pose)))
+        metrics["clean_pose_max_error"] = clean_error
+        if clean_error > translation_atol:
+            return None, "guidance_pose_not_clean_scripted_gt", metrics
+
+    rotation_6d = rotation[:2, :].reshape(6)
+    reconstructed = _rotation_6d_to_matrix(rotation_6d)
+    reconstruction_error = float(np.max(np.abs(reconstructed - rotation)))
+    metrics["roundtrip_max_error"] = reconstruction_error
+    if reconstruction_error > orthogonality_atol:
+        return None, "rotation_6d_roundtrip_mismatch", metrics
+    return _jsonify(rotation_6d), None, metrics
 
 
 def _supervision_error(
@@ -350,6 +484,14 @@ def _supervision_error(
         payload.get("target_point_3d"),
         field="target_point_3d",
         length=3,
+    ) or (
+        _numeric_vector_error(
+            payload.get(ROTATION_6D_KEY),
+            field=ROTATION_6D_KEY,
+            length=6,
+        )
+        if ROTATION_6D_KEY in payload
+        else None
     )
 
 
@@ -781,6 +923,439 @@ def convert_sharegpt_to_llamafactory(args: argparse.Namespace) -> dict[str, Any]
         "skipped": dict(skipped),
         "llamafactory_state_mode": args.llamafactory_state_mode,
         "dataset_info": dataset_info,
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _source_pickle_contract(data: Any) -> tuple[Optional[str], bool]:
+    if not isinstance(data, dict) or not isinstance(data.get("observations"), list):
+        return "invalid_pickle_structure", False
+    annotation_source = data.get("annotation_source")
+    if annotation_source not in (None, "scripted"):
+        return f"unexpected_annotation_source:{annotation_source}", False
+    if any(str(key).lower().startswith("vlm") for key in data):
+        return "vlm_metadata_present", False
+    observations = data["observations"]
+    for observation_index, observation in enumerate(observations):
+        if isinstance(observation, dict) and any(
+            str(key).lower().startswith("vlm") for key in observation
+        ):
+            return f"vlm_observation_metadata_present:{observation_index}", False
+    return None, annotation_source is None
+
+
+def _pose_record_from_existing(
+    source_record: dict[str, Any],
+    *,
+    observation: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, float]]:
+    metadata = dict(source_record.get("metadata", {}))
+    task = _normalize_task(str(metadata.get("task", "")))
+    if not task:
+        raise ValueError(f"Record {source_record.get('id')} has no task metadata")
+
+    _, old_error = _assistant_json_from_text(
+        _message_content(
+            {
+                "messages": source_record.get("messages", []),
+            }
+        )[2]
+    )
+    if old_error:
+        raise ValueError(
+            f"Record {source_record.get('id')} has invalid source supervision: {old_error}"
+        )
+    old_assistant = json.loads(source_record["messages"][-1]["content"])
+    local_assistant = _assistant_payload(observation, task=task)
+    if old_assistant != local_assistant:
+        raise ValueError(
+            f"Record {source_record.get('id')} does not match its source pickle assistant label"
+        )
+    local_state = _state_info_payload(observation)
+    if source_record.get("state_info") != local_state:
+        raise ValueError(
+            f"Record {source_record.get('id')} does not match its source pickle state_info"
+        )
+
+    rotation_6d, pose_error, metrics = _target_rotation_6d_payload(
+        observation.get("guidance_pose"),
+        target_point_3d=observation.get("guidance_point"),
+        clean_guidance_pose=observation.get("guidance_pose_clean"),
+    )
+    if pose_error:
+        raise ValueError(
+            f"Record {source_record.get('id')} has invalid scripted target pose: {pose_error}"
+        )
+
+    enriched_assistant = dict(old_assistant)
+    enriched_assistant[ROTATION_6D_KEY] = rotation_6d
+    supervision_error = _supervision_error(enriched_assistant)
+    if supervision_error:
+        raise ValueError(
+            f"Record {source_record.get('id')} has invalid enriched supervision: "
+            f"{supervision_error}"
+        )
+
+    metadata["annotation_source"] = "scripted"
+    metadata["coordinate_frames"] = POSE_COORDINATE_FRAMES
+    metadata["target_rotation_representation"] = {
+        "name": "rotation_6d",
+        "order": ["r00", "r01", "r02", "r10", "r11", "r12"],
+        "decode": "Gram--Schmidt rows, then cross product for the third row",
+    }
+    images = source_record.get("images", source_record.get("image", []))
+    return (
+        {
+            "id": source_record["id"],
+            "image": images,
+            "state_info": source_record.get("state_info"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": _pose_system_prompt_for_task(task),
+                },
+                {"role": "user", "content": POSE_DEFAULT_USER_PROMPT},
+                {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        enriched_assistant,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                },
+            ],
+            "metadata": metadata,
+        },
+        metrics,
+    )
+
+
+def enrich_existing_dataset_with_rotation_6d(args: argparse.Namespace) -> dict[str, Any]:
+    """Add scripted Rotation6D labels to an existing messages JSONL index.
+
+    The source media are intentionally not read or rewritten. Existing sample IDs,
+    image/depth references, state, skill, and point labels must match the local raw
+    pickle before an enriched record is emitted.
+    """
+    input_messages = Path(args.input_messages).expanduser().resolve()
+    output_dir = Path(args.output_dir).expanduser().resolve()
+    source_manifest_path = (
+        Path(args.source_manifest).expanduser().resolve()
+        if args.source_manifest
+        else input_messages.with_name("manifest.json")
+    )
+    if not input_messages.is_file():
+        raise FileNotFoundError(input_messages)
+    if not source_manifest_path.is_file():
+        raise FileNotFoundError(source_manifest_path)
+    if args.annotation_source != "scripted":
+        raise ValueError("Rotation6D enrichment currently requires --annotation-source scripted")
+
+    output_paths = {
+        "messages_jsonl": output_dir / "messages.jsonl",
+        "sharegpt_json": output_dir / "qwen_llava_sharegpt.json",
+        "llamafactory_json": output_dir / "llamafactory_base.json",
+        "preview_jsonl": output_dir / "preview" / "llamafactory_preview.jsonl",
+    }
+    existing = [path for path in output_paths.values() if path.exists()]
+    if existing and args.output_mode == "error":
+        raise FileExistsError(
+            "Rotation6D output already exists:\n"
+            + "\n".join(f"  {path}" for path in existing)
+        )
+    if args.output_mode == "overwrite":
+        for path in existing:
+            path.unlink()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_paths["preview_jsonl"].parent.mkdir(parents=True, exist_ok=True)
+
+    temporary_paths = {
+        name: path.with_name(path.name + ".tmp")
+        for name, path in output_paths.items()
+    }
+    for path in temporary_paths.values():
+        if path.exists():
+            path.unlink()
+
+    source_manifest = json.loads(source_manifest_path.read_text())
+    expected_task_counts = source_manifest.get("samples_per_task", {})
+    source_pickles: set[Path] = set()
+    closed_pickles: set[Path] = set()
+    task_counts: Counter[str] = Counter()
+    legacy_missing_annotation_source = 0
+    max_metrics = {
+        "orthogonality_max_error": 0.0,
+        "translation_max_error_m": 0.0,
+        "clean_pose_max_error": 0.0,
+        "roundtrip_max_error": 0.0,
+    }
+    determinant_min = float("inf")
+    determinant_max = float("-inf")
+    num_records = 0
+    seen_ids: set[str] = set()
+    current_pickle: Optional[Path] = None
+    current_data: Optional[dict[str, Any]] = None
+    num_loaded_pickles = 0
+    source_files = {}
+
+    try:
+        source_files["messages_jsonl"] = temporary_paths["messages_jsonl"].open("w")
+        source_files["sharegpt_json"] = temporary_paths["sharegpt_json"].open("w")
+        source_files["llamafactory_json"] = temporary_paths["llamafactory_json"].open("w")
+        source_files["preview_jsonl"] = temporary_paths["preview_jsonl"].open("w")
+        source_files["sharegpt_json"].write("[")
+        source_files["llamafactory_json"].write("[")
+
+        with input_messages.open() as stream:
+            for line_no, line in enumerate(stream, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    source_record = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"Invalid JSON in {input_messages}:{line_no}: {exc}"
+                    ) from exc
+                metadata = source_record.get("metadata", {})
+                source_pickle_value = metadata.get("source_pickle")
+                if not isinstance(source_pickle_value, str) or not source_pickle_value:
+                    raise ValueError(
+                        f"Record {source_record.get('id')} has no source_pickle metadata"
+                    )
+                source_pickle = Path(source_pickle_value).expanduser().resolve()
+                if source_pickle != current_pickle:
+                    if source_pickle in closed_pickles:
+                        raise ValueError(
+                            f"Source pickle records are not contiguous: {source_pickle}"
+                        )
+                    if current_pickle is not None:
+                        closed_pickles.add(current_pickle)
+                    if not source_pickle.is_file():
+                        raise FileNotFoundError(source_pickle)
+                    current_pickle = source_pickle
+                    source_pickles.add(source_pickle)
+                    loaded = _load_pickle(source_pickle)
+                    contract_error, missing_source = _source_pickle_contract(loaded)
+                    if contract_error:
+                        raise ValueError(f"{source_pickle}: {contract_error}")
+                    if missing_source:
+                        legacy_missing_annotation_source += 1
+                    current_data = loaded
+                    num_loaded_pickles += 1
+                    if num_loaded_pickles == 1 or num_loaded_pickles % 10 == 0:
+                        print(
+                            "[enrich-rotation6d] "
+                            f"loaded {num_loaded_pickles} source pickles; "
+                            f"emitted {num_records} samples",
+                            flush=True,
+                        )
+
+                assert current_data is not None
+                frame_index = metadata.get("frame_index")
+                if not isinstance(frame_index, int):
+                    raise ValueError(
+                        f"Record {source_record.get('id')} has invalid frame_index"
+                    )
+                observations = current_data["observations"]
+                if not 0 <= frame_index < len(observations):
+                    raise IndexError(
+                        f"Record {source_record.get('id')} frame {frame_index} is out of range"
+                    )
+                observation = observations[frame_index]
+                if not isinstance(observation, dict):
+                    raise ValueError(
+                        f"Record {source_record.get('id')} observation is not a mapping"
+                    )
+                enriched_record, pose_metrics = _pose_record_from_existing(
+                    source_record,
+                    observation=observation,
+                )
+                if enriched_record["id"] in seen_ids:
+                    raise ValueError(f"Duplicate sample ID: {enriched_record['id']}")
+                seen_ids.add(enriched_record["id"])
+                _validate_output_records([enriched_record])
+                for key in max_metrics:
+                    max_metrics[key] = max(
+                        max_metrics[key],
+                        float(pose_metrics.get(key, 0.0)),
+                    )
+                determinant = float(pose_metrics["determinant"])
+                determinant_min = min(determinant_min, determinant)
+                determinant_max = max(determinant_max, determinant)
+
+                task = str(enriched_record["metadata"]["task"])
+                task_counts[task] += 1
+                messages_item = {
+                    "id": enriched_record["id"],
+                    "images": enriched_record["image"],
+                    "state_info": enriched_record.get("state_info"),
+                    "messages": enriched_record["messages"],
+                    "metadata": enriched_record["metadata"],
+                }
+                _, user_text, assistant_text = _message_content(enriched_record)
+                sharegpt_item = {
+                    "id": enriched_record["id"],
+                    "image": enriched_record["image"],
+                    "state_info": enriched_record.get("state_info"),
+                    "conversations": [
+                        {"from": "human", "value": user_text},
+                        {"from": "gpt", "value": assistant_text},
+                    ],
+                    "metadata": enriched_record["metadata"],
+                }
+                llamafactory_item = _llamafactory_item_from_record(
+                    enriched_record,
+                    state_mode="base",
+                )
+
+                source_files["messages_jsonl"].write(
+                    json.dumps(messages_item, ensure_ascii=False, separators=(",", ":"))
+                    + "\n"
+                )
+                if num_records:
+                    source_files["sharegpt_json"].write(",")
+                    source_files["llamafactory_json"].write(",")
+                source_files["sharegpt_json"].write(
+                    json.dumps(sharegpt_item, ensure_ascii=False, separators=(",", ":"))
+                )
+                source_files["llamafactory_json"].write(
+                    json.dumps(llamafactory_item, ensure_ascii=False, separators=(",", ":"))
+                )
+                if num_records < args.preview_samples:
+                    source_files["preview_jsonl"].write(
+                        json.dumps(
+                            llamafactory_item,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        + "\n"
+                    )
+                num_records += 1
+                if num_records % 5000 == 0:
+                    print(
+                        f"[enrich-rotation6d] emitted {num_records} samples",
+                        flush=True,
+                    )
+
+        source_files["sharegpt_json"].write("]")
+        source_files["llamafactory_json"].write("]")
+    finally:
+        for stream in source_files.values():
+            stream.close()
+
+    if args.expected_samples is not None and num_records != args.expected_samples:
+        raise ValueError(
+            f"Enriched {num_records} records; expected {args.expected_samples}"
+        )
+    if expected_task_counts and dict(task_counts) != expected_task_counts:
+        raise ValueError(
+            f"Task counts changed: enriched={dict(task_counts)} "
+            f"source_manifest={expected_task_counts}"
+        )
+
+    expected_pickle_paths: set[Path] = set()
+    for directory in args.expected_pickle_dir or []:
+        expected_pickle_paths.update(
+            path.resolve()
+            for path in Path(directory).expanduser().resolve().glob("*.pkl*")
+        )
+    if expected_pickle_paths and source_pickles != expected_pickle_paths:
+        missing = sorted(str(path) for path in source_pickles - expected_pickle_paths)
+        extra = sorted(str(path) for path in expected_pickle_paths - source_pickles)
+        raise ValueError(
+            "Source pickle set differs from expected campaign directories: "
+            f"missing_expected={missing[:5]} extra_expected={extra[:5]}"
+        )
+
+    for name, path in output_paths.items():
+        temporary_paths[name].replace(path)
+
+    dataset_info_path = output_dir / "llamafactory_base_dataset_info.json"
+    _write_json(
+        dataset_info_path,
+        _llamafactory_dataset_info("llamafactory_base.json", "rr_vlm_base"),
+        pretty=True,
+    )
+    output_hashes = {
+        path.relative_to(output_dir).as_posix(): _sha256_file(path)
+        for path in [*output_paths.values(), dataset_info_path]
+    }
+    source_path_digest = hashlib.sha256(
+        "\n".join(sorted(str(path) for path in source_pickles)).encode()
+    ).hexdigest()
+    audit = {
+        "created_at": datetime.now().isoformat(),
+        "annotation_source": "scripted",
+        "source_revision": args.source_revision,
+        "source_messages": str(input_messages),
+        "num_samples": num_records,
+        "samples_per_task": dict(task_counts),
+        "num_source_pickles": len(source_pickles),
+        "source_pickle_paths_sha256": source_path_digest,
+        "source_pickle_set_matches_expected_campaigns": bool(expected_pickle_paths),
+        "legacy_pickles_missing_top_level_annotation_source": (
+            legacy_missing_annotation_source
+        ),
+        "old_fields_verified_unchanged": [
+            "sample_id",
+            "images",
+            "state_info",
+            "skill",
+            "target_point_2d",
+            "target_point_3d",
+        ],
+        "rotation_6d": {
+            "field": ROTATION_6D_KEY,
+            "description": ROTATION_6D_DESCRIPTION,
+            "max_errors": max_metrics,
+            "determinant_min": determinant_min,
+            "determinant_max": determinant_max,
+        },
+        "media_policy": "Existing image/depth tar archives are not rewritten or uploaded.",
+        "output_sha256": output_hashes,
+    }
+    audit_path = output_dir / "rotation6d_enrichment_audit_20260831.json"
+    _write_json(audit_path, audit, pretty=True)
+    manifest = {
+        **source_manifest,
+        "updated_at": datetime.now().isoformat(),
+        "annotation_source": "scripted",
+        "source_revision": args.source_revision,
+        "num_samples": num_records,
+        "samples_per_task": dict(task_counts),
+        "schema": {
+            **source_manifest.get("schema", {}),
+            "assistant_json_keys": [
+                "skill",
+                "target_point_2d",
+                "target_point_3d",
+                ROTATION_6D_KEY,
+            ],
+            "coordinate_frames": POSE_COORDINATE_FRAMES,
+        },
+        "rotation6d_enrichment": {
+            "audit": audit_path.name,
+            "representation": ROTATION_6D_DESCRIPTION,
+            "media_archives_unchanged": True,
+        },
+    }
+    manifest_path = output_dir / "manifest.json"
+    _write_json(manifest_path, manifest, pretty=True)
+    return {
+        "output_dir": str(output_dir),
+        "num_samples": num_records,
+        "samples_per_task": dict(task_counts),
+        "num_source_pickles": len(source_pickles),
+        "output_sha256": output_hashes,
+        "manifest": str(manifest_path),
+        "audit": str(audit_path),
     }
 
 
@@ -1446,6 +2021,43 @@ def add_llamafactory_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_rotation6d_enrichment_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--input-messages",
+        type=str,
+        required=True,
+        help="Current dataset messages.jsonl whose IDs and media references are preserved.",
+    )
+    parser.add_argument("--source-manifest", type=str, default=None)
+    parser.add_argument("--output-dir", type=str, required=True)
+    parser.add_argument(
+        "--source-revision",
+        type=str,
+        required=True,
+        help="Immutable ModelScope revision being enriched.",
+    )
+    parser.add_argument(
+        "--annotation-source",
+        type=str,
+        required=True,
+        choices=["scripted"],
+    )
+    parser.add_argument(
+        "--expected-pickle-dir",
+        action="append",
+        default=[],
+        help="Campaign success directory; repeat to require exact source-pickle set equality.",
+    )
+    parser.add_argument("--expected-samples", type=int, default=None)
+    parser.add_argument("--preview-samples", type=int, default=100)
+    parser.add_argument(
+        "--output-mode",
+        type=str,
+        default="error",
+        choices=["error", "overwrite"],
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="VLM data generator",
@@ -1471,6 +2083,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Convert qwen/LLaVA ShareGPT JSON to directly trainable LLaMAFactory JSON.",
     )
     add_llamafactory_args(llamafactory)
+
+    enrichment = subparsers.add_parser(
+        "enrich-rotation6d",
+        help=(
+            "Add scripted target_rotation_6d to an existing dataset index without "
+            "rewriting RGB-D media."
+        ),
+    )
+    add_rotation6d_enrichment_args(enrichment)
     return parser
 
 
@@ -1503,6 +2124,11 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     if args.command == "to-llamafactory":
         result = convert_sharegpt_to_llamafactory(args)
+        print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))
+        return
+
+    if args.command == "enrich-rotation6d":
+        result = enrich_existing_dataset_with_rotation_6d(args)
         print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))
         return
 

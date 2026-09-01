@@ -157,6 +157,154 @@ def test_legacy_sim_guidance_is_exported_in_robot_base():
     np.testing.assert_allclose(payload["target_point_3d"], [0.4, 0.2, 0.085])
 
 
+def test_target_rotation_6d_roundtrips_scripted_pose():
+    angle = np.deg2rad(35.0)
+    rotation = np.array(
+        [
+            [np.cos(angle), -np.sin(angle), 0.0],
+            [np.sin(angle), np.cos(angle), 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    pose = np.eye(4, dtype=np.float32)
+    pose[:3, :3] = rotation
+    pose[:3, 3] = [0.2, 0.3, 0.4]
+
+    rotation_6d, error, metrics = generator._target_rotation_6d_payload(
+        pose,
+        target_point_3d=np.array([0.2, 0.3, 0.4]),
+        clean_guidance_pose=pose.copy(),
+    )
+
+    assert error is None
+    np.testing.assert_allclose(
+        rotation_6d,
+        rotation[:2].reshape(6),
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        generator._rotation_6d_to_matrix(rotation_6d),
+        rotation,
+        atol=1e-6,
+    )
+    assert metrics["roundtrip_max_error"] < 1e-6
+
+
+def test_target_rotation_6d_rejects_translation_mismatch():
+    pose = np.eye(4, dtype=np.float32)
+    pose[:3, 3] = [0.2, 0.3, 0.4]
+    _, error, _ = generator._target_rotation_6d_payload(
+        pose,
+        target_point_3d=[0.2, 0.3, 0.5],
+    )
+    assert error == "guidance_pose_translation_mismatch"
+
+
+def test_enrich_existing_dataset_adds_rotation_without_media(tmp_path):
+    image = np.zeros((8, 10, 3), dtype=np.uint8)
+    pose = np.eye(4, dtype=np.float32)
+    pose[:3, 3] = [0.2, 0.3, 0.4]
+    robot_state = {
+        "ee_pos_sim": np.array([0.1, 0.2, 0.3]),
+        "ee_quat_sim": np.array([0.0, 0.0, 0.0, 1.0]),
+        "ee_pos_vel": np.zeros(3),
+        "ee_ori_vel": np.zeros(3),
+        "gripper_width": np.array([0.05]),
+    }
+    observation = {
+        "color_image2": image,
+        "color_image1": image,
+        "robot_state": robot_state,
+        "skill": "pick",
+        "guidance_point_2d": {"color_image2": np.array([4.0, 5.0])},
+        "guidance_point": np.array([0.2, 0.3, 0.4]),
+        "guidance_pose": pose,
+        "guidance_pose_clean": pose.copy(),
+    }
+    campaign_dir = tmp_path / "campaign"
+    campaign_dir.mkdir()
+    pickle_path = campaign_dir / "rollout.pkl"
+    with pickle_path.open("wb") as stream:
+        pickle.dump(
+            {
+                "task": "one_leg",
+                "success": True,
+                "action_type": "pos",
+                "observations": [observation],
+            },
+            stream,
+        )
+    assistant = generator._assistant_payload(observation, task="one_leg")
+    sample_id = "one_leg_00000_rollout_frame_00000"
+    source_record = {
+        "id": sample_id,
+        "images": [
+            f"images/one_leg/{sample_id}_front.png",
+            f"images/one_leg/{sample_id}_wrist.png",
+        ],
+        "state_info": generator._state_info_payload(observation),
+        "messages": [
+            {"role": "system", "content": generator.TASK_SYSTEM_PROMPTS["one_leg"]},
+            {"role": "user", "content": generator.DEFAULT_USER_PROMPT},
+            {"role": "assistant", "content": json.dumps(assistant, sort_keys=True)},
+        ],
+        "metadata": {
+            "task": "one_leg",
+            "source_pickle": str(pickle_path),
+            "rollout_index_for_task": 0,
+            "frame_index": 0,
+            "depth": {"front": "front.npy", "wrist": "wrist.npy"},
+        },
+    }
+    input_dir = tmp_path / "source"
+    input_dir.mkdir()
+    input_messages = input_dir / "messages.jsonl"
+    input_messages.write_text(json.dumps(source_record) + "\n")
+    (input_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "num_samples": 1,
+                "samples_per_task": {"one_leg": 1},
+                "schema": {"assistant_json_keys": list(assistant)},
+            }
+        )
+    )
+    output_dir = tmp_path / "output"
+    args = argparse.Namespace(
+        input_messages=str(input_messages),
+        source_manifest=None,
+        output_dir=str(output_dir),
+        source_revision="source-revision",
+        annotation_source="scripted",
+        expected_pickle_dir=[str(campaign_dir)],
+        expected_samples=1,
+        preview_samples=1,
+        output_mode="error",
+    )
+
+    result = generator.enrich_existing_dataset_with_rotation_6d(args)
+
+    assert result["num_samples"] == 1
+    row = json.loads((output_dir / "messages.jsonl").read_text())
+    enriched = json.loads(row["messages"][-1]["content"])
+    assert enriched == {
+        **assistant,
+        "target_rotation_6d": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+    }
+    assert row["metadata"]["annotation_source"] == "scripted"
+    assert not (output_dir / "images").exists()
+    assert not (output_dir / "depth").exists()
+    llama = json.loads((output_dir / "llamafactory_base.json").read_text())
+    assert len(llama) == 1
+    assert "target_rotation_6d" in llama[0]["conversations"][-1]["value"]
+    audit = json.loads(
+        (output_dir / "rotation6d_enrichment_audit_20260831.json").read_text()
+    )
+    assert audit["num_source_pickles"] == 1
+    assert audit["legacy_pickles_missing_top_level_annotation_source"] == 1
+
+
 def test_convert_skips_null_before_writing_media(tmp_path):
     image = np.zeros((8, 10, 3), dtype=np.uint8)
     robot_state = {

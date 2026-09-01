@@ -582,6 +582,27 @@ def _apply_policy_visual_annotations(
         )
 
 
+def _saved_pickle_image_annotation_mode(
+    *,
+    guidance_point_on_image: bool,
+    grasp_annotation_on_image: bool,
+    grasp_part_annotate: bool,
+    guidance_point_colored: bool,
+    grasp_annotation_colored: bool,
+    skill_on_image: bool,
+) -> str:
+    """Describe pixels persisted by the rollout collector."""
+    if grasp_part_annotate:
+        return "grasp-part-colored" if grasp_annotation_colored else "grasp-part"
+    if guidance_point_on_image:
+        return "guidance-point-colored" if guidance_point_colored else "guidance-point"
+    if grasp_annotation_on_image:
+        return "grasp-colored" if grasp_annotation_colored else "grasp"
+    if skill_on_image:
+        return "skill"
+    return "none"
+
+
 def _transpose_step_env_annotations(values, num_envs: int):
     if not values:
         return [[] for _ in range(num_envs)]
@@ -1915,6 +1936,14 @@ def calculate_success_rate(
                         ),
                         vlm_point_error_records=point_error_records_to_save,
                         annotation_source=annotation_source,
+                        image_annotation_mode=_saved_pickle_image_annotation_mode(
+                            guidance_point_on_image=guidance_point_on_image,
+                            grasp_annotation_on_image=grasp_annotation_on_image,
+                            grasp_part_annotate=grasp_part_annotate,
+                            guidance_point_colored=guidance_point_colored,
+                            grasp_annotation_colored=grasp_annotation_colored,
+                            skill_on_image=skill_on_image,
+                        ),
                         vlm_model_revision=vlm_model_revision,
                         eepose_frame=ROBOT_BASE,
                         eepose_original_frame=SIM_LOCAL,

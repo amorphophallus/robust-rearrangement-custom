@@ -7,6 +7,41 @@
 
 当前工具不会在图片上画任何 point、grasp 或 skill 文本。front/wrist 两路图片都是原始 RGB 帧。`target_point_2d` 只读取 pickle 中已有的 front camera `guidance_point_2d.color_image2`。
 
+## 在现有数据集上增补 Rotation6D
+
+`enrich-rotation6d` 会以现有 `messages.jsonl` 为索引基准，按每条记录的
+`metadata.source_pickle` 和 `frame_index` 回读 scripted `guidance_pose`，新增：
+
+```json
+"target_rotation_6d": [r00, r01, r02, r10, r11, r12]
+```
+
+该子命令不会重新 rollout，也不会读取、生成或修改 RGB/depth 媒体。它会逐条确认
+原 sample ID、媒体引用、state、skill、2D/3D target 与 pickle 一致，并校验旋转
+正交性、行列式、pose translation 和 Rotation6D round-trip。
+
+```bash
+python -m src.vlm_data_generator enrich-rotation6d \
+  --input-messages /path/to/current/messages.jsonl \
+  --source-manifest /path/to/current/manifest.json \
+  --output-dir /data/hy/robust-rearrangement/data/processed/vlm_rotation6d_update \
+  --source-revision 26093f08919ee22c9926680b3a8c171d427b3217 \
+  --annotation-source scripted \
+  --expected-samples 121944 \
+  --expected-pickle-dir /data/hy/robust-rearrangement/raw/raw/diffik/sim/one_leg/rollout/low/rgbd-only-skill/vlm_rppo_one_leg_low_direct/success \
+  --expected-pickle-dir /data/hy/robust-rearrangement/raw/raw/diffik/sim/round_table/rollout/low/rgbd-only-skill/vlm_rppo_round_table_low_direct/success \
+  --expected-pickle-dir /data/hy/robust-rearrangement/raw/raw/diffik/sim/lamp/rollout/low/rgbd-only-skill/vlm_rppo_lamp_low_direct/success
+```
+
+原位上传前先执行 `modelscope login`（或设置官方
+`MODELSCOPE_API_TOKEN`），然后使用
+`scripts/upload_vlm_to_modelscope.sh upload-index-update`。该 action 拒绝包含
+tar 或临时文件的目录，因此不会重传或覆盖已有 RGB/depth archives。
+大文件上传推荐设置 `MODELSCOPE_BYPASS_PROXY=1 MAX_WORKERS=1`：前者在当前节点
+直连 ModelScope，避开会在 PUT 收尾阶段断开的环境代理；后者串行上传并配合 CLI
+默认启用的 `.ms_upload_cache` 复用已经成功的文件。缓存以文件为单位，不能续传
+一个只上传了一部分的大文件。
+
 ## 坐标系约定
 
 `target_point_2d`
