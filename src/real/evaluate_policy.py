@@ -346,6 +346,7 @@ def _parse_args(argv=None):
     parser.add_argument("--max-steps", type=int, default=1200)
     parser.add_argument("--max-wall-time-s", type=float, default=180.0)
     parser.add_argument("--max-consecutive-rejections", type=int, default=20)
+    parser.add_argument("--warmup-timeout-s", type=float, default=120.0)
     parser.add_argument("--start-delay-s", type=float, default=3.0)
     parser.add_argument("--controller-time-fraction", type=float, default=2.0)
     parser.add_argument("--prompt-depth-model", choices=("vits", "vitl", "vits-transparent"), default="vitl")
@@ -363,7 +364,11 @@ def _parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.frequency <= 0 or args.query_interval_steps <= 0:
         parser.error("frequency and query interval must be positive")
-    if args.max_wall_time_s <= 0 or args.max_consecutive_rejections <= 0:
+    if (
+        args.max_wall_time_s <= 0
+        or args.max_consecutive_rejections <= 0
+        or args.warmup_timeout_s <= 0
+    ):
         parser.error("watchdog limits must be positive")
     if args.execute:
         if args.latency_profile is None:
@@ -375,35 +380,11 @@ def _parse_args(argv=None):
     return args
 
 
-def main(argv=None) -> int:
-    args = _parse_args(argv)
-    # Hardware imports stay local so alignment/tests do not require Deoxys or
-    # RealSense.  This also gives a direct diagnosis for a wrong environment.
-    try:
-        import torch
-        from deoxys.franka_interface import FrankaInterface
-        from deoxys.utils.furniture_bench_utils import DualRealSenseSnapshotter
-        from deoxys.utils.panda_kinematics import PandaKinematics
-        from deoxys.utils.prompt_depth_anything import (
-            PromptDepthAnythingEstimator,
-            PromptDepthWorker,
-        )
-    except ImportError as exc:
-        raise RuntimeError(
-            "real evaluation requires the Deoxys/RealSense environment"
-        ) from exc
-
-    from src.behavior.base import model_requires_skill_input
-    from src.common.gripper import (
-        GRIPPER_OPEN_THRESHOLD_METERS,
-        normalizer_expects_binary_gripper_width,
-    )
-    from src.data_processing.offline_image_annotations import annotate_observation_image
-    from src.eval.real_skill_annotation_util import RealSkillAnnotationSession
+def _initialize_policy_runtime(args):
+    """Load CUDA policy only after the native RealSense pipelines are live."""
 
     actor, cfg = _load_actor(args.checkpoint, args.config, args.device)
     period_ns = int(round(1e9 / args.frequency))
-    period_s = period_ns / 1e9
     if actor.obs_horizon != 1:
         raise ValueError(
             "real Deoxys v1 currently supports obs_horizon=1 only; a larger "
@@ -462,12 +443,82 @@ def main(argv=None) -> int:
             "min_ee_z": limits.min_ee_z,
         },
     )
-    print(f"mode={'EXECUTE' if args.execute else 'DRY-RUN'} log={event_log.path}")
+    return actor, cfg, period_ns, latency, limits, event_log
+
+
+def _start_camera_and_initialize_policy(camera, args):
+    """Preserve the hardware-proven RealSense-before-CUDA ordering."""
+
+    camera.start()
+    return _initialize_policy_runtime(args)
+
+
+def main(argv=None) -> int:
+    args = _parse_args(argv)
+    # Hardware imports stay local so alignment/tests do not require Deoxys or
+    # RealSense.  This also gives a direct diagnosis for a wrong environment.
+    try:
+        import torch
+        from deoxys.franka_interface import FrankaInterface
+        from deoxys.utils.furniture_bench_utils import DualRealSenseSnapshotter
+        from deoxys.utils.panda_kinematics import PandaKinematics
+        from deoxys.utils.prompt_depth_anything import (
+            PromptDepthAnythingEstimator,
+            PromptDepthWorker,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "real evaluation requires the Deoxys/RealSense environment"
+        ) from exc
+
+    from src.behavior.base import model_requires_skill_input
+    from src.common.gripper import (
+        GRIPPER_OPEN_THRESHOLD_METERS,
+        normalizer_expects_binary_gripper_width,
+    )
+    from src.data_processing.offline_image_annotations import annotate_observation_image
+    from src.eval.real_skill_annotation_util import RealSkillAnnotationSession
 
     camera = None
     worker = None
     robot = None
-    controller_cfg = _absolute_controller_config(args.controller_time_fraction)
+    event_log = None
+    try:
+        # librealsense and CUDA allocator initialization conflict on this host
+        # when CUDA wins the ordering race.  Start both pipelines first and keep
+        # them running while the checkpoint is loaded.
+        camera = DualRealSenseSnapshotter(
+            front_serial=args.front_camera_serial,
+            wrist_serial=args.wrist_camera_serial,
+            record_width=320,
+            record_height=240,
+            furniture_task=args.task,
+            front_width=1280,
+            front_height=720,
+            front_fps=30,
+            front_depth_width=1280,
+            front_depth_height=720,
+            front_depth_fps=30,
+            wrist_width=424,
+            wrist_height=240,
+            wrist_fps=30,
+            wrist_depth_width=480,
+            wrist_depth_height=270,
+            wrist_depth_fps=30,
+        )
+        actor, cfg, period_ns, latency, limits, event_log = (
+            _start_camera_and_initialize_policy(camera, args)
+        )
+        controller_cfg = _absolute_controller_config(args.controller_time_fraction)
+    except BaseException:
+        if event_log is not None:
+            event_log.close()
+        if camera is not None:
+            camera.stop()
+        raise
+    period_s = period_ns / 1e9
+    print(f"mode={'EXECUTE' if args.execute else 'DRY-RUN'} log={event_log.path}")
+
     action_buffer = CoordinatedActionBuffer(period_ns)
     validated_actions = {}
     annotation_mode = _annotation_mode(cfg)
@@ -489,26 +540,6 @@ def main(argv=None) -> int:
 
     signal.signal(signal.SIGTERM, request_stop)
     try:
-        camera = DualRealSenseSnapshotter(
-            front_serial=args.front_camera_serial,
-            wrist_serial=args.wrist_camera_serial,
-            record_width=320,
-            record_height=240,
-            furniture_task=args.task,
-            front_width=1280,
-            front_height=720,
-            front_fps=30,
-            front_depth_width=1280,
-            front_depth_height=720,
-            front_depth_fps=30,
-            wrist_width=424,
-            wrist_height=240,
-            wrist_fps=30,
-            wrist_depth_width=480,
-            wrist_depth_height=270,
-            wrist_depth_fps=30,
-        )
-        camera.start()
         camera_info = camera.metadata()
         worker = PromptDepthWorker(
             PromptDepthAnythingEstimator(
@@ -536,20 +567,48 @@ def main(argv=None) -> int:
             )
 
         print("warming camera, PromptDA, and timestamped robot buffers...")
-        warm_deadline = time.monotonic() + 30.0
+        warm_deadline = time.monotonic() + args.warmup_timeout_s
+        result = None
+        prompt_ready = False
+        robot_records = []
+        gripper_records = []
         while time.monotonic() < warm_deadline:
             worker.submit(camera.latest())
             result = worker.latest()
-            if (
+            prompt_ready = bool(
                 result is not None
                 and result.get("ready_wall_time_ns") is not None
-                and len(_timestamped_records(robot, "robot")) >= 2
-                and len(_timestamped_records(robot, "gripper")) >= 2
+                and not result.get("error")
+                and {
+                    "depth_image1",
+                    "depth_image2",
+                }.issubset(result.get("depths", {}))
+            )
+            robot_records = _timestamped_records(robot, "robot")
+            gripper_records = _timestamped_records(robot, "gripper")
+            if (
+                prompt_ready
+                and len(robot_records) >= 2
+                and len(gripper_records) >= 2
             ):
                 break
             time.sleep(0.005)
         else:
-            raise RuntimeError("timed out warming PromptDA or robot state buffers")
+            prompt_error = None if result is None else result.get("error")
+            event_log.write(
+                "warmup_failed",
+                warmup_timeout_s=args.warmup_timeout_s,
+                prompt_ready=prompt_ready,
+                prompt_error=prompt_error,
+                robot_state_records=len(robot_records),
+                gripper_state_records=len(gripper_records),
+            )
+            raise RuntimeError(
+                "timed out warming hardware inputs: "
+                f"PromptDA ready={prompt_ready} error={prompt_error!r}, "
+                f"robot states={len(robot_records)}, "
+                f"gripper states={len(gripper_records)}"
+            )
 
         measured_gripper = robot.last_gripper_q
         if measured_gripper is not None:
