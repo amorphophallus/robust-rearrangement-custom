@@ -14,6 +14,7 @@ from pathlib import Path
 TASKS = ("one_leg", "round_table", "lamp")
 DEFAULT_MAX_STEPS = {"one_leg": 700, "round_table": 1000, "lamp": 1000}
 DEFAULT_POST_SUCCESS = {"one_leg": 200, "round_table": 100, "lamp": 20}
+TASK_SEED_OFFSETS = {"one_leg": 0, "round_table": 100_000, "lamp": 200_000}
 
 
 def parse_task_values(values: list[str], defaults: dict[str, int], name: str):
@@ -78,6 +79,12 @@ def build_parser():
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--data-root", type=Path, default=None)
     parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument(
+        "--base-seed",
+        type=int,
+        default=20_901_000,
+        help="Base simulator seed; each task receives a fixed disjoint offset.",
+    )
     parser.add_argument("--n-envs", type=int, default=4)
     parser.add_argument("--randomness", choices=("low", "med", "high"), default="low")
     parser.add_argument("--action-type", choices=("pos", "delta"), default="pos")
@@ -101,6 +108,8 @@ def main():
         raise ValueError("--target-successes must be positive")
     if args.n_envs <= 0:
         raise ValueError("--n-envs must be positive")
+    if args.base_seed < 0:
+        raise ValueError("--base-seed must be non-negative")
     if not args.output_suffix.strip() or "/" in args.output_suffix:
         raise ValueError("--output-suffix must be a nonempty single path component")
     if args.annotation_source == "vlm" and not args.vlm_base_url:
@@ -129,6 +138,9 @@ def main():
     print("saved_metadata=skill,guidance_point,guidance_point_2d,camera_info")
 
     for task in args.tasks:
+        task_seed = args.base_seed + TASK_SEED_OFFSETS[task]
+        if task_seed > 2_147_483_647:
+            raise ValueError(f"Derived seed exceeds int32 range for {task}: {task_seed}")
         checkpoint = checkpoints[task]
         target_dir = output_dir(data_root, task, args.randomness, args.output_suffix)
         existing_pickles = list(target_dir.rglob("*.pkl*")) if target_dir.exists() else []
@@ -146,6 +158,8 @@ def main():
             "src.eval.evaluate_model",
             "--gpu",
             str(args.gpu),
+            "--seed",
+            str(task_seed),
             "--n-envs",
             str(args.n_envs),
             "--n-rollouts",
@@ -198,7 +212,7 @@ def main():
         if forbidden.intersection(command):
             raise RuntimeError("Collection command would mutate saved raw images")
 
-        print(f"task={task} output_dir={target_dir}")
+        print(f"task={task} simulator_seed={task_seed} output_dir={target_dir}")
         print(f"command={shlex.join(command)}")
         if not args.dry_run:
             subprocess.run(

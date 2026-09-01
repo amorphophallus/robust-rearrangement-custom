@@ -24,6 +24,8 @@ class FurnitureBenchDataCollectionCliTest(unittest.TestCase):
             "scripted",
             "--output-suffix",
             "unit-test-clean-raw",
+            "--base-seed",
+            "20901000",
             "--dry-run",
         ]
         result = subprocess.run(command, cwd=ROOT, check=True, text=True, capture_output=True)
@@ -31,6 +33,8 @@ class FurnitureBenchDataCollectionCliTest(unittest.TestCase):
         self.assertIn("--annotate-skill", output)
         self.assertIn("--enable-annotation-verify", output)
         self.assertIn("--annotation-source scripted", output)
+        self.assertIn("--seed 20901000", output)
+        self.assertIn("simulator_seed=20901000", output)
         self.assertIn("saved_image_annotation_mode=none", output)
         self.assertNotIn("--guidance-point-on-image", output)
         self.assertNotIn("--grasp-annotation-on-image", output)

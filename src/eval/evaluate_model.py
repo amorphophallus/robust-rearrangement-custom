@@ -1,5 +1,6 @@
 import argparse
 import os
+import random
 import re
 import subprocess
 import sys
@@ -19,6 +20,7 @@ except Exception as _e:
     print(f"[WARN] isaacgym preload failed or unavailable: {_e}")
 
 from gymnasium import Env
+import numpy as np
 import torch  # needs to be after isaac gym imports
 from omegaconf import DictConfig, OmegaConf
 from src.behavior.base import Actor  # noqa
@@ -645,6 +647,7 @@ if __name__ == "__main__":
     parser.add_argument("--wt-path", type=str, default=None)
 
     parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=0, help="Simulator, policy, NumPy, and Python RNG seed.")
     parser.add_argument("--n-envs", type=int, default=1)
     parser.add_argument("--n-rollouts", type=int, default=1)
     parser.add_argument("--randomness", type=str, default="low")
@@ -928,6 +931,14 @@ if __name__ == "__main__":
 
     # Validate the arguments
     validate_args(args)
+    if args.seed < 0:
+        parser.error("--seed must be non-negative")
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+    print(f"Simulator and policy seed: {args.seed}")
     annotation_noise_config = make_annotation_noise_config(
         pos_std_m=args.annotation_noise_pos_std_m,
         ori_std_deg=args.annotation_noise_ori_std_deg,
@@ -1067,6 +1078,7 @@ if __name__ == "__main__":
             ),
             "annotation_noise_config": annotation_noise_config.to_dict(),
             "eval_randomness": args.randomness,
+            "simulator_seed": args.seed,
             "n_envs": args.n_envs,
             "observation_space": args.observation_space,
             "action_type": args.action_type,
@@ -1625,6 +1637,7 @@ if __name__ == "__main__":
                         "eval_annotation_config": summary_eval_annotation_config,
                         "annotation_noise_config": annotation_noise_config.to_dict(),
                         "eval_randomness": args.randomness,
+                        "simulator_seed": args.seed,
                         "n_envs": args.n_envs,
                         "observation_space": args.observation_space,
                         "action_type": args.action_type,
@@ -1847,6 +1860,7 @@ if __name__ == "__main__":
                         "eval_annotation_config": summary_eval_annotation_config,
                         "annotation_noise_config": annotation_noise_config.to_dict(),
                         "eval_randomness": args.randomness,
+                        "simulator_seed": args.seed,
                         "n_envs": args.n_envs,
                         "observation_space": args.observation_space,
                         "action_type": args.action_type,
