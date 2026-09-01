@@ -6,12 +6,17 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from src.data_processing.process_pickles import process_pickle_file
+from scripts.data_collection.collect_furniturebench import evaluation_environment
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class FurnitureBenchDataCollectionCliTest(unittest.TestCase):
+    def test_collection_subprocess_uses_requested_data_root(self):
+        requested = Path("/tmp/furniturebench-production-root")
+        self.assertEqual(evaluation_environment(requested)["DATA_DIR_RAW"], str(requested))
+
     def test_collect_dry_run_records_metadata_without_mutating_images(self):
         command = [
             sys.executable,

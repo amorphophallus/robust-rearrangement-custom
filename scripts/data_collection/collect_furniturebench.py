@@ -47,9 +47,10 @@ def output_dir(data_root: Path, task: str, randomness: str, suffix: str):
     return data_root / "raw" / "diffik" / "sim" / task / "rollout" / randomness / suffix
 
 
-def evaluation_environment():
+def evaluation_environment(data_root: Path):
     """Expose the active Conda runtime libraries required by Isaac Gym."""
     environment = os.environ.copy()
+    environment["DATA_DIR_RAW"] = str(data_root)
     conda_lib = str(Path(sys.prefix).resolve() / "lib")
     existing = environment.get("LD_LIBRARY_PATH", "")
     components = [component for component in existing.split(":") if component]
@@ -218,7 +219,7 @@ def main():
             subprocess.run(
                 command,
                 cwd=repo_root,
-                env=evaluation_environment(),
+                env=evaluation_environment(data_root),
                 check=True,
             )
 
