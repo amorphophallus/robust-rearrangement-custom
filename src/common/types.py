@@ -30,6 +30,7 @@ class Trajectory(TypedDict):
     error: bool
     error_description: str
     annotation_source: str
+    image_annotation_mode: str
     vlm_model_revision: Optional[str]
     guidance_frame: str
     guidance_schema_version: int

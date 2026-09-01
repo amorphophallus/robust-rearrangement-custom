@@ -15,6 +15,8 @@ import torch
 from IPython.display import HTML, display
 from tqdm import tqdm
 
+from src.common.pickle_compat import load_pickle_path
+
 
 def format_speedup(fps):
     speedup = fps / 10
@@ -126,18 +128,7 @@ def data_to_video(data: dict, cameras=[1, 2]) -> np.ndarray:
 
 
 def unpickle_data(pickle_path: Union[Path, str]):
-    pickle_path = Path(pickle_path)
-    if pickle_path.suffix == ".gz":
-        with gzip.open(pickle_path, "rb") as f:
-            return pickle.load(f)
-    elif pickle_path.suffix == ".pkl":
-        with open(pickle_path, "rb") as f:
-            return pickle.load(f)
-    elif pickle_path.suffix == ".xz":
-        with lzma.open(pickle_path, "rb") as f:
-            return pickle.load(f)
-
-    raise ValueError(f"Invalid file extension: {pickle_path.suffix}")
+    return load_pickle_path(pickle_path)
 
 
 def pickle_data(data, pickle_path: Union[Path, str]):

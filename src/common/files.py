@@ -3,8 +3,6 @@ import re
 from glob import glob
 from pathlib import Path
 from typing import Union, List
-from ipdb import set_trace as bp
-
 from src.common.types import (
     Controllers,
     Domains,

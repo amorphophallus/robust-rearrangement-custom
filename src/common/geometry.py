@@ -2,7 +2,6 @@ import numpy as np
 import torch
 
 # import pytorch3d.transforms as pt
-from ipdb import set_trace as bp
 from scipy.spatial.transform import Rotation as R
 import torch.nn.functional as F
 

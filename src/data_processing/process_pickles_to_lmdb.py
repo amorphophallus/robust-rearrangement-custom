@@ -52,11 +52,11 @@ from src.dataset.depth_stats import (
     finalize_depth_moments,
     update_depth_moments,
 )
-from src.visualization.render_mp4 import unpickle_data
 from src.common.gripper import (
     GRIPPER_OPEN_THRESHOLD_METERS,
     GRIPPER_WIDTH_ENCODING,
 )
+from src.common.pickle_compat import load_pickle_path
 
 
 LOWDIM_KEYS = tuple(key for key in TIMESERIES_KEYS if key not in {
@@ -89,7 +89,12 @@ def format_bytes(num_bytes: int) -> str:
     return f"{num_bytes} B"
 
 
-def log_lmdb_storage_layout(frame_specs, lowdim_specs, resize_image: bool):
+def log_lmdb_storage_layout(
+    frame_specs,
+    lowdim_specs,
+    resize_image: bool,
+    image_size: Optional[int],
+):
     compression = frame_specs.get("compression")
     codec = compression.get("codec") if isinstance(compression, dict) else compression
     print(
@@ -98,6 +103,7 @@ def log_lmdb_storage_layout(frame_specs, lowdim_specs, resize_image: bool):
         "per episode."
     )
     print(f"[INFO] resize_image={resize_image} (default: False)")
+    print(f"[INFO] image_size={image_size} (cross-simulator contract: 224)")
     print("[INFO] Image frame layout:")
     for key in frame_specs["ordered_keys"]:
         spec = frame_specs["specs"][key]
@@ -374,7 +380,7 @@ def log_first_pickle_shape(pickle_paths: List[Path]):
         print("[WARNING] No pickle files found for the specified criteria.")
         return
 
-    first_pickle_data = unpickle_data(pickle_paths[0])
+    first_pickle_data = load_pickle_path(pickle_paths[0])
     print("[INFO] Shape of the first pickle file's data:")
     for key, value in first_pickle_data.items():
         if key in {"success", "task", "action_type"}:
@@ -455,7 +461,9 @@ def process_batch(
     noop_threshold,
     n_cpus,
     resize_image,
+    image_size,
     image_annotation_mode,
+    required_source_image_annotation_mode,
 ):
     if n_cpus <= 1:
         return [
@@ -464,7 +472,9 @@ def process_batch(
                 noop_threshold=noop_threshold,
                 calculate_pos_action_from_delta=True,
                 resize_image=resize_image,
+                image_size=image_size,
                 image_annotation_mode=image_annotation_mode,
+                required_source_image_annotation_mode=required_source_image_annotation_mode,
                 include_env_metadata=True,
             )
             for path in batch_paths
@@ -478,7 +488,9 @@ def process_batch(
                     noop_threshold=noop_threshold,
                     calculate_pos_action_from_delta=True,
                     resize_image=resize_image,
+                    image_size=image_size,
                     image_annotation_mode=image_annotation_mode,
+                    required_source_image_annotation_mode=required_source_image_annotation_mode,
                     include_env_metadata=True,
                 ),
                 batch_paths,
@@ -593,10 +605,28 @@ def main():
         help="Resize images to standard dimensions (240x320x3).",
     )
     parser.add_argument(
+        "--image-size",
+        type=int,
+        default=None,
+        help=(
+            "Center-crop both RGB-D streams to IMAGE_SIZE x IMAGE_SIZE before "
+            "storage. Use 224 to merge FurnitureBench, AutoMate, and ManiSkill."
+        ),
+    )
+    parser.add_argument(
         "--image-annotation-mode",
         choices=IMAGE_ANNOTATION_MODES,
         default="none",
         help="Deterministically render saved 2D metadata onto color_image2 before LMDB encoding.",
+    )
+    parser.add_argument(
+        "--require-source-image-annotation-mode",
+        choices=IMAGE_ANNOTATION_MODES,
+        default=None,
+        help=(
+            "Reject source pickles unless their top-level image_annotation_mode "
+            "matches this value. New two-stage campaigns should pass 'none'."
+        ),
     )
     parser.add_argument(
         "--provenance-json",
@@ -632,6 +662,10 @@ def main():
 
     if args.frame_compression == "zstd":
         require_zstandard()
+    if args.image_size is not None and args.image_size <= 0:
+        raise ValueError("--image-size must be positive.")
+    if args.resize_image and args.image_size is not None:
+        raise ValueError("--resize-image and --image-size cannot be used together.")
 
     provenance = {}
     if args.provenance_json is not None:
@@ -738,7 +772,9 @@ def main():
             noop_threshold=noop_threshold,
             n_cpus=n_cpus,
             resize_image=args.resize_image,
+            image_size=args.image_size,
             image_annotation_mode=args.image_annotation_mode,
+            required_source_image_annotation_mode=args.require_source_image_annotation_mode,
         )
         batch_image_bytes = 0
         batch_lowdim_bytes = 0
@@ -763,6 +799,7 @@ def main():
                         frame_specs,
                         lowdim_specs,
                         resize_image=args.resize_image,
+                        image_size=args.image_size,
                     )
 
                 episode_length = int(episode_data["episode_length"])
@@ -892,6 +929,8 @@ def main():
         "storage_format": "lmdb",
         "frame_compression": frame_specs.get("compression", {"codec": "none"}),
         "image_annotation_mode": args.image_annotation_mode,
+        "source_image_annotation_mode": args.require_source_image_annotation_mode,
+        "stored_image_size": args.image_size,
         "provenance": provenance,
         "normalizer_stats": serialized_normalizer_stats,
         "normalizer_stats_keys": list(NORMALIZER_STATS_KEYS),

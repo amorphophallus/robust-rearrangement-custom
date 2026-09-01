@@ -13,14 +13,27 @@ from src.common.types import Trajectory, Observation
 from src.common.geometry import np_action_6d_to_quat
 from src.common.eepose import ROBOT_BASE, SIM_LOCAL
 from src.common.guidance import GUIDANCE_SCHEMA_VERSION
+from src.data_collection.pickle_contract import (
+    CANONICAL_IMAGE_SIZE,
+    camera_calibration_to_robot_base,
+    center_crop_camera_calibration,
+    center_crop_grasp_mapping,
+    center_crop_observation_images,
+    center_crop_point_mapping,
+    flattened_poses_to_robot_base,
+    legacy_sim_local_to_robot_base_matrix,
+    normalize_depth_meters,
+    point_to_robot_base,
+    pose_to_robot_base,
+    robot_state_with_base_frame_aliases,
+    validate_and_align_pickle_timeseries,
+)
 
-from ipdb import set_trace as bp
 from src.visualization.render_mp4 import (
     create_in_memory_mp4,
     depth2heatmap,
     analyze_depth_smoothness,
 )
-from src.eval.skill_annotation_util import draw_skill_on_image
 
 
 def _front_point(point_mapping) -> np.ndarray | None:
@@ -215,12 +228,27 @@ def save_raw_rollout(
     vlm_annotations: List[dict] = None,
     vlm_point_error_records: List[dict] = None,
     annotation_source: str = "scripted",
+    image_annotation_mode: str = "none",
     vlm_model_revision: str = None,
     eepose_frame: str = ROBOT_BASE,
     eepose_original_frame: str = SIM_LOCAL,
     policy_eepose_frame: str = ROBOT_BASE,
     guidance_frame: str = ROBOT_BASE,
 ):
+    source_shapes = {
+        "color_image1": tuple(np.asarray(imgs1).shape[1:3]),
+        "color_image2": tuple(np.asarray(imgs2).shape[1:3]),
+    }
+    depth_image1 = normalize_depth_meters(depth_image1)
+    depth_image2 = normalize_depth_meters(depth_image2)
+    imgs1, imgs2, depth_image1, depth_image2 = center_crop_observation_images(
+        imgs1,
+        imgs2,
+        depth_image1,
+        depth_image2,
+        CANONICAL_IMAGE_SIZE,
+    )
+
     observations: List[Observation] = list()
     include_vlm_metadata = any(
         value is not None
@@ -260,10 +288,24 @@ def save_raw_rollout(
         oracle_guidance_points_2d = [None] * len(robot_states)
     if vlm_annotations is None:
         vlm_annotations = [None] * len(robot_states)
+
+    guidance_points_2d = [
+        center_crop_point_mapping(value, source_shapes, CANONICAL_IMAGE_SIZE)
+        for value in guidance_points_2d
+    ]
+    grasp_annotations_2d = [
+        center_crop_grasp_mapping(value, source_shapes, CANONICAL_IMAGE_SIZE)
+        for value in grasp_annotations_2d
+    ]
+    oracle_guidance_points_2d = [
+        center_crop_point_mapping(value, source_shapes, CANONICAL_IMAGE_SIZE)
+        for value in oracle_guidance_points_2d
+    ]
     error_by_step = {
         int(record["step_idx"]): record
         for record in (vlm_point_error_records or [])
     }
+    sim_local_to_base = legacy_sim_local_to_robot_base_matrix(robot_states[0])
 
     rows = zip(
         robot_states,
@@ -306,6 +348,20 @@ def save_raw_rollout(
             oracle_guidance_point_2d,
             vlm_annotation,
         ) = row
+        parts_pose = flattened_poses_to_robot_base(
+            parts_pose, sim_local_to_base
+        )
+        guidance_point = point_to_robot_base(
+            guidance_point, sim_local_to_base
+        )
+        guidance_point_clean = point_to_robot_base(
+            guidance_point_clean, sim_local_to_base
+        )
+        guidance_pose = pose_to_robot_base(guidance_pose, sim_local_to_base)
+        guidance_pose_clean = pose_to_robot_base(
+            guidance_pose_clean, sim_local_to_base
+        )
+        robot_state = robot_state_with_base_frame_aliases(robot_state)
         observation = {
             "robot_state": robot_state,
             "color_image1": image1,
@@ -341,7 +397,12 @@ def save_raw_rollout(
             continue
 
         if front_camera_info is None and "color_image2" in camera_info:
-            front_camera_info = camera_info["color_image2"]
+            front_camera_info = center_crop_camera_calibration(
+                camera_info["color_image2"], CANONICAL_IMAGE_SIZE
+            )
+            front_camera_info = camera_calibration_to_robot_base(
+                front_camera_info, robot_states[0]
+            )
 
     if action_type == "pos":
 
@@ -371,6 +432,21 @@ def save_raw_rollout(
             [delta_action_pos, delta_action_quat.as_quat(), actions[:, -1:]], axis=1
         )
 
+    elif action_type != "delta":
+        raise ValueError(
+            f"Unsupported raw rollout action_type {action_type!r}; expected 'pos' or 'delta'."
+        )
+
+    # FurnitureSim saturates every policy action to its [-1, 1] action space
+    # before execution.  Preserve the gripper command that the simulator
+    # actually executed instead of an occasionally overshooting raw network
+    # output (for example 1.0000001).
+    actions[:, -1] = np.clip(actions[:, -1], -1.0, 1.0)
+
+    actions, rewards = validate_and_align_pickle_timeseries(
+        observations, actions, rewards
+    )
+
     data: Trajectory = {
         "env": "FurnitureBench",
         "observations": observations,
@@ -381,8 +457,11 @@ def save_raw_rollout(
         },
         "success": success,
         "task": task,
-        "action_type": action_type,
+        # Actions above are always serialized as base-frame delta pose, even
+        # when the environment supplied absolute pose targets.
+        "action_type": "delta",
         "annotation_source": annotation_source,
+        "image_annotation_mode": image_annotation_mode,
         "vlm_model_revision": vlm_model_revision,
         "eepose_frame": eepose_frame,
         "eepose_original_frame": eepose_original_frame,
@@ -414,6 +493,10 @@ def save_raw_rollout(
 
         imgs2_for_video = imgs2.copy()
         if skill_on_image:
+            # Avoid importing camera/hardware dependencies when callers only
+            # need raw pickle I/O on a headless conversion host.
+            from src.eval.skill_annotation_util import draw_skill_on_image
+
             n_annotated = min(len(imgs2_for_video), len(skills))
             for frame_idx in range(n_annotated):
                 skill = skills[frame_idx]

@@ -4,11 +4,8 @@ from typing import Dict, Union
 from src.common.robot_state import ROBOT_STATES
 import numpy as np
 import torch
-from torchvision.transforms import functional as F, InterpolationMode
 
 from scipy.spatial.transform import Rotation as R
-
-from ipdb import set_trace as bp
 
 
 def zipped_img_generator(filename, max_samples=1000):
@@ -32,6 +29,8 @@ def zipped_img_generator(filename, max_samples=1000):
 
 def resize(img: Union[np.ndarray, torch.Tensor]):
     """Resizes `img` into 320x240."""
+    from torchvision.transforms import InterpolationMode, functional as F
+
     th, tw = 240, 320
     was_numpy = False
 
@@ -63,6 +62,8 @@ def resize_crop(img: Union[np.ndarray, torch.Tensor]):
 
     Assumes that the channel is last.
     """
+    from torchvision.transforms import InterpolationMode, functional as F
+
     # Must account for maybe having batch dimension
     th, tw = 240, 320
     was_numpy = False
@@ -104,27 +105,33 @@ def clip_quat_xyzw_magnitude(
     delta_quat_xyzw: np.ndarray,
     clip_mag=0.35,
     episode_scale_factor=None,
+    per_action=False,
 ) -> np.ndarray:
-    """
-    Clips the legacy episode-level rotation magnitude.
+    """Clip quaternion rotation magnitudes with explicit legacy semantics.
 
     ``episode_scale_factor`` is used by timestamp-aligned segments to preserve
-    the exact scale computed from their unsplit source episode.  Without it the
-    historical behavior is unchanged.
+    the exact scale computed from their unsplit source episode. Canonical new
+    data sets ``per_action=True`` so trajectory length cannot change an
+    individual command; legacy callers retain episode-level clipping.
     """
     assert delta_quat_xyzw.shape[-1] == 4
+    if clip_mag < 0:
+        raise ValueError(f"clip_mag must be nonnegative, got {clip_mag}.")
 
     delta_rotvec = R.from_quat(delta_quat_xyzw).as_rotvec()
-
-    if episode_scale_factor is None:
-        magnitude = np.linalg.norm(delta_rotvec)
-        scale_factor = min(1.0, clip_mag / magnitude) if magnitude > 0 else 1.0
-    else:
+    if episode_scale_factor is not None:
         scale_factor = float(episode_scale_factor)
         if not np.isfinite(scale_factor) or not 0.0 < scale_factor <= 1.0:
             raise ValueError(
                 "episode_scale_factor must be finite and in the interval (0, 1]"
             )
+    elif per_action:
+        magnitude = np.linalg.norm(delta_rotvec, axis=-1, keepdims=True)
+        safe_magnitude = np.maximum(magnitude, np.finfo(delta_rotvec.dtype).eps)
+        scale_factor = np.minimum(1.0, clip_mag / safe_magnitude)
+    else:
+        magnitude = np.linalg.norm(delta_rotvec)
+        scale_factor = min(1.0, clip_mag / magnitude) if magnitude > 0 else 1.0
     delta_rotvec = scale_factor * delta_rotvec
 
     delta_quat_xyzw = R.from_rotvec(delta_rotvec).as_quat()

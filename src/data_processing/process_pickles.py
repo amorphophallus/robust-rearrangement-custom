@@ -8,12 +8,23 @@ from typing import List
 
 import numpy as np
 import torch
-import zarr
-from furniture_bench.robot.robot_state import filter_and_concat_robot_state
-from numcodecs import Blosc, JSON
 from tqdm import tqdm, trange
+
+try:
+    import zarr
+    from numcodecs import Blosc, JSON
+except ModuleNotFoundError as error:
+    zarr = None
+    Blosc = None
+    JSON = None
+    _ZARR_IMPORT_ERROR = error
+else:
+    _ZARR_IMPORT_ERROR = None
+
 from src.common.types import Trajectory
 from src.common.files import get_processed_path, get_raw_paths
+from src.common.pickle_compat import load_pickle_path
+from src.common.robot_state import filter_and_concat_robot_state
 from src.common.skills import SKILL_ORDER, SKILL_TO_ONEHOT
 from src.common.eepose import (
     EEPPOSE_FRAME_HELP,
@@ -23,7 +34,6 @@ from src.common.eepose import (
     resolve_eepose_frame,
     select_policy_eepose,
 )
-from src.visualization.render_mp4 import unpickle_data
 from src.common.geometry import (
     np_proprioceptive_quat_to_6d_rotation,
     np_action_quat_to_6d_rotation,
@@ -37,8 +47,10 @@ from src.common.gripper import (
 from src.data_processing.utils import resize, resize_crop
 from src.data_processing.utils import clip_quat_xyzw_magnitude
 from src.data_processing.offline_image_annotations import annotate_observation_image
-
-from ipdb import set_trace as bp  # noqa
+from src.data_collection.pickle_contract import (
+    center_crop_observation_images,
+    normalize_depth_meters,
+)
 
 TIMESERIES_KEYS = (
     "robot_state",
@@ -78,6 +90,10 @@ def initialize_zarr_store(out_path, full_data_shapes, chunksize=32):
     """
     Initialize the Zarr store with full dimensions for each dataset.
     """
+    if zarr is None:
+        raise ModuleNotFoundError(
+            "Zarr output requires the optional zarr and numcodecs packages."
+        ) from _ZARR_IMPORT_ERROR
     z = zarr.open(str(out_path), mode="w")
     z.attrs["time_created"] = datetime.now().astimezone().isoformat()
 
@@ -131,14 +147,6 @@ def ensure_float32(array: np.ndarray) -> np.ndarray:
     if np.issubdtype(array.dtype, np.floating):
         return array.astype(np.float32, copy=False)
     return array
-
-
-def normalize_depth_meters(array: np.ndarray) -> np.ndarray:
-    """Return depth in positive meters for legacy simulation and real data."""
-    depth = ensure_float32(np.asarray(array))
-    if not np.all(np.isfinite(depth)):
-        raise ValueError("Depth images contain NaN or infinite values.")
-    return np.abs(depth)
 
 
 def pickle_source_identity(pickle_path: Path) -> str:
@@ -262,13 +270,25 @@ def process_pickle_file(
     calculate_pos_action_from_delta: bool = False,
     resize_image: bool = False,
     image_annotation_mode: str = "none",
+    required_source_image_annotation_mode: str = None,
     include_env_metadata: bool = False,
     eepose_frame: str = ROBOT_BASE,
+    image_size: int = None,
 ):
     """
     Process a single pickle file and return processed data.
     """
-    data: Trajectory = unpickle_data(pickle_path)
+    data: Trajectory = load_pickle_path(pickle_path)
+    source_image_annotation_mode = data.get("image_annotation_mode")
+    if (
+        required_source_image_annotation_mode is not None
+        and source_image_annotation_mode != required_source_image_annotation_mode
+    ):
+        raise ValueError(
+            f"{pickle_path}: expected source image_annotation_mode="
+            f"{required_source_image_annotation_mode!r}, got "
+            f"{source_image_annotation_mode!r}"
+        )
     obs = data["observations"]
 
     metadata = data.get("metadata")
@@ -342,6 +362,23 @@ def process_pickle_file(
         depth_image1.shape == depth_image2.shape
     ), "Depth images have different shapes"
 
+    if resize_image and image_size is not None:
+        raise ValueError("resize_image and image_size cannot be used together.")
+
+    if image_size is not None:
+        (
+            color_image1,
+            color_image2,
+            depth_image1,
+            depth_image2,
+        ) = center_crop_observation_images(
+            color_image1,
+            color_image2,
+            depth_image1,
+            depth_image2,
+            image_size,
+        )
+
     if resize_image:
         if color_image1.shape[1:] != (240, 320, 3):
             # Resize only if the shape is not already correct
@@ -401,6 +438,7 @@ def process_pickle_file(
         action_delta_quat[:, 3:7],
         clip_mag=0.35,
         episode_scale_factor=legacy_rotation_scale,
+        per_action=("image_annotation_mode" in data),
     )
 
     # Take the sign of the gripper action
@@ -499,6 +537,7 @@ def parallel_process_pickle_files(
     calculate_pos_action_from_delta=False,
     resize_image=False,
     eepose_frame=ROBOT_BASE,
+    image_size=None,
 ):
     """
     Process all pickle files in parallel and aggregate results.
@@ -540,10 +579,11 @@ def parallel_process_pickle_files(
         for path in tqdm(pickle_paths, desc="Processing files"):
             data = process_pickle_file(
                 path,
-                noop_threshold,
-                calculate_pos_action_from_delta,
-                resize_image,
+                noop_threshold=noop_threshold,
+                calculate_pos_action_from_delta=calculate_pos_action_from_delta,
+                resize_image=resize_image,
                 eepose_frame=eepose_frame,
+                image_size=image_size,
             )
             aggregate_data(data)
     else:
@@ -553,12 +593,11 @@ def parallel_process_pickle_files(
                 executor.submit(
                     process_pickle_file,
                     path,
-                    noop_threshold,
-                    calculate_pos_action_from_delta,
-                    resize_image,
-                    "none",
-                    False,
-                    eepose_frame,
+                    noop_threshold=noop_threshold,
+                    calculate_pos_action_from_delta=calculate_pos_action_from_delta,
+                    resize_image=resize_image,
+                    eepose_frame=eepose_frame,
+                    image_size=image_size,
                 )
                 for path in pickle_paths
             ]
@@ -672,15 +711,43 @@ if __name__ == "__main__":
     parser.add_argument("--n-cpus", type=int, default=1)
     parser.add_argument("--chunk-size", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=20)
-    parser.add_argument("--resize-image", action="store_true", help="Resize images to standard dimensions (240x320x3)")
-    parser.add_argument("--input-dir", type=str, help="Path to the directory containing pkl files", default=None)
-    parser.add_argument("--output-dir", type=str, help="Path to save the zarr file", default=None)
+    parser.add_argument(
+        "--resize-image",
+        action="store_true",
+        help="Resize images to standard dimensions (240x320x3)",
+    )
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        default=None,
+        help=(
+            "Center-crop both RGB-D streams to IMAGE_SIZE x IMAGE_SIZE "
+            "(use 224 for the cross-simulator contract)."
+        ),
+    )
+    parser.add_argument(
+        "--input-dir",
+        type=str,
+        help="Path to the directory containing pkl files",
+        default=None,
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        help="Path to save the zarr file",
+        default=None,
+    )
     parser.add_argument(
         "--eepose-frame",
         default=ROBOT_BASE,
         help=EEPPOSE_FRAME_HELP,
     )
     args = parser.parse_args()
+
+    if args.image_size is not None and args.image_size <= 0:
+        raise ValueError("--image-size must be positive.")
+    if args.resize_image and args.image_size is not None:
+        raise ValueError("--resize-image and --image-size cannot be used together.")
 
     try:
         resolved_eepose_frame = resolve_eepose_frame(
@@ -724,7 +791,7 @@ if __name__ == "__main__":
     # Output the shape of the first pickle file
     total_files = len(pickle_paths)
     if total_files > 0:
-        first_pickle_data = unpickle_data(pickle_paths[0])
+        first_pickle_data = load_pickle_path(pickle_paths[0])
         print("[INFO] Shape of the first pickle file's data:")
         for key, value in first_pickle_data.items():
             if key == "success" or key == "task" or key == "action_type":
@@ -811,6 +878,7 @@ if __name__ == "__main__":
                     calculate_pos_action_from_delta=True,
                     resize_image=args.resize_image,
                     eepose_frame=args.eepose_frame,
+                    image_size=args.image_size,
                 )
                 for k in TIMESERIES_KEYS:
                     batch_timeseries[k].append(data[k])
@@ -888,6 +956,7 @@ if __name__ == "__main__":
         z.attrs["gripper_width_encoding"] = GRIPPER_WIDTH_ENCODING
         z.attrs["gripper_width_open_threshold_m"] = GRIPPER_OPEN_THRESHOLD_METERS
         z.attrs["normalizer_stats"] = serialize_normalizer_stats(normalizer_stats)
+        z.attrs["stored_image_size"] = args.image_size
         print("[INFO] Batch processing complete.")
         exit(0)
 
@@ -904,6 +973,7 @@ if __name__ == "__main__":
         calculate_pos_action_from_delta=True,
         resize_image=args.resize_image,
         eepose_frame=args.eepose_frame,
+        image_size=args.image_size,
     )
     normalizer_stats = compute_normalizer_stats_from_dict(all_data)
 
@@ -967,6 +1037,7 @@ if __name__ == "__main__":
     z.attrs["task"] = args.task
     z.attrs["randomness"] = args.randomness
     z.attrs["normalizer_stats"] = serialize_normalizer_stats(normalizer_stats)
+    z.attrs["stored_image_size"] = args.image_size
     z.attrs["demo_outcome"] = args.demo_outcome
     z.attrs["suffix"] = args.suffix
     z.attrs["gripper_width_encoding"] = GRIPPER_WIDTH_ENCODING

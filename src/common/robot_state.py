@@ -5,8 +5,6 @@ from enum import Enum
 
 import numpy as np
 
-from ipdb import set_trace as bp
-
 
 # List of robot state we are going to use during training and testing.
 ROBOT_STATES = [
