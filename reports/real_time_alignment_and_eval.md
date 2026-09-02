@@ -138,7 +138,7 @@ legacy bug 的数值效果。
 
 ## 新数据采集
 
-下一版 Deoxys recorder 的正式合同是：
+Deoxys recorder 的 v6 正式合同已实现，并已通过不连接硬件的时序/保存单测：
 
 - 固定 `--record-fps`（默认 10 Hz），所有已执行 no-op 都进入动作 buffer；
 - 相机 30 Hz 原始 RGB-D、robot state、gripper state 和 action command 分别完整缓存；
@@ -157,7 +157,50 @@ PromptDA 只替换最终 observation 的 canonical `depth_image1/2`，原始 Rea
 保留为 `depth_image1/2_realsense`，RGB 从不写 marker。colored guidance point 仍只在
 pickle-to-LMDB 阶段渲染。保存 metadata 必须包含完整 alignment residual 统计，并把顶层
 `annotation_source` 固定为 `scripted`、实现记录为 `real_skill_annotation_util`。在该
-recorder 合同完成实现和真实数据 audit 前，不得把新采集数据加入 production campaign。
+recorder 会在写 pickle 前再检查上述字段、10 Hz 连续性、每帧 target-time、无 VLM
+metadata、offline annotation 完整性，并用同一帧 3-D guidance 和相机标定重投影核对两路
+`guidance_point_2d`。任一检查失败时保持 `pending_save` 并要求丢弃，不会产生 pickle。
+
+FrankaControl 正式启动命令必须显式包含：
+
+```bash
+python -m deoxys.examples.run_deoxys_with_space_mouse_V3_record \
+  --interface-cfg /home/hz/code/YueHu_deoxys/deoxys/config/charmander.yml \
+  --controller-type OSC_POSE \
+  --annotation-source scripted \
+  --output-suffix one-leg-v6-scripted-rgbd-202609 \
+  --task-name one_leg --record-fps 10 \
+  --draw-part-poses --real-skill-annotation \
+  --prompt-depth-anything --prompt-depth-model vitl \
+  --prompt-depth-cameras both --prompt-depth-max-size 448
+```
+
+录制期间预览不再运行 annotation；按 `e` 后才运行 PromptDA、scripted annotation 和
+contract audit。`--output-suffix` 必须每个 campaign 更换，输出路径为
+`.../teleop/low/<output-suffix>/{success|failure}`。
+
+新 v6 pickle 转 colored-GP LMDB：
+
+```bash
+/home/huyue/miniconda3/envs/rr/bin/python \
+  -m src.data_processing.process_pickles_to_lmdb \
+  --controller osc --domain real --task one_leg --source teleop \
+  --randomness low --demo-outcome success \
+  --input-dir <v6-campaign-success-dir> \
+  --timeline-mode pickle --timeline-frequency-hz 10 \
+  --annotation-source scripted \
+  --require-source-image-annotation-mode none \
+  --image-annotation-mode guidance-point-colored \
+  --image-size 224 --frame-compression zstd --frame-compression-level 1 \
+  --n-cpus 1 --batch-size 1 \
+  --output-dir data/processed/osc/real/one_leg/teleop/low/success/one-leg-v6-scripted-rgbd-colored-zstd.lmdb
+```
+
+转换器会再次执行完整 v6 校验，并在 LMDB attrs 写入
+`contains_v6_offline_buffered=true` 和 `source_pickle_schema_counts`。训练使用
+`+experiment=rgbd/real_ol_cotrain_colored_gp_v6`；该配置固定 `pred_horizon=32`、
+`obs_horizon=1`、`action_horizon=8`，且在读取 frame 前拒绝非 scripted、非 colored-GP、
+非 10 Hz 或 real 数据不含 v6 schema 的 LMDB。
 
 ## Deoxys policy eval
 

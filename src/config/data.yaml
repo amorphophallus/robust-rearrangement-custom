@@ -47,6 +47,9 @@ data:
   env_sampling_weights: null
   data_paths_override: null
   storage_format: zarr
+  # Optional fail-closed gates checked before any LMDB frames are loaded.
+  required_lmdb_attrs: null
+  required_lmdb_attrs_by_domain: null
   load_into_memory: auto
   ddp_shard_enabled: false
   ddp_split_unit: episode

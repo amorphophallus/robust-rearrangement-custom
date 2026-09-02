@@ -6,7 +6,7 @@ import struct
 import warnings
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -385,6 +385,52 @@ def read_lmdb_episode_index(path: Union[str, Path]) -> List[dict]:
 
 def read_lmdb_attrs(path: Union[str, Path]) -> dict:
     return read_lmdb_meta(path)["attrs"]
+
+
+def _metadata_value_matches(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, float):
+        try:
+            return bool(np.isclose(float(actual), expected, atol=1e-6, rtol=0.0))
+        except (TypeError, ValueError):
+            return False
+    return actual == expected
+
+
+def validate_lmdb_metadata_contract(
+    paths: Union[Sequence[Path], Path],
+    *,
+    required_attrs: Optional[Mapping[str, Any]] = None,
+    required_attrs_by_domain: Optional[Mapping[str, Mapping[str, Any]]] = None,
+) -> Dict[str, dict]:
+    """Reject training inputs whose recorded provenance/config does not match."""
+
+    if isinstance(paths, (str, Path)):
+        paths = [paths]
+    else:
+        paths = list(paths)
+    required_attrs = dict(required_attrs or {})
+    required_attrs_by_domain = dict(required_attrs_by_domain or {})
+    summaries = {}
+    for raw_path in paths:
+        path = Path(raw_path)
+        meta = read_lmdb_meta(path)
+        attrs = meta.get("attrs")
+        if not isinstance(attrs, dict):
+            raise ValueError(f"LMDB dataset {path} has no attrs metadata mapping.")
+        domain = str(attrs.get("domain", ""))
+        expectations = dict(required_attrs)
+        expectations.update(dict(required_attrs_by_domain.get(domain, {}) or {}))
+        mismatches = []
+        for key, expected in expectations.items():
+            actual = attrs.get(key)
+            if not _metadata_value_matches(actual, expected):
+                mismatches.append(f"{key}: expected {expected!r}, got {actual!r}")
+        if mismatches:
+            raise ValueError(
+                f"LMDB metadata contract failed for {path}: " + "; ".join(mismatches)
+            )
+        summaries[str(path)] = {"domain": domain, "checked": expectations}
+    return summaries
 
 
 class LMDBImageStore:

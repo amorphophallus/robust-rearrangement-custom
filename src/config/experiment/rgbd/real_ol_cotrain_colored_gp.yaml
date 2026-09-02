@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - real_ol_cotrain
+  - /experiment/rgbd/real_ol_cotrain
 
 # DATA_DIR_PROCESSED points at /root/rr-local-data on ppu96.  Both paths use
 # the same RGB-D + colored-GP interface; do not mix them with RGB-D-only data.

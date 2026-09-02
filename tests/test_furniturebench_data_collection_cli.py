@@ -58,6 +58,8 @@ class FurnitureBenchDataCollectionCliTest(unittest.TestCase):
             "annotated-lmdb",
             "--image-annotation-mode",
             "guidance-point",
+            "--annotation-source",
+            "scripted",
             "--episodes-per-task",
             "1",
             "--dry-run",
@@ -67,6 +69,7 @@ class FurnitureBenchDataCollectionCliTest(unittest.TestCase):
         self.assertIn("lmdb_image_annotation_mode=guidance-point", result.stdout)
         self.assertIn("--image-annotation-mode guidance-point", result.stdout)
         self.assertIn("--require-source-image-annotation-mode none", result.stdout)
+        self.assertIn("--annotation-source scripted", result.stdout)
 
     def test_lmdb_processing_rejects_collection_annotated_source(self):
         with TemporaryDirectory() as temp_dir:

@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - rgbd/base
+  - /experiment/rgbd/base
   - override /actor: diffusion
   - override /actor/diffusion_model: dit
 

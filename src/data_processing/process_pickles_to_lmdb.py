@@ -59,6 +59,7 @@ from src.common.gripper import (
 )
 from src.common.pickle_compat import load_pickle_path
 from src.real.legacy_timeline import reconstruct_legacy_real_trajectory
+from src.real.v6_pickle_contract import V6_BUFFERED_SCHEMA
 
 
 LOWDIM_KEYS = tuple(key for key in TIMESERIES_KEYS if key not in {
@@ -562,6 +563,13 @@ def combine_processed_episode_group(group: dict, episode_parts: List[dict]) -> d
             "env": episode_parts[0].get("env"),
             "pickle_file": str(group["group_id"]),
             "source_pickle_files": [part["pickle_file"] for part in episode_parts],
+            "source_pickle_schemas": sorted(
+                {
+                    part["source_pickle_schema"]
+                    for part in episode_parts
+                    if part.get("source_pickle_schema") is not None
+                }
+            ),
             "source": str(group.get("source", "")),
             "segments": list(group.get("segments", [])),
         }
@@ -1035,6 +1043,7 @@ def main():
     running_payload_bytes = 0
     timeline_totals = defaultdict(int)
     timeline_residual_max_ms = 0.0
+    source_pickle_schema_counts = defaultdict(int)
 
     total_batches = (
         (len(episode_groups) + batch_size - 1) // batch_size
@@ -1139,6 +1148,12 @@ def main():
                     batch_image_bytes += len(packed_frame)
 
                 env_label = normalize_env_label(episode_data.get("env"))
+                source_schemas = episode_data.get("source_pickle_schemas")
+                if source_schemas is None:
+                    source_schema = episode_data.get("source_pickle_schema")
+                    source_schemas = [] if source_schema is None else [source_schema]
+                for source_schema in source_schemas:
+                    source_pickle_schema_counts[str(source_schema)] += 1
                 episode_index.append(
                     {
                         "episode_idx": global_episode_idx,
@@ -1151,6 +1166,7 @@ def main():
                             "source_pickle_files", [episode_data["pickle_file"]]
                         ),
                         "source": episode_data.get("source"),
+                        "source_pickle_schemas": list(source_schemas),
                         "segments": episode_data.get("segments", []),
                         "env": env_label,
                     }
@@ -1271,6 +1287,10 @@ def main():
         "max_camera_residual_ms": args.max_camera_residual_ms,
         "timeline_totals": dict(timeline_totals),
         "timeline_quantization_residual_ms_max": timeline_residual_max_ms,
+        "source_pickle_schema_counts": dict(sorted(source_pickle_schema_counts.items())),
+        "contains_v6_offline_buffered": (
+            V6_BUFFERED_SCHEMA in source_pickle_schema_counts
+        ),
         "stored_image_size": args.image_size,
         "provenance": provenance,
         "normalizer_stats": serialized_normalizer_stats,

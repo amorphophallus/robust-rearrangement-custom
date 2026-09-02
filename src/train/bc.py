@@ -39,6 +39,7 @@ from src.common.pytorch_util import dict_to_device
 from src.common.skills import SKILL_ORDER
 from src.dataset.dataloader import AsyncDevicePrefetchLoader, build_dataloader
 from src.dataset.dataset import ImageDataset, StateDataset, RGBDDataset
+from src.dataset.lmdb import validate_lmdb_metadata_contract
 from src.dataset.source_sampling import (
     SourceWeightedSampler,
     dataset_sample_envs,
@@ -631,6 +632,15 @@ def main(cfg: DictConfig):
         data_path = path_override(cfg.data.data_paths_override)
 
     print(f"Using data from {data_path}")
+
+    if to_native(cfg.data.get("storage_format", "zarr")) == "lmdb":
+        validate_lmdb_metadata_contract(
+            list(data_path),
+            required_attrs=to_native(cfg.data.get("required_lmdb_attrs", None)),
+            required_attrs_by_domain=to_native(
+                cfg.data.get("required_lmdb_attrs_by_domain", None)
+            ),
+        )
 
     dataset: Union[ImageDataset, StateDataset]
     load_into_memory = resolve_load_into_memory(

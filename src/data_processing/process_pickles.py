@@ -26,6 +26,10 @@ from src.common.files import get_processed_path, get_raw_paths
 from src.common.pickle_compat import load_pickle_path
 from src.common.robot_state import filter_and_concat_robot_state
 from src.common.skills import SKILL_ORDER, SKILL_TO_ONEHOT
+from src.real.v6_pickle_contract import (
+    is_v6_buffered_trajectory,
+    validate_v6_buffered_trajectory,
+)
 from src.common.eepose import (
     EEPPOSE_FRAME_HELP,
     REAL_TIP,
@@ -288,6 +292,8 @@ def process_pickle_file(
     data: Trajectory = (
         load_pickle_path(pickle_path) if trajectory_data is None else trajectory_data
     )
+    if is_v6_buffered_trajectory(data):
+        validate_v6_buffered_trajectory(data, source=str(pickle_path))
     source_image_annotation_mode = data.get("image_annotation_mode")
     if (
         required_source_image_annotation_mode is not None
@@ -590,6 +596,11 @@ def process_pickle_file(
     }
     if include_env_metadata:
         processed_data["env"] = data.get("env")
+        processed_data["source_pickle_schema"] = (
+            data.get("metadata", {}).get("schema")
+            if isinstance(data.get("metadata"), dict)
+            else None
+        )
 
     return processed_data
 

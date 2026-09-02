@@ -1,0 +1,21 @@
+# @package _global_
+defaults:
+  - /experiment/rgbd/real_ol_cotrain_colored_gp
+
+# Production configuration for newly collected v6 real episodes. The old real40
+# reconstruction remains available through real_ol_cotrain_colored_gp.yaml only.
+data:
+  data_paths_override:
+    - osc/real/one_leg/teleop/low/success/one-leg-v6-scripted-rgbd-colored-zstd.lmdb
+    - diffik/sim/one_leg/rollout/med/success/rgbd-skill-point-colored-zstd.lmdb
+  required_lmdb_attrs:
+    annotation_source: scripted
+    image_annotation_mode: guidance-point-colored
+    timeline_frequency_hz: 10.0
+  required_lmdb_attrs_by_domain:
+    real:
+      contains_v6_offline_buffered: true
+      source_image_annotation_mode: none
+
+wandb:
+  project: real-sim-one-leg-rgbd-colored-gp-cotrain-v6

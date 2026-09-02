@@ -47,6 +47,7 @@ python scripts/data_collection/process_furniturebench_pickles_to_lmdb.py \
   --input-suffix rgbd-skill-guidance-metadata-0823 \
   --output-suffix rgbd-skill-point-0823 \
   --image-annotation-mode guidance-point \
+  --annotation-source scripted \
   --episodes-per-task 200
 ```
 

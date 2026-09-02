@@ -48,6 +48,12 @@ def build_parser():
         required=True,
         help="Required explicit choice for images stored in the LMDB.",
     )
+    parser.add_argument(
+        "--annotation-source",
+        choices=("scripted",),
+        required=True,
+        help="required policy-target provenance for every source pickle",
+    )
     parser.add_argument("--randomness", choices=("low", "med", "high"), default="low")
     parser.add_argument("--episodes-per-task", type=int, default=None)
     parser.add_argument("--task-episode-limit", action="append", default=[], metavar="TASK=N")
@@ -111,6 +117,8 @@ def main():
         args.output_suffix,
         "--image-annotation-mode",
         args.image_annotation_mode,
+        "--annotation-source",
+        args.annotation_source,
         "--require-source-image-annotation-mode",
         "none",
         "--image-size",
@@ -133,6 +141,7 @@ def main():
 
     print(f"repo_root={repo_root}")
     print(f"source_pickle_image_annotation_mode=none")
+    print(f"annotation_source={args.annotation_source}")
     print(f"lmdb_image_annotation_mode={args.image_annotation_mode}")
     print(f"command={shlex.join(command)}")
     if not args.dry_run:

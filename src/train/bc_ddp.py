@@ -53,7 +53,7 @@ from src.dataset.dataloader import (
     build_dataloader,
 )
 from src.dataset.dataset import ImageDataset, RGBDDataset, StateDataset
-from src.dataset.lmdb import read_lmdb_meta
+from src.dataset.lmdb import read_lmdb_meta, validate_lmdb_metadata_contract
 from src.dataset.normalizer import LinearNormalizer
 from src.dataset.source_sampling import (
     SourceWeightedSampler,
@@ -1456,6 +1456,15 @@ def main(cfg: DictConfig):
         data_path = sort_data_paths(list(data_path))
         if main_process:
             print(f"Using data from {data_path}")
+
+        if to_native(cfg.data.get("storage_format", "zarr")) == "lmdb":
+            validate_lmdb_metadata_contract(
+                data_path,
+                required_attrs=to_native(cfg.data.get("required_lmdb_attrs", None)),
+                required_attrs_by_domain=to_native(
+                    cfg.data.get("required_lmdb_attrs_by_domain", None)
+                ),
+            )
 
         raw_storage_bytes_per_sample = None
         if to_native(cfg.data.get("storage_format", "zarr")) == "lmdb":
