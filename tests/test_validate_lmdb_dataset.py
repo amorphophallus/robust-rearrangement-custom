@@ -49,6 +49,29 @@ class ValidateLmdbDatasetTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "flat sequence of 7D part poses"):
             self.check(parts_shape=(3, 29))
 
+    def test_sparse_placeholder_rows_do_not_affect_observation_stats(self):
+        specs = {
+            "robot_state": {"dtype": "float32", "shape": [3, 1]},
+            "obs_valid": {"dtype": "bool", "shape": [3]},
+        }
+        stats = {}
+        check_array_specs(
+            "test.lmdb",
+            0,
+            3,
+            {
+                "robot_state": np.asarray([[1.0], [999.0], [3.0]], dtype=np.float32),
+                "obs_valid": np.asarray([True, False, True]),
+            },
+            specs,
+            stats,
+            set(),
+            {},
+        )
+
+        np.testing.assert_array_equal(stats["robot_state"]["min"], [1.0])
+        np.testing.assert_array_equal(stats["robot_state"]["max"], [3.0])
+
 
 if __name__ == "__main__":
     unittest.main()

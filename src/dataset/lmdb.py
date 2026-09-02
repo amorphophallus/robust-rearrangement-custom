@@ -37,7 +37,7 @@ except ImportError:  # pragma: no cover - exercised only for compressed LMDB fra
 
 
 NORMALIZER_STATS_ATTR = "normalizer_stats"
-LMDB_FORMAT_VERSION = 1
+LMDB_FORMAT_VERSION = 2
 
 META_KEY = b"__meta__"
 EPISODE_INDEX_KEY = b"__episode_index__"
@@ -45,6 +45,11 @@ FRAME_PREFIX = b"__frame__/"
 EPISODE_DATA_PREFIX = b"__episode_data__/"
 
 IMAGE_KEYS = ("color_image1", "color_image2", "depth_image1", "depth_image2")
+OPTIONAL_LOWDIM_DEFAULTS = {
+    # v1 datasets predate sparse visual-anchor filtering and are dense by
+    # definition, so every frame is a valid observation.
+    "obs_valid": (np.dtype(np.bool_), (), True),
+}
 DEFAULT_FRAME_COMPRESSION = "zstd"
 DEFAULT_FRAME_COMPRESSION_LEVEL = 1
 
@@ -490,6 +495,12 @@ def _init_combined_data(first_meta, total_frames: int, total_episodes: int, keys
             spec = lowdim_specs[key]
         elif key in frame_specs:
             spec = frame_specs[key]
+        elif key in OPTIONAL_LOWDIM_DEFAULTS:
+            dtype, feature_shape, _ = OPTIONAL_LOWDIM_DEFAULTS[key]
+            combined_data[key] = np.zeros(
+                (total_frames,) + tuple(feature_shape), dtype=dtype
+            )
+            continue
         else:
             raise KeyError(f"Unknown LMDB key {key}.")
 
@@ -560,7 +571,9 @@ def combine_lmdb_episode_subset(
     domain_idx = dict(sim=0, real=1)
 
     requested_lowdim_keys = [
-        key for key in keys if key in first_meta["lowdim_specs"]
+        key
+        for key in keys
+        if key in first_meta["lowdim_specs"] or key in OPTIONAL_LOWDIM_DEFAULTS
     ]
     requested_image_keys = [
         key for key in keys if key in first_meta["frame_specs"]["specs"]
@@ -610,7 +623,25 @@ def combine_lmdb_episode_subset(
 
         with env.begin(write=False) as txn:
             if requested_lowdim_keys:
-                episode_arrays = _load_episode_arrays(txn, ref.episode_idx, requested_lowdim_keys)
+                available_keys = [
+                    key for key in requested_lowdim_keys if key in meta["lowdim_specs"]
+                ]
+                episode_arrays = _load_episode_arrays(
+                    txn, ref.episode_idx, available_keys
+                )
+                for key in requested_lowdim_keys:
+                    if key in episode_arrays:
+                        continue
+                    if key not in OPTIONAL_LOWDIM_DEFAULTS:
+                        raise KeyError(
+                            f"LMDB dataset {lmdb_paths[ref.path_idx]} is missing {key}."
+                        )
+                    dtype, feature_shape, default_value = OPTIONAL_LOWDIM_DEFAULTS[key]
+                    episode_arrays[key] = np.full(
+                        (frame_count,) + tuple(feature_shape),
+                        default_value,
+                        dtype=dtype,
+                    )
                 for key, value in episode_arrays.items():
                     if value.shape[0] != frame_count:
                         raise ValueError(
@@ -733,13 +764,29 @@ def compute_global_minmax_stats(
         try:
             with env.begin(write=False) as txn:
                 for ref in path_refs:
+                    requested_keys = list(dict.fromkeys(stats_key_map.values()))
+                    has_obs_valid = "obs_valid" in meta["lowdim_specs"]
+                    if has_obs_valid:
+                        requested_keys.append("obs_valid")
                     episode_arrays = _load_episode_arrays(
                         txn,
                         ref.episode_idx,
-                        list(dict.fromkeys(stats_key_map.values())),
+                        requested_keys,
+                    )
+                    obs_valid = (
+                        np.asarray(episode_arrays["obs_valid"], dtype=np.bool_)
+                        if has_obs_valid
+                        else None
                     )
                     for stat_key, lmdb_key in stats_key_map.items():
-                        local_min, local_max = _feature_min_max(episode_arrays[lmdb_key])
+                        values = episode_arrays[lmdb_key]
+                        if obs_valid is not None and lmdb_key in {
+                            "robot_state",
+                            "skill",
+                            "parts_poses",
+                        }:
+                            values = values[obs_valid]
+                        local_min, local_max = _feature_min_max(values)
                         _update_feature_stats(local_stats, stat_key, local_min, local_max)
         finally:
             env.close()

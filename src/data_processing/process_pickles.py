@@ -64,6 +64,11 @@ TIMESERIES_KEYS = (
     "skill",
     "augment_states",
     "parts_poses",
+    "obs_valid",
+    "timeline_timestamp_ns",
+    "source_action_index",
+    "source_action_timestamp_ns",
+    "action_source_recorded",
 )
 
 NORMALIZER_STATS_KEYS = (
@@ -271,14 +276,18 @@ def process_pickle_file(
     resize_image: bool = False,
     image_annotation_mode: str = "none",
     required_source_image_annotation_mode: str = None,
+    required_annotation_source: str = None,
     include_env_metadata: bool = False,
     eepose_frame: str = ROBOT_BASE,
     image_size: int = None,
+    trajectory_data=None,
 ):
     """
     Process a single pickle file and return processed data.
     """
-    data: Trajectory = load_pickle_path(pickle_path)
+    data: Trajectory = (
+        load_pickle_path(pickle_path) if trajectory_data is None else trajectory_data
+    )
     source_image_annotation_mode = data.get("image_annotation_mode")
     if (
         required_source_image_annotation_mode is not None
@@ -288,6 +297,15 @@ def process_pickle_file(
             f"{pickle_path}: expected source image_annotation_mode="
             f"{required_source_image_annotation_mode!r}, got "
             f"{source_image_annotation_mode!r}"
+        )
+    source_annotation = data.get("annotation_source")
+    if (
+        required_annotation_source is not None
+        and source_annotation != required_annotation_source
+    ):
+        raise ValueError(
+            f"{pickle_path}: expected annotation_source="
+            f"{required_annotation_source!r}, got {source_annotation!r}"
         )
     obs = data["observations"]
 
@@ -494,6 +512,51 @@ def process_pickle_file(
         else np.zeros_like(reward)
     )
 
+    episode_length = len(action_delta_6d)
+    obs_valid = np.asarray(
+        data.get("obs_valid", np.ones(episode_length, dtype=np.bool_)),
+        dtype=np.bool_,
+    )
+    if "timeline_timestamp_ns" in data:
+        timeline_timestamp_ns = np.asarray(
+            data["timeline_timestamp_ns"], dtype=np.int64
+        )
+    elif all(observation.get("control_wall_time_ns") is not None for observation in obs):
+        timeline_timestamp_ns = np.asarray(
+            [int(observation["control_wall_time_ns"]) for observation in obs],
+            dtype=np.int64,
+        )
+    else:
+        # A missing clock is not an implicit nanosecond timeline.  Keep the
+        # sentinel explicit so downstream audits cannot mistake step indices
+        # for machine timestamps.  Normal conversion never retimes a pickle.
+        timeline_timestamp_ns = np.full(episode_length, -1, dtype=np.int64)
+    source_action_index = np.asarray(
+        data.get("source_action_index", np.arange(episode_length)), dtype=np.int32
+    )
+    source_action_timestamp_ns = np.asarray(
+        data.get("source_action_timestamp_ns", timeline_timestamp_ns), dtype=np.int64
+    )
+    action_source_recorded = np.asarray(
+        data.get(
+            "action_source_recorded", np.ones(episode_length, dtype=np.bool_)
+        ),
+        dtype=np.bool_,
+    )
+    timeline_arrays = {
+        "obs_valid": obs_valid,
+        "timeline_timestamp_ns": timeline_timestamp_ns,
+        "source_action_index": source_action_index,
+        "source_action_timestamp_ns": source_action_timestamp_ns,
+        "action_source_recorded": action_source_recorded,
+    }
+    for key, value in timeline_arrays.items():
+        if len(value) != episode_length:
+            raise ValueError(
+                f"Timeline key {key} in {pickle_path} has {len(value)} values, "
+                f"expected {episode_length}."
+            )
+
     # Sanity check that all arrays are the same length
     assert len(robot_state_6d) == len(
         action_delta_6d
@@ -519,7 +582,8 @@ def process_pickle_file(
         "skill": skill,
         "augment_states": augment_states,
         "parts_poses": parts_poses,
-        "episode_length": len(action_delta_6d),
+        **timeline_arrays,
+        "episode_length": episode_length,
         "task": task,
         "success": 1 if data["success"] == "partial_success" else int(data["success"]),
         "pickle_file": pickle_file,

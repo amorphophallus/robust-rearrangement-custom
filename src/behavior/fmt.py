@@ -56,7 +56,7 @@ class FMTPolicy(Actor):
             conditioning_vec=obs_cond.float(),
             loss_fn=self.loss_fn,
         )
-        loss = loss.mean(dim=[1, 2]).unsqueeze(1)
+        loss = self.masked_action_loss_per_sample(loss, batch)
 
         if self.rescale_loss_for_domain:
             domain = batch["domain"].squeeze().long()

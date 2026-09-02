@@ -146,6 +146,9 @@ class RNNActor(Actor):
             *naction.shape
         )
 
-        loss = nn.functional.mse_loss(naction_pred, naction)
+        elementwise_loss = nn.functional.mse_loss(
+            naction_pred, naction, reduction="none"
+        )
+        loss = self.masked_action_loss_per_sample(elementwise_loss, batch).mean()
 
         return loss

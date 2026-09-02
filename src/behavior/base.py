@@ -1164,6 +1164,26 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
     def compute_loss(self, batch: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, dict]:
         raise NotImplementedError
 
+    @staticmethod
+    def masked_action_loss_per_sample(
+        elementwise_loss: torch.Tensor,
+        batch: Dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        """Reduce ``(B,H,...)`` loss while excluding terminal padding."""
+
+        mask = batch.get("action_valid_mask")
+        if mask is None:
+            return elementwise_loss.flatten(start_dim=1).mean(dim=1, keepdim=True)
+        mask = mask.to(
+            device=elementwise_loss.device, dtype=elementwise_loss.dtype
+        )
+        while mask.ndim < elementwise_loss.ndim:
+            mask = mask.unsqueeze(-1)
+        expanded_mask = mask.expand_as(elementwise_loss)
+        denominator = expanded_mask.flatten(start_dim=1).sum(dim=1).clamp_min(1.0)
+        numerator = (elementwise_loss * expanded_mask).flatten(start_dim=1).sum(dim=1)
+        return (numerator / denominator).unsqueeze(1)
+
     def forward(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         return self.compute_loss(batch)
 

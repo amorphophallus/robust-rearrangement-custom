@@ -134,12 +134,16 @@ class BaseSequenceDataset(torch.utils.data.Dataset):
             dtype=object,
         )
 
-    def _build_indices(self, create_sample_indices_fn):
+    def _build_indices(self, create_sample_indices_fn, observation_valid=None):
         self.indices = create_sample_indices_fn(
             episode_ends=self.episode_ends,
             sequence_length=self.sequence_length,
             pad_before=self.obs_horizon - 1,
-            pad_after=self.action_horizon - 1 if self.pad_after else 0,
+            # Keep every valid observation anchor.  Padding beyond the episode
+            # is excluded from the objective by action_valid_mask.
+            pad_after=self.pred_horizon - 1 if self.pad_after else 0,
+            observation_valid=observation_valid,
+            obs_horizon=self.obs_horizon,
         )
         self.n_samples = len(self.indices)
 

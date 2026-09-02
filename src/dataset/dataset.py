@@ -19,6 +19,8 @@ def create_sample_indices(
     sequence_length: int,
     pad_before: int = 0,
     pad_after: int = 0,
+    observation_valid: Optional[np.ndarray] = None,
+    obs_horizon: int = 1,
 ):
     indices = list()
     for i in range(len(episode_ends)):
@@ -32,6 +34,13 @@ def create_sample_indices(
         max_start = episode_length - sequence_length + pad_after
 
         for idx in range(min_start, max_start + 1):
+            if observation_valid is not None:
+                observation_indices = [
+                    start_idx + int(np.clip(idx + offset, 0, episode_length - 1))
+                    for offset in range(obs_horizon)
+                ]
+                if not np.all(observation_valid[observation_indices]):
+                    continue
             buffer_start_idx = max(idx, 0) + start_idx
             buffer_end_idx = min(idx + sequence_length, episode_length) + start_idx
             start_offset = buffer_start_idx - (idx + start_idx)
@@ -44,6 +53,21 @@ def create_sample_indices(
     if not indices:
         return np.zeros((0, 5), dtype=np.int64)
     return np.array(indices, dtype=np.int64)
+
+
+def action_valid_mask(
+    pred_horizon: int,
+    first_action_idx: int,
+    sample_start_idx: int,
+    sample_end_idx: int,
+) -> torch.Tensor:
+    positions = torch.arange(
+        first_action_idx, first_action_idx + pred_horizon, dtype=torch.int64
+    )
+    return (
+        (positions >= int(sample_start_idx))
+        & (positions < int(sample_end_idx))
+    ).to(dtype=torch.float32)
 
 
 def sample_sequence(
@@ -73,6 +97,19 @@ def sample_sequence(
 
 def float_tensor_from_numpy(array: np.ndarray) -> torch.Tensor:
     return torch.from_numpy(array).to(dtype=torch.float32)
+
+
+def observation_filtered_normalizer_data(
+    train_data: Dict[str, torch.Tensor], observation_valid: np.ndarray
+) -> Dict[str, torch.Tensor]:
+    """Exclude placeholder observations while retaining every action target."""
+
+    valid = torch.from_numpy(np.asarray(observation_valid, dtype=np.bool_))
+    result = dict(train_data)
+    for key in ("robot_state", "skill"):
+        if key in result:
+            result[key] = result[key][valid]
+    return result
 
 
 def load_combined_data(
@@ -141,7 +178,12 @@ class ImageDataset(BaseSequenceDataset):
         self.load_into_memory = load_into_memory
         self.include_skill_input = include_skill_input
         self.load_skill_metadata = load_skill_metadata or include_skill_input
-        self.non_image_keys = ["robot_state", "action/pos", "action/delta"]
+        self.non_image_keys = [
+            "robot_state",
+            "action/pos",
+            "action/delta",
+            "obs_valid",
+        ]
         if self.load_skill_metadata:
             self.non_image_keys.append("skill")
         self.image_keys = ["color_image1", "color_image2"]
@@ -167,6 +209,7 @@ class ImageDataset(BaseSequenceDataset):
             self.image_stores = build_lazy_image_stores(self.dataset_paths)
 
         self._set_episode_metadata(combined_data, metadata)
+        self.observation_valid = np.asarray(combined_data["obs_valid"], dtype=np.bool_)
         self.train_data = {
             "robot_state": float_tensor_from_numpy(combined_data["robot_state"]),
             "action": float_tensor_from_numpy(combined_data[f"action/{control_mode_key}"]),
@@ -176,7 +219,11 @@ class ImageDataset(BaseSequenceDataset):
             if skill_values is None:
                 raise KeyError("Skill input was requested, but no `skill` data was loaded.")
             self.train_data["skill"] = float_tensor_from_numpy(skill_values)
-        self._fit_normalizer(self.train_data)
+        self._fit_normalizer(
+            observation_filtered_normalizer_data(
+                self.train_data, self.observation_valid
+            )
+        )
 
         if self.control_mode == ControlMode.relative:
             if not self._using_external_normalizer:
@@ -196,7 +243,9 @@ class ImageDataset(BaseSequenceDataset):
         self.train_data["zarr_idx"] = torch.from_numpy(combined_data["zarr_idx"])
         self.train_data["within_zarr_idx"] = torch.from_numpy(combined_data["within_zarr_idx"])
 
-        self._build_indices(create_sample_indices)
+        self._build_indices(
+            create_sample_indices, observation_valid=self.observation_valid
+        )
         self.skills = (
             skill_values.astype(np.float32, copy=False)
             if skill_values is not None
@@ -244,6 +293,12 @@ class ImageDataset(BaseSequenceDataset):
         if self.include_skill_input:
             nsample["skill"] = nsample["skill"][: self.obs_horizon, :]
         nsample["action"] = nsample["action"][self.first_action_idx : self.final_action_idx, :].clone()
+        nsample["action_valid_mask"] = action_valid_mask(
+            self.pred_horizon,
+            self.first_action_idx,
+            sample_start_idx,
+            sample_end_idx,
+        )
 
         if self.control_mode == ControlMode.relative:
             curr_ee_pos = nsample["robot_state"][-1, :3]
@@ -307,7 +362,12 @@ class RGBDDataset(BaseSequenceDataset):
         self.load_into_memory = load_into_memory
         self.include_skill_input = include_skill_input
         self.load_skill_metadata = load_skill_metadata or include_skill_input
-        self.non_image_keys = ["robot_state", "action/pos", "action/delta"]
+        self.non_image_keys = [
+            "robot_state",
+            "action/pos",
+            "action/delta",
+            "obs_valid",
+        ]
         if self.load_skill_metadata:
             self.non_image_keys.append("skill")
         self.image_keys = ["color_image1", "color_image2"]
@@ -334,6 +394,7 @@ class RGBDDataset(BaseSequenceDataset):
             self.image_stores = build_lazy_image_stores(self.dataset_paths)
 
         self._set_episode_metadata(combined_data, metadata)
+        self.observation_valid = np.asarray(combined_data["obs_valid"], dtype=np.bool_)
         self.train_data = {
             "robot_state": float_tensor_from_numpy(combined_data["robot_state"]),
             "action": float_tensor_from_numpy(combined_data[f"action/{control_mode_key}"]),
@@ -343,7 +404,11 @@ class RGBDDataset(BaseSequenceDataset):
             if skill_values is None:
                 raise KeyError("Skill input was requested, but no `skill` data was loaded.")
             self.train_data["skill"] = float_tensor_from_numpy(skill_values)
-        self._fit_normalizer(self.train_data)
+        self._fit_normalizer(
+            observation_filtered_normalizer_data(
+                self.train_data, self.observation_valid
+            )
+        )
 
         if self.control_mode == ControlMode.relative:
             if not self._using_external_normalizer:
@@ -369,7 +434,9 @@ class RGBDDataset(BaseSequenceDataset):
         self.train_data["zarr_idx"] = torch.from_numpy(combined_data["zarr_idx"])
         self.train_data["within_zarr_idx"] = torch.from_numpy(combined_data["within_zarr_idx"])
 
-        self._build_indices(create_sample_indices)
+        self._build_indices(
+            create_sample_indices, observation_valid=self.observation_valid
+        )
         self.skills = (
             skill_values.astype(np.float32, copy=False)
             if skill_values is not None
@@ -421,6 +488,12 @@ class RGBDDataset(BaseSequenceDataset):
         if self.include_skill_input:
             nsample["skill"] = nsample["skill"][: self.obs_horizon, :]
         nsample["action"] = nsample["action"][self.first_action_idx : self.final_action_idx, :].clone()
+        nsample["action_valid_mask"] = action_valid_mask(
+            self.pred_horizon,
+            self.first_action_idx,
+            sample_start_idx,
+            sample_end_idx,
+        )
 
         if self.control_mode == ControlMode.relative:
             curr_ee_pos = nsample["robot_state"][-1, :3]

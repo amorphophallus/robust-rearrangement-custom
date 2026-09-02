@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -9,7 +10,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from src.common.files import (
@@ -57,6 +58,7 @@ from src.common.gripper import (
     GRIPPER_WIDTH_ENCODING,
 )
 from src.common.pickle_compat import load_pickle_path
+from src.real.legacy_timeline import reconstruct_legacy_real_trajectory
 
 
 LOWDIM_KEYS = tuple(key for key in TIMESERIES_KEYS if key not in {
@@ -456,44 +458,234 @@ def gather_pickle_paths(args, task_episode_limits: Dict[str, int]) -> List[Path]
     return selected_paths
 
 
+def load_episode_groups_manifest(
+    manifest_path: Path,
+    selected_pickle_paths: List[Path],
+) -> Tuple[List[dict], dict]:
+    """Resolve a portable list of logical episodes from aligned pickle segments.
+
+    Manifest entries may contain absolute paths from another host.  Resolution
+    deliberately uses the unique basename among the already-selected inputs so
+    an audited grouping can be transferred together with the source dataset.
+    Every selected pickle must appear exactly once; partial or duplicate
+    grouping fails closed.
+    """
+
+    manifest_path = Path(manifest_path).expanduser().resolve()
+    payload = json.loads(manifest_path.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError("--episode-groups-json must contain a JSON object.")
+    raw_groups = payload.get("episode_groups")
+    if raw_groups is None:
+        raw_groups = payload.get("selective_episode_groups")
+    if not isinstance(raw_groups, list) or not raw_groups:
+        raise ValueError(
+            "--episode-groups-json must contain a non-empty episode_groups or "
+            "selective_episode_groups list."
+        )
+
+    by_name = defaultdict(list)
+    for path in selected_pickle_paths:
+        by_name[Path(path).name].append(Path(path).resolve())
+    ambiguous = sorted(name for name, paths in by_name.items() if len(paths) != 1)
+    if ambiguous:
+        raise ValueError(
+            "Episode grouping requires unique pickle basenames; ambiguous names: "
+            + ", ".join(ambiguous[:20])
+        )
+
+    groups = []
+    used = []
+    for group_index, raw_group in enumerate(raw_groups):
+        if not isinstance(raw_group, dict):
+            raise ValueError(f"Episode group {group_index} must be a JSON object.")
+        raw_files = raw_group.get("pickle_files")
+        if not isinstance(raw_files, list) or not raw_files:
+            raise ValueError(
+                f"Episode group {group_index} must contain non-empty pickle_files."
+            )
+        paths = []
+        for raw_file in raw_files:
+            name = Path(str(raw_file)).name
+            matches = by_name.get(name, [])
+            if len(matches) != 1:
+                raise ValueError(
+                    f"Episode group {group_index} references unknown pickle {name!r}."
+                )
+            paths.append(matches[0])
+            used.append(matches[0])
+        source = raw_group.get("source", "logical")
+        group_id = raw_group.get("group_id", f"{source}.stitched-g{group_index:03d}")
+        groups.append(
+            {
+                "group_id": str(group_id),
+                "source": str(source),
+                "paths": paths,
+                "segments": list(raw_group.get("segments", [])),
+            }
+        )
+
+    selected_set = {Path(path).resolve() for path in selected_pickle_paths}
+    used_set = set(used)
+    if len(used) != len(used_set):
+        raise ValueError("Episode grouping contains a pickle more than once.")
+    missing = sorted(str(path) for path in selected_set - used_set)
+    extra = sorted(str(path) for path in used_set - selected_set)
+    if missing or extra:
+        raise ValueError(
+            "Episode grouping must cover every selected pickle exactly once; "
+            f"missing={missing[:10]}, extra={extra[:10]}."
+        )
+    return groups, payload
+
+
+def combine_processed_episode_group(group: dict, episode_parts: List[dict]) -> dict:
+    if not episode_parts:
+        raise ValueError(f"Episode group {group['group_id']!r} is empty.")
+    for scalar_key in ("task", "success", "env"):
+        values = [part.get(scalar_key) for part in episode_parts]
+        if any(value != values[0] for value in values[1:]):
+            raise ValueError(
+                f"Episode group {group['group_id']!r} has inconsistent "
+                f"{scalar_key}: {values!r}."
+            )
+
+    combined = {
+        key: np.concatenate([np.asarray(part[key]) for part in episode_parts], axis=0)
+        for key in (*IMAGE_KEYS, *LOWDIM_KEYS)
+    }
+    combined.update(
+        {
+            "episode_length": int(sum(part["episode_length"] for part in episode_parts)),
+            "task": episode_parts[0]["task"],
+            "success": episode_parts[0]["success"],
+            "env": episode_parts[0].get("env"),
+            "pickle_file": str(group["group_id"]),
+            "source_pickle_files": [part["pickle_file"] for part in episode_parts],
+            "source": str(group.get("source", "")),
+            "segments": list(group.get("segments", [])),
+        }
+    )
+    if any(
+        len(np.asarray(combined[key])) != combined["episode_length"]
+        for key in (*IMAGE_KEYS, *LOWDIM_KEYS)
+    ):
+        raise RuntimeError(
+            f"Episode group {group['group_id']!r} produced inconsistent lengths."
+        )
+    return combined
+
+
+def process_episode_group(
+    group,
+    noop_threshold,
+    resize_image,
+    image_size,
+    image_annotation_mode,
+    required_source_image_annotation_mode,
+    required_annotation_source,
+    timeline_mode,
+    timeline_frequency_hz,
+    max_timeline_residual_ms,
+    max_camera_residual_ms,
+):
+    if timeline_mode == "legacy-real-10hz":
+        if len(group["paths"]) != 1:
+            raise ValueError(
+                "legacy-real-10hz requires exactly one raw pickle per episode"
+            )
+        path = group["paths"][0]
+        trajectory = load_pickle_path(path)
+        reconstructed, timeline_report = reconstruct_legacy_real_trajectory(
+            trajectory,
+            frequency_hz=timeline_frequency_hz,
+            max_quantization_residual_ms=max_timeline_residual_ms,
+            max_camera_residual_ms=max_camera_residual_ms,
+            image_annotation_mode=image_annotation_mode,
+        )
+        processed = process_pickle_file(
+            path,
+            noop_threshold=noop_threshold,
+            calculate_pos_action_from_delta=True,
+            resize_image=resize_image,
+            image_size=image_size,
+            # The reconstructed in-memory trajectory has already rendered only
+            # valid visual anchors.  Rendering here would mark zero placeholders.
+            image_annotation_mode="none",
+            required_source_image_annotation_mode=None,
+            required_annotation_source=None,
+            include_env_metadata=True,
+            trajectory_data=reconstructed,
+        )
+        processed["timeline_report"] = timeline_report
+        return processed
+
+    parts = [
+        process_pickle_file(
+            path,
+            noop_threshold=noop_threshold,
+            calculate_pos_action_from_delta=True,
+            resize_image=resize_image,
+            image_size=image_size,
+            image_annotation_mode=image_annotation_mode,
+            required_source_image_annotation_mode=required_source_image_annotation_mode,
+            required_annotation_source=required_annotation_source,
+            include_env_metadata=True,
+        )
+        for path in group["paths"]
+    ]
+    return combine_processed_episode_group(group, parts)
+
+
 def process_batch(
-    batch_paths,
+    batch_groups,
     noop_threshold,
     n_cpus,
     resize_image,
     image_size,
     image_annotation_mode,
     required_source_image_annotation_mode,
+    required_annotation_source,
+    timeline_mode,
+    timeline_frequency_hz,
+    max_timeline_residual_ms,
+    max_camera_residual_ms,
 ):
     if n_cpus <= 1:
         return [
-            process_pickle_file(
-                path,
-                noop_threshold=noop_threshold,
-                calculate_pos_action_from_delta=True,
+            process_episode_group(
+                group,
+                noop_threshold,
                 resize_image=resize_image,
                 image_size=image_size,
                 image_annotation_mode=image_annotation_mode,
                 required_source_image_annotation_mode=required_source_image_annotation_mode,
-                include_env_metadata=True,
+                required_annotation_source=required_annotation_source,
+                timeline_mode=timeline_mode,
+                timeline_frequency_hz=timeline_frequency_hz,
+                max_timeline_residual_ms=max_timeline_residual_ms,
+                max_camera_residual_ms=max_camera_residual_ms,
             )
-            for path in batch_paths
+            for group in batch_groups
         ]
 
     with ThreadPoolExecutor(max_workers=n_cpus) as executor:
         return list(
             executor.map(
-                lambda path: process_pickle_file(
-                    path,
-                    noop_threshold=noop_threshold,
-                    calculate_pos_action_from_delta=True,
+                lambda group: process_episode_group(
+                    group,
+                    noop_threshold,
                     resize_image=resize_image,
                     image_size=image_size,
                     image_annotation_mode=image_annotation_mode,
                     required_source_image_annotation_mode=required_source_image_annotation_mode,
-                    include_env_metadata=True,
+                    required_annotation_source=required_annotation_source,
+                    timeline_mode=timeline_mode,
+                    timeline_frequency_hz=timeline_frequency_hz,
+                    max_timeline_residual_ms=max_timeline_residual_ms,
+                    max_camera_residual_ms=max_camera_residual_ms,
                 ),
-                batch_paths,
+                batch_groups,
             )
         )
 
@@ -620,6 +812,27 @@ def main():
         help="Deterministically render saved 2D metadata onto color_image2 before LMDB encoding.",
     )
     parser.add_argument(
+        "--annotation-source",
+        choices=("scripted",),
+        default=None,
+        help=(
+            "Policy-target provenance. Dataset-generation campaigns must pass "
+            "--annotation-source scripted explicitly."
+        ),
+    )
+    parser.add_argument(
+        "--timeline-mode",
+        choices=("pickle", "legacy-real-10hz"),
+        default="pickle",
+        help=(
+            "Use the authoritative timeline already stored in the pickle, or "
+            "explicitly reconstruct old deoxys raw_v2 real demonstrations."
+        ),
+    )
+    parser.add_argument("--timeline-frequency-hz", type=float, default=10.0)
+    parser.add_argument("--max-timeline-residual-ms", type=float, default=75.0)
+    parser.add_argument("--max-camera-residual-ms", type=float, default=75.0)
+    parser.add_argument(
         "--require-source-image-annotation-mode",
         choices=IMAGE_ANNOTATION_MODES,
         default=None,
@@ -633,6 +846,15 @@ def main():
         type=Path,
         default=None,
         help="Optional JSON object recorded verbatim in LMDB metadata.",
+    )
+    parser.add_argument(
+        "--episode-groups-json",
+        type=Path,
+        default=None,
+        help=(
+            "Optional audited grouping of input pickle segments into logical "
+            "episodes. Every selected pickle must appear exactly once."
+        ),
     )
     parser.add_argument(
         "--input-dir",
@@ -666,6 +888,20 @@ def main():
         raise ValueError("--image-size must be positive.")
     if args.resize_image and args.image_size is not None:
         raise ValueError("--resize-image and --image-size cannot be used together.")
+    if args.timeline_frequency_hz <= 0:
+        raise ValueError("--timeline-frequency-hz must be positive.")
+    if args.timeline_mode == "legacy-real-10hz":
+        if args.domain != "real":
+            raise ValueError("legacy-real-10hz is only valid for --domain real")
+        if args.annotation_source != "scripted":
+            raise ValueError(
+                "legacy-real-10hz requires --annotation-source scripted"
+            )
+        if args.episode_groups_json is not None:
+            raise ValueError(
+                "legacy-real-10hz preserves one source pickle per episode and "
+                "cannot be combined with --episode-groups-json"
+            )
 
     provenance = {}
     if args.provenance_json is not None:
@@ -679,6 +915,16 @@ def main():
         raise ValueError(f"--offset must be non-negative, got {args.offset}.")
     if args.num_pickles is not None and args.num_pickles <= 0:
         raise ValueError(f"--num-pickles must be positive, got {args.num_pickles}.")
+    if args.episode_groups_json is not None and (
+        args.offset != 0
+        or args.num_pickles is not None
+        or args.randomize_order
+        or args.task_episode_limit
+    ):
+        raise ValueError(
+            "--episode-groups-json cannot be combined with offset, num-pickles, "
+            "randomize-order, or task-episode-limit."
+        )
 
     task_episode_limits = parse_task_episode_limits(args.task_episode_limit)
     pickle_paths = gather_pickle_paths(args, task_episode_limits)
@@ -694,6 +940,35 @@ def main():
     print(f"Found {len(pickle_paths)} pickle files after filtering")
     if len(pickle_paths) == 0:
         raise ValueError("No pickle files selected; refusing to create an empty LMDB dataset.")
+
+    episode_groups_payload: Dict[str, Any] = {}
+    if args.episode_groups_json is not None:
+        episode_groups_manifest_path = (
+            args.episode_groups_json.expanduser().resolve()
+        )
+        episode_groups_manifest_sha256 = hashlib.sha256(
+            episode_groups_manifest_path.read_bytes()
+        ).hexdigest()
+        episode_groups, episode_groups_payload = load_episode_groups_manifest(
+            episode_groups_manifest_path,
+            pickle_paths,
+        )
+        print(
+            f"Loaded {len(episode_groups)} audited logical episodes from "
+            f"{args.episode_groups_json.expanduser().resolve()}"
+        )
+    else:
+        episode_groups_manifest_path = None
+        episode_groups_manifest_sha256 = None
+        episode_groups = [
+            {
+                "group_id": pickle_identity(path),
+                "source": Path(path).name,
+                "paths": [path],
+                "segments": [],
+            }
+            for path in pickle_paths
+        ]
 
     selected_pickle_files = [pickle_identity(path) for path in pickle_paths]
     selected_pickle_paths = [absolute_pickle_path(path) for path in pickle_paths]
@@ -758,23 +1033,36 @@ def main():
     global_episode_idx = 0
     selected_task_counts = {task: 0 for task in args.task}
     running_payload_bytes = 0
+    timeline_totals = defaultdict(int)
+    timeline_residual_max_ms = 0.0
 
-    total_batches = (len(pickle_paths) + batch_size - 1) // batch_size if pickle_paths else 0
+    total_batches = (
+        (len(episode_groups) + batch_size - 1) // batch_size
+        if episode_groups
+        else 0
+    )
     print(
         f"Processing pickle files with {n_cpus} CPUs, batch_size={batch_size}, "
         f"noop_threshold={noop_threshold}, total_batches={total_batches}"
     )
 
-    for batch_start in range(0, len(pickle_paths), batch_size):
-        batch_paths = pickle_paths[batch_start : batch_start + batch_size]
+    for batch_start in range(0, len(episode_groups), batch_size):
+        batch_groups = episode_groups[batch_start : batch_start + batch_size]
         batch_results = process_batch(
-            batch_paths,
+            batch_groups,
             noop_threshold=noop_threshold,
             n_cpus=n_cpus,
             resize_image=args.resize_image,
             image_size=args.image_size,
             image_annotation_mode=args.image_annotation_mode,
             required_source_image_annotation_mode=args.require_source_image_annotation_mode,
+            required_annotation_source=(
+                args.annotation_source if args.timeline_mode == "pickle" else None
+            ),
+            timeline_mode=args.timeline_mode,
+            timeline_frequency_hz=args.timeline_frequency_hz,
+            max_timeline_residual_ms=args.max_timeline_residual_ms,
+            max_camera_residual_ms=args.max_camera_residual_ms,
         )
         batch_image_bytes = 0
         batch_lowdim_bytes = 0
@@ -782,6 +1070,19 @@ def main():
 
         with env.begin(write=True) as txn:
             for episode_data in batch_results:
+                timeline_report = episode_data.get("timeline_report")
+                if timeline_report is not None:
+                    for key in (
+                        "source_actions",
+                        "timeline_steps",
+                        "synthetic_noop_steps",
+                        "valid_observations",
+                    ):
+                        timeline_totals[key] += int(timeline_report[key])
+                    timeline_residual_max_ms = max(
+                        timeline_residual_max_ms,
+                        float(timeline_report["quantization_residual_ms_max"]),
+                    )
                 if frame_specs is None:
                     frame_specs = build_frame_specs(
                         {
@@ -846,6 +1147,11 @@ def main():
                         "task": episode_data["task"],
                         "success": int(episode_data["success"]),
                         "pickle_file": episode_data["pickle_file"],
+                        "source_pickle_files": episode_data.get(
+                            "source_pickle_files", [episode_data["pickle_file"]]
+                        ),
+                        "source": episode_data.get("source"),
+                        "segments": episode_data.get("segments", []),
                         "env": env_label,
                     }
                 )
@@ -853,13 +1159,28 @@ def main():
                 selected_task_counts.setdefault(episode_data["task"], 0)
                 selected_task_counts[episode_data["task"]] += 1
 
-                episode_stats = compute_normalizer_stats_from_dict(lowdim_payload)
+                obs_valid = np.asarray(
+                    lowdim_payload.get(
+                        "obs_valid", np.ones(episode_length, dtype=np.bool_)
+                    ),
+                    dtype=np.bool_,
+                )
+                if not np.any(obs_valid):
+                    raise ValueError(
+                        f"Episode {global_episode_idx} has no valid visual observations."
+                    )
+                stats_payload = dict(lowdim_payload)
+                for observation_key in ("robot_state", "skill", "parts_poses"):
+                    stats_payload[observation_key] = np.asarray(
+                        lowdim_payload[observation_key]
+                    )[obs_valid]
+                episode_stats = compute_normalizer_stats_from_dict(stats_payload)
                 merge_normalizer_stats(normalizer_stats, episode_stats)
                 for camera_name, depth_key in DEPTH_CAMERA_KEYS.items():
                     update_depth_moments(
                         depth_moments,
                         camera_name,
-                        np.asarray(episode_data[depth_key]),
+                        np.asarray(episode_data[depth_key])[obs_valid],
                     )
 
                 global_frame_idx = frame_end
@@ -912,6 +1233,19 @@ def main():
         "offset": args.offset,
         "num_pickles": args.num_pickles,
         "selected_pickle_count": len(pickle_paths),
+        "episode_grouping_enabled": args.episode_groups_json is not None,
+        "episode_groups_json": (
+            None
+            if episode_groups_manifest_path is None
+            else str(episode_groups_manifest_path)
+        ),
+        "episode_groups_schema": episode_groups_payload.get("schema"),
+        "episode_groups_manifest_sha256": episode_groups_manifest_sha256,
+        "episode_groups_counts": episode_groups_payload.get("counts"),
+        "episode_groups_policy": episode_groups_payload.get(
+            "selective_stitch_policy"
+        ),
+        "selected_episode_group_count": len(episode_groups),
         "pickle_files": selected_pickle_files,
         "pickle_paths": selected_pickle_paths,
         "shard_index": shard_index,
@@ -930,6 +1264,13 @@ def main():
         "frame_compression": frame_specs.get("compression", {"codec": "none"}),
         "image_annotation_mode": args.image_annotation_mode,
         "source_image_annotation_mode": args.require_source_image_annotation_mode,
+        "annotation_source": args.annotation_source,
+        "timeline_mode": args.timeline_mode,
+        "timeline_frequency_hz": args.timeline_frequency_hz,
+        "max_timeline_residual_ms": args.max_timeline_residual_ms,
+        "max_camera_residual_ms": args.max_camera_residual_ms,
+        "timeline_totals": dict(timeline_totals),
+        "timeline_quantization_residual_ms_max": timeline_residual_max_ms,
         "stored_image_size": args.image_size,
         "provenance": provenance,
         "normalizer_stats": serialized_normalizer_stats,

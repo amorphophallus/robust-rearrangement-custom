@@ -1,0 +1,16 @@
+# @package _global_
+defaults:
+  - real_ol_cotrain
+
+# DATA_DIR_PROCESSED points at /root/rr-local-data on ppu96.  Both paths use
+# the same RGB-D + colored-GP interface; do not mix them with RGB-D-only data.
+data:
+  data_paths_override:
+    - osc/real/one_leg/teleop/low/success/real40-timeline10hz-rgbd-skill-point-colored-zstd.lmdb
+    - diffik/sim/one_leg/rollout/med/success/rgbd-skill-point-colored-zstd.lmdb
+  annotate_guidance_point: true
+  annotate_guidance_point_colored: true
+  annotate_skill_one_hot: false
+
+wandb:
+  project: real-sim-one-leg-rgbd-colored-gp-cotrain

@@ -1,7 +1,7 @@
 # ppu96：zstd LMDB + 4 路单卡训练执行手册
 
 **状态**：基础设施方案已固定并完成容量实测；正式科学实验的四行 condition matrix 必须在启动前登记。
-**基准日期**：2026-08-27。
+**基准日期**：2026-09-02。
 **适用机器**：SSH 别名 `ppu96`，2 张 96 GiB PPU。
 **目标读者**：后续接手任务、只拿本文作为主要上下文的 Codex/agent。
 
@@ -106,7 +106,7 @@ ssh ppu96 'hostname; whoami; tailscale ip -4 2>/dev/null || true'
 
 ## 3. 当前已验证的数据资产
 
-### 3.1 压缩数据
+### 3.1 历史压缩基准与本 campaign 资产状态
 
 ```text
 /root/rr-local-data/processed/diffik/sim/one_leg/rollout/med/success/
@@ -138,7 +138,7 @@ one_leg/rollout/med/success/rgbd-only-skill.lmdb/data.mdb
 
 原始文件 127,474,061,312 bytes（约 118.72 GiB），SHA-256 为 `2fce87c6a0e3afdd5a7d0b2b7462720ff3cd9467843a9fd3481c3a30b46bfdb4`。压缩后节省约 69.20 GiB，即 58.3%。
 
-当前压缩资产已经完成：
+上述压缩资产曾经完成：
 
 - 118,290 帧逐帧 zstd round-trip 一致性验证；
 - 400 episode validator；
@@ -146,7 +146,23 @@ one_leg/rollout/med/success/rgbd-only-skill.lmdb/data.mdb
 - 单卡训练和四路训练读取；
 - 完整 `data.mdb` SHA-256。
 
-当前 artifact 最初由一次性 repack 工具从旧 LMDB 重打包得到；该过程工具已在任务结束后按项目约定清理。**新数据不要重新创建或依赖临时迁移脚本**；新转换器已经能从 pickle 直接生成 zstd LMDB。
+该 artifact 最初由一次性 repack 工具从旧 LMDB 重打包得到；该过程工具已在任务结束后按项目约定清理。由于它没有经过本 campaign 批准的直接 pickle 预处理，**只能作为大小、压缩率和读取性能的历史基准，不是可训练资产**。2026-09-02 检查时 ppu96 上仍有同名历史目录；按第 7.6 节，在新资产验收前保留、验收后精确删除。
+
+本 campaign 必须按第 6 节从批准的 400 个源 pickle 直接生成新的 zstd LMDB，完成 validator、metadata、episode/frame count、loader smoke 和完整 SHA-256 验收后再上传。不得恢复、复用或从上述历史未压缩 LMDB repack。新转换器已经能从 pickle 直接生成 zstd LMDB。
+
+本 campaign 的两个最终训练资产固定为：
+
+```text
+/root/rr-local-data/processed/osc/real/one_leg/teleop/low/success/
+  real40-timeline10hz-rgbd-skill-point-colored-zstd.lmdb
+/root/rr-local-data/processed/diffik/sim/one_leg/rollout/med/success/
+  rgbd-skill-point-colored-zstd.lmdb
+```
+
+两者都是 RGB-D + colored guidance point condition，顶层 LMDB metadata 必须记录
+`annotation_source=scripted`、`image_annotation_mode=guidance-point-colored` 和 zstd level 1。
+real40 还必须记录 `timeline_mode=legacy-real-10hz` 及完整 timeline totals；sim400
+必须记录 `timeline_mode=pickle`。
 
 ### 3.2 适用边界
 
@@ -267,6 +283,18 @@ CUDA_VISIBLE_DEVICES=1 python -c 'import torch; assert torch.cuda.device_count()
 
 ## 6. 新数据造数：从 pickle 直接写 zstd LMDB
 
+### 6.0 时间轴职责与 real40 例外
+
+权威 10 Hz 时序属于采集端：新 Deoxys 数据在 episode finalize、写 pickle 前完成排序、
+匹配和筛选。普通 pickle-to-LMDB 只做表示转换，必须使用 `--timeline-mode pickle`，不会
+重采样；没有机器时间的旧 sim pickle在 LMDB 中以 `timeline_timestamp_ns=-1` 明确标记，
+不得把 step index 当纳秒。
+
+唯一例外是本次 40 条旧 real raw_v2。它们使用显式
+`--timeline-mode legacy-real-10hz` 从 `control_wall_time_ns` 恢复 100 ms grid，保留缺图像
+slot 的 action/no-op，并以 `obs_valid` 阻止占位图进入模型。详细算法和审计值见
+`reports/real_time_alignment_and_eval.md`。
+
 ### 6.1 首选 gpu-snatcher 编排入口
 
 在保存源 pickle、且拥有 rr 环境的源机器上执行。以下命令对应当前 one-leg/med/400 数据，只是模板；正式 condition 的 task、randomness、配额和 suffix 必须来自第 4 节矩阵。
@@ -363,6 +391,19 @@ mv "$STAGING" "$FINAL"
 
 必须把 metadata 摘要、文件字节数、SHA-256、源 pickle manifest hash、rr commit/patch 状态和完成时间写入 `logs/<campaign>/assets.md`。
 
+### 6.4 本 campaign 的精确转换参数
+
+real40 与 sim400 都必须从批准的 raw pickle 目录直接构建，不从任何旧 LMDB repack。
+输出先写唯一 `.building.lmdb`，通过 6.3 的 full-stats validator、metadata/timeline audit、
+colored-GP 像素检查、混合 lazy RGB-D loader smoke 和完整 SHA 后，再同文件系统改为第 3.1
+节的最终名。命令以 `reports/real_time_alignment_and_eval.md` 的两条为准，并额外遵守：
+
+- real40 固定 `--n-cpus 1 --batch-size 1`，避免 stateful annotator 被并发状态污染；
+- sim400 可提高 batch/worker，但必须保持 source pickle 顺序和逐 pickle provenance gate；
+- 两者都显式传 `--annotation-source scripted --image-annotation-mode guidance-point-colored`；
+- real40 residual 上限固定 75 ms；不得为了让异常 episode 通过而临时放宽；
+- 构建前后对 source pickle manifest 运行 SHA-256，确认源数据未被渲染或改写。
+
 ## 7. 传到 ppu96 根盘
 
 ### 7.1 原则
@@ -372,8 +413,111 @@ mv "$STAGING" "$FINAL"
 - 先确认目标父目录属于 `/`，确认剩余空间并预留 checkpoint、W&B 和至少 100 GiB 安全余量。
 - 传输时 LMDB 不得有 writer；训练也不应读取不完整目标。
 - 使用独立 staging 目录和完成 marker，禁止让 loader 看见半份数据。
+- `data.mdb` 已经是逐帧 zstd；传输时不再启用 rsync transport compression，避免重复压缩消耗 CPU。
 
-### 7.2 传输步骤
+### 7.2 历史实测、目标速度与低速门禁
+
+2026-08-26 的历史 Codex session 传输了一个 127,474,061,312-byte 的未压缩 400-traj `data.mdb`。单路 rsync 约 17--20 MB/s 且有明显停顿，随后改为 8 个分块、8 路并行 rsync、断点续传、远端顺序拼接和完整 SHA-256：
+
+| 阶段 | UTC 时间 | 耗时 | 速率口径 |
+|---|---:|---:|---:|
+| 8 个分块全部到达 | 2026-08-26 13:46:23 -- 14:41:45 | 55m22s | 36.6 MiB/s 逻辑原始字节 |
+| 远端拼接和完整 SHA 完成 | 2026-08-26 13:46:23 -- 14:52:19 | 65m56s | 30.7 MiB/s 逻辑原始字节 |
+
+历史 rsync 使用了 zstd transport compression，因此逻辑字节速率不是物理链路速率。按对应 zstd artifact 的 0.417 大小比例估算，分块到达阶段约为 15.3 MiB/s 压缩等效吞吐，含拼接和哈希约为 12.8 MiB/s。新上传对象本身已压缩，正式门禁统一按远端实际收到的 chunk bytes 计算：
+
+- 目标 aggregate throughput：**至少 15 MiB/s**；
+- 120 秒 warm-up 后，每 5 分钟记录一次远端累计字节增量；
+- 任一窗口低于 10 MiB/s 记为 warning；连续两个 5 分钟窗口低于 10 MiB/s，保留 partial、暂停新增传输并执行第 7.4 节检查；
+- 远端累计字节连续 120 秒不增长时，不等待窗口结束，立即检查；
+- aggregate 达标也要检查分块长尾：用至少 120 秒的远端逐块字节差分估算剩余 ETA；若某块预计完成时间超过 aggregate ETA 的 2 倍，不等待快连接全部结束，应保留 partial 并改用第 7.3 节的多块动态队列或断点重连；
+- 不以某一路 rsync 瞬时显示、源文件逻辑大小或 transport compression 前字节作为 aggregate throughput；
+- `logs/<campaign>/assets.md` 必须记录起止 UTC、总实际字节、wall time、aggregate MiB/s、每块 SHA 和最终 `data.mdb` SHA。
+
+ModelScope 只作为低速检查后的备用线路。2026-08-28 对同一公开大文件的 HTTP Range 实测为：源机 4 路合计约 5.1 MiB/s，ppu96 4 路合计约 40.2 MiB/s；源机尚未配置可验证的 ModelScope 上传凭据，所以上传端未形成可用的端到端基准。只有在直接分块传输触发上述低速门禁，并且用真实待传 artifact 做 ModelScope 上传小样确认端到端预计时间更短时，才切换为“源机上传压缩 LMDB、ppu96 多路下载”。
+
+### 7.3 首选：本地分块、并行 rsync、远端拼接
+
+分块及其日志属于一次性任务产物，必须放在 `logs/<campaign>/transfer/<asset>/`。源 `data.mdb` 保持不变。公网/Wi-Fi 路径不要只创建与 worker 数相同的巨型块：连接间吞吐可能相差数十倍，快连接完成后会留下单路长尾。推荐 8 个并发 worker 和 24--32 个约 1--2 GiB 的块，让 `xargs -P8` 形成动态队列；小于 16 GiB 的 artifact 可使用 6--8 块。以下模板以 2 GiB 为例：
+
+```bash
+ASSET=<asset-name>
+SOURCE=<absolute-path-to-approved-lmdb>/data.mdb
+TASK_DIR=logs/<campaign>/transfer/$ASSET
+CHUNK_DIR=$TASK_DIR/chunks
+REMOTE_PARENT=/root/rr-local-data/<approved-destination-parent>
+REMOTE_INCOMING=$REMOTE_PARENT/$ASSET.lmdb.<campaign>.incoming
+
+test -f "$SOURCE"
+test ! -e "$TASK_DIR"
+mkdir -p "$CHUNK_DIR" "$TASK_DIR/rsync-logs"
+stat -c '%s' "$SOURCE" > "$TASK_DIR/source-bytes.txt"
+sha256sum "$SOURCE" > "$TASK_DIR/source.sha256"
+split --bytes=2G --numeric-suffixes=0 --suffix-length=2 \
+  --additional-suffix=.part "$SOURCE" "$CHUNK_DIR/data.mdb."
+sha256sum "$CHUNK_DIR"/*.part > "$TASK_DIR/chunks.sha256"
+```
+
+开始任何远端修改前先核对身份、根盘和空间。`REMOTE_INCOMING` 或最终目录已存在时必须先判定它属于哪个 campaign；不得覆盖未知目录：
+
+```bash
+ssh ppu96 "hostname; whoami; tailscale ip -4 2>/dev/null || true; \
+  findmnt -T /root; df -h /; \
+  test ! -e '$REMOTE_INCOMING'; \
+  mkdir -p '$REMOTE_INCOMING/.incoming.chunks'"
+```
+
+用最多 8 路并行 rsync 上传。这里故意没有 `-z/--compress`：
+
+```bash
+export REMOTE_CHUNKS="$REMOTE_INCOMING/.incoming.chunks"
+find "$CHUNK_DIR" -maxdepth 1 -type f -name '*.part' -print0 | sort -z | \
+  xargs -0 -n1 -P8 bash -c '
+    log_dir=$1
+    remote_chunks=$2
+    chunk=$3
+    rsync -aP --partial --append-verify "$chunk" "ppu96:$remote_chunks/" \
+      >"$log_dir/$(basename "$chunk").log" 2>&1
+  ' _ "$TASK_DIR/rsync-logs" "$REMOTE_CHUNKS"
+```
+
+每次速度采样都用一次新的远端累计字节数，先执行身份回显，再读取 `.incoming.chunks`；用相邻采样的 `delta_bytes / delta_seconds / 1048576` 得到 aggregate MiB/s。首次样本与第二次样本至少相隔 120 秒，之后使用 300 秒窗口：
+
+```bash
+date -u +%FT%TZ
+ssh ppu96 "hostname; whoami; tailscale ip -4 2>/dev/null || true; \
+  du -sb '$REMOTE_INCOMING/.incoming.chunks'"
+```
+
+同一采样还应记录 `find ... -printf '%f %s\n'` 的逐块大小。若已经用少量大块开传并出现长尾，可以在停止精确上传 session 后按相同固定边界把本地完整块和远端 partial 都细分：远端 `split` 得到的完整子块和最后一个 partial 子块可由 `rsync --append-verify` 直接复用。先把子块写到新的 `.incoming.subchunks`，核对其总字节等于旧 partial 总字节，再启动 24--32 子块的 8-worker 动态队列；旧 partial 在最终完整 SHA/loader gate 前不得删除。
+
+全部 rsync 成功后，在远端逐块核对 `chunks.sha256`，按文件名顺序拼接到不对 loader 可见的临时文件。先确认目标空间同时容纳 chunks 与 assembled file：
+
+```bash
+ssh ppu96 "hostname; whoami; tailscale ip -4 2>/dev/null || true; df -h /; \
+  cd '$REMOTE_INCOMING/.incoming.chunks' && sha256sum data.mdb.*.part"
+
+ssh ppu96 "hostname; whoami; tailscale ip -4 2>/dev/null || true; \
+  cd '$REMOTE_INCOMING'; \
+  cat .incoming.chunks/data.mdb.*.part > data.mdb.assembling; \
+  mv data.mdb.assembling data.mdb; \
+  stat -c '%s' data.mdb; sha256sum data.mdb; df -h /"
+```
+
+源、分块和拼接后完整 SHA 全部一致，再复制 LMDB 必需的小文件、运行 validator 和 loader smoke。全部通过后才写 `.transfer-complete` 并将 `.incoming` 原子改名为最终目录。分块至少保留到最终 SHA 和 loader smoke 通过；随后只删除这个 campaign 的精确 chunk 目录。
+
+### 7.4 低速检查与 ModelScope 备用线路
+
+触发低速门禁时先保留 rsync partial，依次记录：
+
+1. 源机的路由、活动网卡速率、CPU/load、源盘读取延迟和 rsync 进程数；实验室 Tailscale peer 另跑 `tailscale status` 与 `tailscale ping`，但 ppu96 公网 SSH 不应伪装成 Tailscale direct。
+2. ppu96 的 `hostname; whoami; tailscale ip -4`、`df -h /`、CPU/load、目标盘写延迟、SSH/rsync 进程数，以及 120 秒内远端累计 bytes 是否增长。
+3. 用 256 MiB HTTP Range 做单路和 4 路 ModelScope 下载复测；若考虑切线，还必须从源机向目标 dataset repo 上传一个可删除的小样，测得源机真实 upload MiB/s。
+4. 根据“压缩 artifact 总字节 / 实测端到端瓶颈速率”比较剩余 ETA。只有 ModelScope 明显更快、目标 repo 和清理策略明确时才切换；否则从现有 rsync partial 续传。
+
+检查日志写入 `logs/<campaign>/transfer/<asset>/diagnostics/`，不得把 token、cookie、SSH 密码或 ModelScope credential 写入日志。
+
+### 7.5 单路 fallback（仅用于小文件或并行工具不可用）
 
 ```bash
 ssh ppu96 'hostname; whoami; findmnt -T /root; df -h /; mkdir -p /root/rr-local-data/processed/diffik/sim/one_leg/rollout/med/success'
@@ -394,6 +538,23 @@ ssh ppu96 '
 ```
 
 然后在 ppu96 的 rr 环境运行 validator 和一个 loader smoke。全部通过后，将 `.incoming` 原子改名为最终目录并写 `.transfer-complete`。现有最终目录非空时必须停止并请求用户处理，不能覆盖或删除。
+
+### 7.6 本 campaign 的原子替换与旧数据清理
+
+用户已明确批准删除下面四个 ppu96 历史目录，但删除顺序固定：新 real40 和 sim400 必须
+先分别完成远端 bytes/SHA、metadata、validator；随后两个新最终路径共同完成 mixed RGB-D
+loader smoke；最后才精确删除旧目录。
+
+```text
+/root/rr-local-data/processed/osc/real/one_leg/teleop/low/success/aligned-zstd.lmdb
+/root/rr-local-data/processed/osc/real/one_leg/teleop/low/success/aligned-selective-gp-colored-zstd.lmdb
+/root/rr-local-data/processed/diffik/sim/one_leg/rollout/med/success/rgbd-only-skill.lmdb
+/root/rr-local-data/processed/diffik/sim/one_leg/rollout/med/success/rgbd-only-skill-zstd.lmdb
+```
+
+每次远端删除前仍先执行 `hostname; whoami; tailscale ip -4; df -h /`，并用 `du -sh` 回显
+四个精确目标。禁止 glob、禁止删除父目录。删除后在 assets 台账记录释放空间和恢复方式：
+历史 LMDB 不保留备份，只能从仍保留的批准 raw pickle 重新生成。新最终路径不得删除。
 
 ## 8. Campaign 目录与持久化布局
 

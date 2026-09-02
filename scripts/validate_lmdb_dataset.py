@@ -33,6 +33,7 @@ NORMALIZER_STATS_KEYS = (
 )
 
 VARIABLE_TRAILING_SHAPE_KEYS = {"parts_poses"}
+OBSERVATION_DEPENDENT_STATS_KEYS = {"robot_state", "skill", "parts_poses"}
 
 
 def as_stats(raw_stats):
@@ -77,6 +78,24 @@ def check_array_specs(
     observed_shapes,
 ):
     errors = []
+    obs_valid = None
+    if "obs_valid" in arrays:
+        candidate = np.asarray(arrays["obs_valid"])
+        if candidate.shape != (frame_count,):
+            errors.append(
+                f"episode {episode_idx} key obs_valid: shape {candidate.shape} "
+                f"!= ({frame_count},)"
+            )
+        elif candidate.dtype != np.bool_:
+            errors.append(
+                f"episode {episode_idx} key obs_valid: dtype {candidate.dtype} != bool"
+            )
+        elif not np.any(candidate):
+            errors.append(
+                f"episode {episode_idx} key obs_valid: episode has no visual anchor"
+            )
+        else:
+            obs_valid = candidate
 
     for key, spec in lowdim_specs.items():
         if key not in arrays:
@@ -111,7 +130,10 @@ def check_array_specs(
                 f"!= frame_count {frame_count}"
             )
 
-        update_stats(stats, incompatible_stats_keys, key, array)
+        stats_array = array
+        if obs_valid is not None and key in OBSERVATION_DEPENDENT_STATS_KEYS:
+            stats_array = array[obs_valid]
+        update_stats(stats, incompatible_stats_keys, key, stats_array)
 
     if errors:
         joined = "\n  ".join(errors)
@@ -188,10 +210,13 @@ def update_episode_depth_stats(
     frame_end,
     frame_specs,
     depth_moments,
+    obs_valid=None,
 ):
     depth_keys = list(DEPTH_CAMERA_KEYS.values())
     per_camera_values = {camera_name: [] for camera_name in DEPTH_CAMERA_KEYS}
-    for frame_idx in range(frame_start, frame_end):
+    for local_idx, frame_idx in enumerate(range(frame_start, frame_end)):
+        if obs_valid is not None and not bool(obs_valid[local_idx]):
+            continue
         raw_frame = txn.get(frame_key(frame_idx))
         if raw_frame is None:
             raise KeyError(f"{path}: missing frame payload {frame_idx}")
@@ -312,6 +337,9 @@ def validate_path(path: Path, sample_episodes: int, full_stats: bool, atol: floa
                         frame_end,
                         frame_specs,
                         computed_depth_moments,
+                        obs_valid=np.asarray(arrays["obs_valid"], dtype=np.bool_)
+                        if "obs_valid" in arrays
+                        else None,
                     )
 
             raw_meta = txn.get(b"__meta__")

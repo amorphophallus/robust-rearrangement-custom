@@ -1287,22 +1287,24 @@ def patch_wandb_access_checks(paths):
         os.access = original_access
 
 
-def log_action_mse(log_dict, category, pred_action, gt_action):
+def log_action_mse(log_dict, category, pred_action, gt_action, action_valid_mask=None):
     B, T, _ = pred_action.shape
     pred_action = pred_action.view(B, T, -1, 10)
     gt_action = gt_action.view(B, T, -1, 10)
-    log_dict[f"action_sample/{category}_action_mse_error"] = (
-        torch.nn.functional.mse_loss(pred_action, gt_action)
-    )
-    log_dict[f"action_sample/{category}_action_mse_error_pos"] = (
-        torch.nn.functional.mse_loss(pred_action[..., :3], gt_action[..., :3])
-    )
-    log_dict[f"action_sample/{category}_action_mse_error_rot"] = (
-        torch.nn.functional.mse_loss(pred_action[..., 3:9], gt_action[..., 3:9])
-    )
-    log_dict[f"action_sample/{category}_action_mse_error_width"] = (
-        torch.nn.functional.mse_loss(pred_action[..., 9], gt_action[..., 9])
-    )
+    def masked_mse(left, right):
+        error = (left - right).square()
+        if action_valid_mask is None:
+            return error.mean()
+        mask = action_valid_mask.to(device=error.device, dtype=error.dtype)
+        while mask.ndim < error.ndim:
+            mask = mask.unsqueeze(-1)
+        mask = mask.expand_as(error)
+        return (error * mask).sum() / mask.sum().clamp_min(1.0)
+
+    log_dict[f"action_sample/{category}_action_mse_error"] = masked_mse(pred_action, gt_action)
+    log_dict[f"action_sample/{category}_action_mse_error_pos"] = masked_mse(pred_action[..., :3], gt_action[..., :3])
+    log_dict[f"action_sample/{category}_action_mse_error_rot"] = masked_mse(pred_action[..., 3:9], gt_action[..., 3:9])
+    log_dict[f"action_sample/{category}_action_mse_error_width"] = masked_mse(pred_action[..., 9], gt_action[..., 9])
 
 
 def build_save_dict(
@@ -2484,14 +2486,14 @@ def main(cfg: DictConfig):
                         gt_action = actor.module.normalizer(
                             train_sampling_batch["action"], "action", forward=False
                         )
-                        log_action_mse(epoch_log, "train", pred_action, gt_action)
+                        log_action_mse(epoch_log, "train", pred_action, gt_action, train_sampling_batch.get("action_valid_mask"))
 
                         val_sampling_batch = prepare_batch(next(iter(testloader)))
                         gt_action = actor.module.normalizer(
                             val_sampling_batch["action"], "action", forward=False
                         )
                         pred_action = actor.module.action_pred(val_sampling_batch)
-                        log_action_mse(epoch_log, "val", pred_action, gt_action)
+                        log_action_mse(epoch_log, "val", pred_action, gt_action, val_sampling_batch.get("action_valid_mask"))
                     sampling_duration = perf_counter() - sampling_start_perf
                     epoch_log["timing/action_sampling_seconds"] = sampling_duration
                     log_slow_phase(rank, epoch_idx, "action_sampling", sampling_duration)
