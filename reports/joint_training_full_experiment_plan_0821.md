@@ -286,7 +286,17 @@ pure_rollout_hours = total_attempts / sum(active GPU attempted-rollout throughpu
 | `rgbd+grasp-part` | `rgbd-grasp-part` | `grasp-part` | 3 | EPFS（当前挂载点 `/mnt/cpfs`） |
 | `rgbd+grasp-part colored` | `rgbd-grasp-part-colored` | `grasp-part-colored` | 3 | EPFS（当前挂载点 `/mnt/cpfs`） |
 
-每个 condition 默认包含 FurnitureBench、ManiSkill、AutoMate 各一个 LMDB，即 **5×3=15 个物理 LMDB**。训练开关仍按 condition 配置：普通 GP 同时启用 point 与 skill；colored GP 用颜色编码 skill；两个 grasp-part condition 分别使用普通/colored grasp-part 输入。condition、物理 mode 和 provenance 必须一一对应，不能只改目录名。
+对应训练开关固定为：
+
+| 物理目录名 | `guidance_point` | `skill` | `gp_colored` | `grasp` | `grasp_colored` | `grasp_part` |
+|---|---:|---:|---:|---:|---:|---:|
+| `rgbd-skill` | F | T | F | F | F | F |
+| `rgbd-gp-skill` | T | T | F | F | F | F |
+| `rgbd-colored-gp` | T | F | T | F | F | F |
+| `rgbd-grasp-part` | F | F | F | F | F | T |
+| `rgbd-grasp-part-colored` | F | F | T | F | T | T |
+
+每个 condition 默认包含 FurnitureBench、ManiSkill、AutoMate 各一个 LMDB，即 **5×3=15 个物理 LMDB**。LMDB 保留统一的 skill/guidance low-dimensional metadata，训练开关决定实际输入；普通 GP 同时启用 point 与 skill，colored GP 用颜色编码 skill，两个 grasp-part condition 分别使用普通/colored grasp-part 输入。condition、物理 mode、训练开关和 provenance 必须一一对应，不能只改目录名。
 
 2026-09-02 对本轮 production raw 做了 read-only 五模式 smoke：FurnitureBench lamp 348 帧（含 178 个 pick/place）、ManiSkill Peg 119 帧（含 50 个 pick）和 AutoMate 9 帧均能渲染全部五种 mode，`missing_grasp_geometry=0`，且 `none` 模式逐像素保持原图。另用一条 AutoMate production pickle 实际写出五个临时 zstd LMDB；五套 full-stats、condition/provenance/hash reader 均通过且 `data.mdb` hash 各不相同，临时 LMDB 随后删除。构建器会在每个 source 闭合后重跑 raw render gate；最终逐帧转换本身仍是全量 fail-closed 检查。
 
