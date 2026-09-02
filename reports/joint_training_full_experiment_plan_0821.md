@@ -214,7 +214,8 @@ LiftPegUpright 的相机项已经关闭：原始 40° 相机能完整覆盖修�
 | 节点 | GPU | 当前状态 | 环境/用途 |
 |---|---|---|---|
 | r218 | RTX 3060 12 GB ×1 | FurnitureBench 4 env、`low` randomness；也承担本地检查 | 使用既有 `/home/hy/anaconda3/envs/rr`，本地 NVMe `/tmp` 约 202 GiB 可用 |
-| 236 | RTX 4090 24 GB ×4（GPU0–3） | AutoMate 每卡一个 16-env Isaac 进程；释放的卡再跑 ManiSkill | AutoMate/ManiSkill 使用既有 NAS Conda；本地 SSD 仅约 68 GiB 可用 |
+| 236 | RTX 4090 24 GB ×4（GPU0–3） | 当前跑 ManiSkill，随后由同一 handoff 跑 AutoMate；原始数据闭合后整组切换为训练资源池 | AutoMate/ManiSkill 使用既有 NAS Conda；训练复用该机已确认环境，数据热层为 `/home/hy` 所在 SATA SSD RAID |
+| PPU96 | PPU 96 GiB ×2 | 数据传输完成后作为训练资源池；每张物理 PPU 已验证最多两个独立 world-size=1 slot | 复用 `/mnt/cpfs/users/hy/robust-rearrangement-custom/.venv` 与 PPU SDK；根盘只保留最多两个 condition 热副本 |
 | NAS | `/mnt/nas/datasets_tmp` | 236 实测为 `10.71.106.245:/volume2/datasets_tmp` NFSv4.1，约 19 TiB 可用 | 作为 canonical raw、五套 LMDB、manifest 和日志存储；预留 2.0 TiB |
 
 用户批准后，本轮使用的 campaign 根为：
@@ -230,7 +231,7 @@ LiftPegUpright 的相机项已经关闭：原始 40° 相机能完整覆盖修�
 
 2026-09-02 复核时，r218 的 `/mnt/nas/datasets_tmp` 已是 `10.71.106.246:/volume2/datasets_tmp` NFSv4.1，但挂载为只读；236 的同一路径是 `10.71.106.245:/volume2/datasets_tmp` 且可写。因此 r218 直接读取和校验 canonical raw，在本地 NVMe 串行构建一个 LMDB，再通过 236 写入 NAS `.incoming`；r218 从只读挂载复核 SHA/schema/loader，最后由 236 原子改名并写 completion marker。禁止把只读挂载误判成可写路径，也不为此修改系统 mount。
 
-GPU0–3 是共享资源。collector 暂停、退出或 task 切换时，必须先恢复占卡脚本并确认显存，或用一个串行 runner 无空窗衔接下一 task；不得让卡在两个进程之间空出来。只停止精确 tmux session/run ID，不按用户名杀进程。
+GPU0–3 是共享资源。collector 暂停、退出或 task 切换时，必须先恢复占卡脚本并确认显存，或用一个串行 runner 无空窗衔接下一 task；不得让卡在两个进程之间空出来。原始数据闭合后，这四张卡仍由本 campaign 保留：只有 ManiSkill、AutoMate 的精确配额、scripted audit、NAS raw marker 和本地 staging cleanup 全部通过，才从 collection handoff 原子切换到 training reservation；不能因为 collector 进程暂时退出就释放给其他作业。GPU4–7 不属于本计划。只停止精确 tmux session/run ID，不按用户名杀进程。
 
 ### 3.2 NAS 瓶颈和落盘方式
 
@@ -318,7 +319,7 @@ pure_rollout_hours = total_attempts / sum(active GPU attempted-rollout throughpu
 
 正式执行前完整阅读 `reports/claude/ppu96_single_card_4way_zstd_runbook.md`。规划时 RR `main` 为 `bfc2ca8`，已包含该 runbook 及 native zstd writer/reader；上传前在 PPU96 用 clean worktree/clone materialize 审计后的最新 commit，不能覆盖远端 RR 现有 tracked/untracked 修改。
 
-PPU96 `/root` 实测约 **660 GiB 可用**；EPFS 在当前实例上对应 `/mnt/cpfs`（与 `/mnt/workspace` 同一共享文件系统），实测约 **52.7 TiB 可用**。根盘只接收前两个 condition，中心占用约 **282–316 GiB**，完成后预计仍余 **344–378 GiB**，高于 runbook 的 100 GiB 安全线；因此按当前估计不需要用户先迁走已有根盘数据。上传器在每个 LMDB 传输前仍按“payload bytes + 100 GiB 根盘余量”动态 fail-closed，不能靠估计硬塞。后三个 condition 中心占用约 **423–474 GiB**，放 EPFS 并保留至少 1 TiB 动态余量。
+PPU96 `/root` 实测约 **660 GiB 可用**；EPFS 在当前实例上对应 `/mnt/cpfs`（与 `/mnt/workspace` 同一共享文件系统），实测约 **52.7 TiB 可用**。根盘在任一时刻最多保留两个 condition，中心占用约 **282–316 GiB**，完成后预计仍余 **344–378 GiB**，高于 runbook 的 100 GiB 安全线；因此按当前估计不需要用户先迁走已有根盘数据。上传器在每个 LMDB 传输前仍按“payload bytes + 100 GiB 根盘余量”动态 fail-closed，不能靠估计硬塞。后三个 condition 中心占用约 **423–474 GiB**，先放 EPFS 并保留至少 1 TiB 动态余量。EPFS 是持久 queue，不是 PPU 的训练热层；后续 condition 必须在前一 condition 完成、checkpoint 验收和根盘 cleanup-complete 后复制到 `/root`，不能直接跨共享文件系统训练。
 
 目标布局固定为：
 
@@ -335,9 +336,78 @@ PPU96 `/root` 实测约 **660 GiB 可用**；EPFS 在当前实例上对应 `/mnt
 
 r218→PPU96 已测单流约 0.81 MiB/s，四流 aggregate 约 0.91 MiB/s，没有值得承担复杂度的并行增益，因此使用单流顺序断点续传。按 705–790 GiB 估计，纯传输约 **9.2–11.6 天**；含重连、逐 LMDB SHA/loader 校验与发布，操作窗口按 **10–13 天**。第一套实际 bytes 出来后立即更新该窗口；若落到旧保守上界，窗口会相应延长。
 
-### 3.6 当前执行授权与 gate
+### 3.6 训练资源池、236 快盘和数据队列
 
-用户已经明确批准开始数采并要求持续监督，因此 collector 和滚动审计继续运行；本次五-condition 修改不重启或扰动现有 raw 采集。LMDB 构建必须等待对应 source 的精确配额、全量 scripted/raw/projection audit、NAS manifest/hash 和上传 marker 全部闭合。上传必须等待每个 condition/source 的 NAS LMDB completion marker，随后逐个执行断点传输、目标空间 gate、SHA、metadata 与 loader 验收。最终完成条件从原来的三个 LMDB 改为 **15 个 LMDB 全部在 NAS 闭合，根盘两套/EPFS 三套全部发布并有 15 份 transfer receipt**。
+#### 3.6.1 实测容量与旧 med 清理边界
+
+2026-09-02 在 236 重新确认：hostname `10-71-106-236`、用户 `hy`；`/home/hy` 与 `/` 都位于 `/dev/sda2`，底层 `sda` 为 `ROTA=0` 的 7 TiB ext4 SATA SSD RAID。`reports/lmdb_io_benchmark_report.md` 的历史实测为约 4.9 GB/s 顺序读、16-worker 4 KiB 随机读约 706 MB/s。它明显快于 HDD，但高并发随机 IOPS 会饱和，因此只作为有上限的本地训练热层，不把 NAS mount 或 symlink 伪装成快盘。
+
+实时 `df` 为 61,360,504,832 bytes（57.15 GiB）可用；主机有 503 GiB 内存、`MemAvailable` 约 439 GiB。当前 joint campaign staging 约 2.63 GiB，ManiSkill 工作树约 0.85 GiB，不是盘满主因。已精确定位下列六个此前 med 训练数据副本：
+
+| 可清理集合 | 精确范围 | bytes | GiB |
+|---|---|---:|---:|
+| colored grasp-part 4 shards | 同一父目录 `/home/hy/med0801-fast-data/data/processed/diffik/sim/lamp-one_leg-round_table/rollout/med/success/` 下精确的 `rgbd-skill-grasp-part-colored-shard-1.lmdb`、`shard-2.lmdb`、`shard-3.lmdb`、`shard-4.lmdb` | 351,721,672,704 | 327.57 |
+| colored guidance-point shard 2 | `/home/hy/robust-rearrangement-custom/data/processed/diffik/sim/lamp-one_leg-round-table/rollout/med/success/rgbd-skill-point-colored-shard-2.lmdb` | 63,058,194,432 | 58.72 |
+| colored guidance-point shard 4 | `/home/hy/robust-rearrangement-custom/data/processed/diffik/sim/lamp-one_leg-round_table/rollout/med/success/rgbd-skill-point-colored-shard-4.lmdb` | 43,913,564,160 | 40.90 |
+| **合计** | 6 个精确目录 | **458,693,431,296** | **427.19** |
+
+med-0801 的 8/8 实验已经完成，最终 checkpoint 均通过本地归档审计；盘点时没有活动 `bc_ddp`/`torchrun`，当前用户可见的 `/proc/*/maps` 和 fd 也没有命中六个 `data.mdb`。由于该机进程表较大，逐目录 `fuser` 在 5 秒内超时，不能把这次筛查代替删除时的 reader gate。用户允许删除这些旧 med 训练副本，但删除延迟到第一批新 LMDB 已在 NAS 验收、准备向 236 落盘时执行；不为了“先腾着”提前删除。执行者必须：
+
+1. 重新核对 hostname/user/mount、上述六个目录均为真实目录而非 symlink，且字节数仍与台账一致；禁止用 glob 扩大范围。
+2. 以足够超时重新确认没有 med trainer/tmux、没有 `data.mdb` open fd 或 mmap；适用时保留旧 upload-complete/aggregate-ready marker 摘要，并保留最终 checkpoint audit 引用。任一 reader 检查超时都按 gate 未通过处理。
+3. 先写 `cleanup_receipts.tsv` 的 `planned` 行，再只删除这六个绝对目录；不删除当前 joint staging、代码、环境、checkpoint 或不在表中的旧数据。
+4. 删除后记录实际 `df` 增量和 `deleted_at`，状态改为 `verified`。按当前快照，理论可用空间约 520,053,936,128 bytes（484.34 GiB），但后续 placement 只能使用删除后的实时 `df`。
+
+236 的热层固定为**最多两个完整 condition**。按高估 158 GiB/condition，两套约 316 GiB，理论仍余约 168 GiB；每次 transfer reservation 必须扣除现有 `.incoming`、其他 owner 预留和 checkpoint 临时空间，并保证完成后至少 **120 GiB** 可用。第三套即使按中心估计勉强能写入，也会突破安全余量，禁止同时驻留。
+
+#### 3.6.2 初始 placement 与训练波次
+
+NAS 始终保存 15 个 LMDB 的 canonical copy；PPU96 根盘和 236 SSD 只保存可释放的训练副本。初始 placement 固定如下，选择顺序参考 `reports/med_train_med_eval_0828.md` 的历史 med 结果，仅用于让更有信息量的 condition 尽早开跑，不把历史成功率当成本轮结论：
+
+| Condition | NAS canonical | PPU96 持久/queue | 初始训练热层 | 初始执行资源 |
+|---|---|---|---|---|
+| `rgbd-skill` | 3 LMDB | `/root` | PPU `/root` | PPU 0，world-size=1 |
+| `rgbd-gp-skill` | 3 LMDB | `/root` | PPU `/root` | PPU 1，world-size=1 |
+| `rgbd-colored-gp` | 3 LMDB | EPFS | 236 `/home/hy/rr-local-data/processed/joint_training_0821/rgbd-colored-gp/` | 236 GPU0–1，两卡 DDP |
+| `rgbd-grasp-part-colored` | 3 LMDB | EPFS | 236 `/home/hy/rr-local-data/processed/joint_training_0821/rgbd-grasp-part-colored/` | 236 GPU2–3，两卡 DDP |
+| `rgbd-grasp-part` | 3 LMDB | EPFS | 首轮不复制；NAS/EPFS queue | 首个通过 release+cleanup gate 的资源 |
+
+第一波最多同时跑四个不同 condition。第五个 condition 不绑定固定机器：如果 PPU 先完成，则验收 checkpoint、删除一个已释放的根盘副本，再从 EPFS 复制 `rgbd-grasp-part` 到 `/root`；如果 236 的一个两卡 job 先完成，则验收 checkpoint、删除对应本地热副本，再从 NAS 复制到 236 SSD。两条路径都必须经过 `.incoming`、bytes/SHA、metadata/condition/provenance、loader smoke、原子发布和 `.placement-ready`，不能直接从 NAS/EPFS 训练。
+
+PPU96 已验证的上限是两张物理 PPU 上 `2+2` 个独立 world-size=1 slot，但本轮首波只有两个位于根盘的不同 condition，因此先一张物理 PPU 跑一个 condition；额外 slot 保留，不擅自增加重复 seed 或改变科学矩阵。236 使用通用训练指南已经验证的两卡 DDP 入口，首波为 `GPU0–1` 与 `GPU2–3` 两个 job。所有卡在 collection→training 和 wave1→wave2 之间由精确 reservation/handoff 保护，不用 dummy workload 冒充训练，也不占用 GPU4–7。
+
+跨节点比较默认统一：同一 RR commit/patch manifest、condition flag、seed policy、3000 epochs、100 steps/epoch 和 **global batch 256**；236 两卡时 per-rank batch 为 128，PPU world-size=1 时为 256。该值来自 PPU96 已验证配置，正式训练启动前仍需在科学矩阵中确认。236 在真实 joint LMDB 到位后必须先跑同配置的单 job 100-step 和双 job 100-step 压力 gate，记录 aggregate steps/s、每 job step time、iowait/IO PSI、内存/swap 和 GPU utilization；若双 job aggregate 吞吐没有高于单 job，或出现持续资源压力，不得只为“占满四卡”硬开两路，需保留四卡 reservation 并调整并发/worker 后重新审批。
+
+#### 3.6.3 NAS 登记与状态机
+
+236 是 `/mnt/nas/datasets_tmp` 的 RW 端，r218 对同一 volume2 只读；训练 placement 的 NAS 台账由 236 单写，其他节点只追加独立 receipt 后由 coordinator 合并。固定目录为：
+
+```text
+/mnt/nas/datasets_tmp/rr_joint_training_0821_scripted_prod_20260901_v1/
+  manifests/training_placement/
+    asset_registry.tsv
+    transfer_queue.tsv
+    training_queue.tsv
+    cleanup_receipts.tsv
+    reservations/
+    receipts/{ppu96,4090_236}/
+```
+
+`asset_registry.tsv` 每行至少登记 `condition, source, canonical_nas_path, bytes, data_mdb_sha256, source_manifest_sha256, annotation_source, image_annotation_mode, rr_commit, state`；placement/queue 再登记 `target_host, target_path, storage_tier, reserved_bytes, owner_run_id, queued_at, transfer_started_at, verified_at, consumer_run_id, released_at`。状态只允许按下列方向推进：
+
+```text
+nas_verified -> queued -> reserved -> transferring -> local_verified
+             -> training_reserved -> training_running -> checkpoint_verified
+             -> released -> cleanup_complete
+```
+
+`.incoming` 不算资产，`.placement-ready` 不等于可删除 canonical；任何训练副本都只有在最终 checkpoint、W&B/run 状态、无 reader 和 cleanup receipt 全部闭合后才能释放。NAS 中未轮到的所有数据都可以长期保持 `queued`，但必须有 bytes/SHA 和 owner/reservation，不能靠目录名或口头记录判断进度。
+
+每次大文件传输前仍重新确认两端 hostname/user、目标 mount/空间和实际网络路径：peer 传输先做 `tailscale ping`，只有 direct 才直接开大流；NAS→236 则重新核对当前 RW NFS mount 并做小文件 durable/throughput probe。规划盘点时 r218 的 Tailscale daemon 不可访问，因此本节不把任何历史 Tailscale 路径当作当前事实；路径 gate 不通过时只保持 `queued`，不启动传输。
+
+### 3.7 当前执行授权与 gate
+
+用户已经明确批准开始数采并要求持续监督，因此 collector 和滚动审计继续运行；本次五-condition 与双训练节点修改不重启或扰动现有 raw 采集。LMDB 构建必须等待对应 source 的精确配额、全量 scripted/raw/projection audit、NAS manifest/hash 和上传 marker 全部闭合。上传必须等待每个 condition/source 的 NAS LMDB completion marker，随后逐个执行断点传输、目标空间 gate、SHA、metadata 与 loader 验收。数据交付完成条件从原来的三个 LMDB 改为：**15 个 LMDB 全部在 NAS 闭合；PPU 根盘两套/EPFS 三套全部发布并有 15 份 transfer receipt；236 的两套初始热数据有 6 份 placement receipt，且 training/cleanup queue 已登记**。训练启动是后续独立 gate，不因数据传完自动发生。
 
 ## 4. 附录：此前实现细节的验证结论
 
