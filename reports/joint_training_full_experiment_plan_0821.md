@@ -1,6 +1,6 @@
 # 联合训练完整实验规划 0821
 
-状态：数据配额已由用户于 2026-08-23 通过；2026-08-31 用户将本 campaign 及后续 rollout 的 annotation source 固定为 `scripted/geometry GT`，不使用 VLM，后续 launch 不再逐次确认。FurnitureBench 三任务已确认通过。ManiSkill 11 个 task 均已有成功轨迹与 strict 2D 验证；最新四个 MP 难项各选择 10 条新成功轨迹，最终 40/40 审计通过，随后修复版 Peg/Plug 又各用 10 条全新 strict success 完成生产吞吐复测。**这里的 10 条只代表当前 task 检查门槛；正式数据集仍为 ManiSkill 100 条/task、合计 1,100 条。** AutoMate 已对训练 final success 最低的 20 个模型做 fresh 抽查：19 个 hardest-init 可产成功数据；`00755` hardest-init 不能成功，已由用户明确从正式任务集合中排除，AutoMate 正式任务数固定为 99。2026-09-01 用户将 AutoMate 正式配额下调为 **50 条/task**，并要求以 attempted rollouts/hour 为并行速度指标；本文已加入 1/2/4/8/16/32 env 实测、资源调度、NAS/LMDB/PPU96 容量与 ETA。**当前仍是规划阶段，未获用户再次批准前不创建 production 目录、不造数据、不转换 LMDB、不上传。**
+状态：数据配额已由用户于 2026-08-23 通过；2026-08-31 用户将本 campaign 及后续 rollout 的 annotation source 固定为 `scripted/geometry GT`，不使用 VLM，后续 launch 不再逐次确认。FurnitureBench 三任务已确认通过。ManiSkill 11 个 task 均已有成功轨迹与 strict 2D 验证；最新四个 MP 难项各选择 10 条新成功轨迹，最终 40/40 审计通过，随后修复版 Peg/Plug 又各用 10 条全新 strict success 完成生产吞吐复测。**这里的 10 条只代表当前 task 检查门槛；正式数据集仍为 ManiSkill 100 条/task、合计 1,100 条。** AutoMate 已对训练 final success 最低的 20 个模型做 fresh 抽查：19 个 hardest-init 可产成功数据；`00755` hardest-init 不能成功，已由用户明确从正式任务集合中排除，AutoMate 正式任务数固定为 99。2026-09-01 用户将 AutoMate 正式配额下调为 **50 条/task**，并要求以 attempted rollouts/hour 为并行速度指标。用户随后批准生产并要求持续监督；2026-09-02 又把最终数据固定为 **一份 raw pickle、五个训练 condition、默认 15 个物理 LMDB**，其中两个 condition 放 PPU96 根盘，三个放 EPFS。
 
 新 Codex session 不应从历史日志反推生产参数；唯一执行交接为 `reports/joint_training_data_collection_handoff.md`。本文保留任务证据、资源规划和历史诊断，若执行配置与交接文档冲突，以交接文档为准。
 
@@ -21,7 +21,7 @@
 
 randomness 合同按仿真器原生语义记录：FurnitureBench=`low`；ManiSkill 保留每个 task 的 native randomized reset，并写 `randomness_semantics=task_native`；AutoMate=`hardest_init`、deterministic specialist policy、no SBC，变化只来自不重复的 reset seed。manifest 必须记录 process seed、env index、global attempt index 和初始状态 hash，不能把 ManiSkill/AutoMate 都伪装成 FurnitureBench 的 `low/med/high`。
 
-物理配额下降不改变训练时的 source sampler 权重。容量改按区间管理：canonical raw 约 **350–450 GiB**，三个 zstd level-1 LMDB 合计约 **145–230 GiB**；加上 `.building.lmdb`、本地 staging、manifest、reject 和安全余量，NAS campaign 仍预留 **1.2 TiB**。旧数据只作为步数、大小和吞吐参考，不进入本轮 manifest。
+物理配额下降不改变训练时的 source sampler 权重。容量按五个 condition 管理：canonical raw 仍只有一份，约 **350–450 GiB**；每个 condition 的三来源 zstd level-1 LMDB 当前中心估计约 **141–158 GiB**，五套约 **705–790 GiB**。旧的 145–230 GiB/condition 区间继续作为保守上界检查。加上单个 `.building.lmdb`、NAS `.incoming`、本地 staging、manifest、reject 和安全余量，NAS campaign 预留从 1.2 TiB 提高到 **2.0 TiB**。旧数据只作为步数、大小和吞吐参考，不进入本轮 manifest。
 
 ### 1.2 FurnitureBench：3 个 task
 
@@ -58,7 +58,7 @@ FurnitureBench 后续不再直接调用 `gpu-snatcher/auto_data_preparation.sh`�
   --gpu 0 --n-envs 4 --randomness low
 ```
 
-目检通过后的正式 200/task campaign 只更换为 `--target-successes 200` 和新的 production suffix。对应 LMDB 转换入口固定为：
+目检通过后的正式 200/task campaign 只更换为 `--target-successes 200` 和新的 production suffix。下面是已验证过的 `rgbd+gp+skill` 转换示例；正式流水线对 3.4 节列出的五个 mode 分别调用同一维护入口：
 
 ```bash
 /home/hy/anaconda3/envs/rr/bin/python scripts/data_collection/process_furniturebench_pickles_to_lmdb.py \
@@ -215,20 +215,20 @@ LiftPegUpright 的相机项已经关闭：原始 40° 相机能完整覆盖修�
 |---|---|---|---|
 | r218 | RTX 3060 12 GB ×1 | FurnitureBench 4 env、`low` randomness；也承担本地检查 | 使用既有 `/home/hy/anaconda3/envs/rr`，本地 NVMe `/tmp` 约 202 GiB 可用 |
 | 236 | RTX 4090 24 GB ×4（GPU0–3） | AutoMate 每卡一个 16-env Isaac 进程；释放的卡再跑 ManiSkill | AutoMate/ManiSkill 使用既有 NAS Conda；本地 SSD 仅约 68 GiB 可用 |
-| NAS | `/mnt/nas/datasets_tmp` | 236 实测为 `10.71.106.245:/volume2/datasets_tmp` NFSv4.1，约 19 TiB 可用 | 作为 canonical raw、LMDB、manifest 和日志存储；预留 1.2 TiB |
+| NAS | `/mnt/nas/datasets_tmp` | 236 实测为 `10.71.106.245:/volume2/datasets_tmp` NFSv4.1，约 19 TiB 可用 | 作为 canonical raw、五套 LMDB、manifest 和日志存储；预留 2.0 TiB |
 
-用户批准后才创建 campaign 根：
+用户批准后，本轮使用的 campaign 根为：
 
 ```text
 /mnt/nas/datasets_tmp/rr_joint_training_0821_scripted_prod_<launch-date>_v1/
   raw/{furniturebench,maniskill,automate}/
-  processed/lmdb/{furniturebench,maniskill,automate}/
+  processed/lmdb/<condition>/{furniturebench,maniskill,automate}.lmdb/
   manifests/
   logs/
   staging/
 ```
 
-当前 r218 的 `/mnt/nas/datasets_tmp` **不是 NAS mount**，`findmnt -T` 会落到本机根文件系统；恢复正确挂载前禁止从 r218 往该路径写 production 数据。若不能及时恢复，则 r218 只在本地 NVMe 做有界 staging，经验证后直接传到 236 可见的 volume2 路径。
+2026-09-02 复核时，r218 的 `/mnt/nas/datasets_tmp` 已是 `10.71.106.246:/volume2/datasets_tmp` NFSv4.1，但挂载为只读；236 的同一路径是 `10.71.106.245:/volume2/datasets_tmp` 且可写。因此 r218 直接读取和校验 canonical raw，在本地 NVMe 串行构建一个 LMDB，再通过 236 写入 NAS `.incoming`；r218 从只读挂载复核 SHA/schema/loader，最后由 236 原子改名并写 completion marker。禁止把只读挂载误判成可写路径，也不为此修改系统 mount。
 
 GPU0–3 是共享资源。collector 暂停、退出或 task 切换时，必须先恢复占卡脚本并确认显存，或用一个串行 runner 无空窗衔接下一 task；不得让卡在两个进程之间空出来。只停止精确 tmux session/run ID，不按用户名杀进程。
 
@@ -274,32 +274,60 @@ pure_rollout_hours = total_attempts / sum(active GPU attempted-rollout throughpu
 
 调度采用 longest-processing-time-first：四个低产率 AutoMate task 先分散到四卡，每个 lane 完成后从剩余队列领取 predicted attempts 最大的 task；AutoMate 长尾收缩后，把 1–2 张卡切给 ManiSkill 难项。每个 lane 使用具名 tmux，记录 host、物理 GPU、Git commit、环境绝对路径、checkpoint hash、seed、env index、global attempt index、selected/excluded 和滚动 ETA。运行中每关闭一个 task 就用实际 attempts/time 更新剩余 ETA；不等整批结束才汇报。
 
-### 3.4 三个 LMDB 的构建与大小
+### 3.4 五个 condition、15 个 LMDB 的构建与大小
 
-最新 RR writer 使用 per-frame lossless zstd：`--frame-compression zstd --frame-compression-level 1`；图像点只在转换时用 `--image-annotation-mode guidance-point` 离线绘制，source pickle 始终保持 `image_annotation_mode=none`。PPU96 runbook 的真实 LMDB 对照中，zstd level 1 节省 58.3%，当前按下列区间预留：
+最新 RR writer 使用 per-frame lossless zstd：`--frame-compression zstd --frame-compression-level 1`。三个来源的 source pickle 始终只有一份，且保持 `image_annotation_mode=none`；五个 condition 从同一份 raw 离线渲染，不复制或原地修改 pickle。condition 与物理图像 mode 固定如下：
 
-| LMDB | Episodes | Transitions | 预计 zstd 大小 |
+| 训练 condition | 物理目录名 | `image_annotation_mode` | 默认物理 LMDB 数 | PPU96 层级 |
+|---|---|---|---:|---|
+| `rgbd+skill` | `rgbd-skill` | `none` | 3 | `/` 根盘 |
+| `rgbd+gp+skill` | `rgbd-gp-skill` | `guidance-point` | 3 | `/` 根盘 |
+| `rgbd+colored gp` | `rgbd-colored-gp` | `guidance-point-colored` | 3 | EPFS（当前挂载点 `/mnt/cpfs`） |
+| `rgbd+grasp-part` | `rgbd-grasp-part` | `grasp-part` | 3 | EPFS（当前挂载点 `/mnt/cpfs`） |
+| `rgbd+grasp-part colored` | `rgbd-grasp-part-colored` | `grasp-part-colored` | 3 | EPFS（当前挂载点 `/mnt/cpfs`） |
+
+每个 condition 默认包含 FurnitureBench、ManiSkill、AutoMate 各一个 LMDB，即 **5×3=15 个物理 LMDB**。训练开关仍按 condition 配置：普通 GP 同时启用 point 与 skill；colored GP 用颜色编码 skill；两个 grasp-part condition 分别使用普通/colored grasp-part 输入。condition、物理 mode 和 provenance 必须一一对应，不能只改目录名。
+
+2026-09-02 对本轮 production raw 做了 read-only 五模式 smoke：FurnitureBench lamp 348 帧（含 178 个 pick/place）、ManiSkill Peg 119 帧（含 50 个 pick）和 AutoMate 9 帧均能渲染全部五种 mode，`missing_grasp_geometry=0`，且 `none` 模式逐像素保持原图。构建器会在每个 source 闭合后重跑同一 gate；最终逐帧转换本身仍是全量 fail-closed 检查。
+
+| 范围 | Episodes | Transitions | 当前 zstd 中心估计 |
 |---|---:|---:|---:|
-| FurnitureBench | 600 | 约 328k | 90–140 GiB |
-| ManiSkill | 1,100 | 约 99k | 28–45 GiB |
-| AutoMate | 4,950 | 约 99k | 28–45 GiB |
-| 合计 | 6,650 | 约 526k | **145–230 GiB** |
+| 一个 condition：FurnitureBench | 600 | 约 328k | 约 85–96 GiB |
+| 一个 condition：ManiSkill | 1,100 | 约 99k | 约 28–31 GiB |
+| 一个 condition：AutoMate | 4,950 | 约 99k | 约 28–31 GiB |
+| 一个 condition 合计 | 6,650 | 约 526k | **约 141–158 GiB** |
+| 五个 condition 合计 | 33,250 个 condition-episode | 约 2.63M 个 condition-transition | **约 705–790 GiB** |
 
-默认每个 source 合成一个物理 LMDB。先转换 representative shard，用实际 compressed bytes/frame 替换区间；若 FurnitureBench 预计超过约 120–140 GiB，或本地构建时无法保留 40 GiB 安全余量，则按三个 task 或 30–40 GiB balanced shard 拆分。ManiSkill 和 AutoMate 各保持一个 LMDB，除非实测大小推翻该选择。
+旧规划的 145–230 GiB/condition 作为保守上界，不直接乘成已发生占用；第一套完成后按实际 compressed bytes/frame 更新其余四套 ETA 和空间。NAS 同时保留 raw 350–450 GiB 与最终 LMDB 705–790 GiB，中心总量约 1.03–1.21 TiB；再考虑一个本地 `.building.lmdb`、一个 NAS `.incoming` 和安全余量，campaign 预留 **2.0 TiB**。
 
-每个输出从 fresh `.building.lmdb` 开始，禁止 overwrite；依次验证精确 episode/task/count、source manifest/hash、`scripted`/source mode `none`/output mode `guidance-point`/zstd metadata、全量 stats、action/state/depth/order 等价、loader/training-reader smoke，最后记录 `data.mdb` bytes 和 SHA-256 后再原子改名。
+构建按 source-major 顺序进行：每个 source 闭合后只做一次 raw manifest/hash/provenance gate，再串行渲染五个 condition。r218 `/tmp` 一次只保留一个 `.building.lmdb`；该 LMDB 经 236 写入 NAS、通过 hash/schema/loader gate并生成 completion marker 后，才删除本地派生副本并构建下一个。默认不拆分；若 FurnitureBench 单 LMDB 的实测大小使 r218 不能保留至少 40 GiB 安全余量，则只对该 source 按 task 或 30–40 GiB balanced shard 拆分，并同步增加五个 condition 的 shard 数。
+
+每个输出从 fresh `.building.lmdb` 开始，禁止 overwrite；依次验证精确 episode/task/count、source manifest/hash、`scripted`、source mode `none`、condition 对应的 output mode、zstd metadata、全量 stats、action/state/depth/order 等价和 loader/training-reader smoke。每个 condition/source 都单独记录 `data.mdb` bytes、SHA-256、本机/NAS/PPU audit 与 completion marker。
 
 ### 3.5 PPU96 容量与交付
 
 正式执行前完整阅读 `reports/claude/ppu96_single_card_4way_zstd_runbook.md`。规划时 RR `main` 为 `bfc2ca8`，已包含该 runbook 及 native zstd writer/reader；上传前在 PPU96 用 clean worktree/clone materialize 审计后的最新 commit，不能覆盖远端 RR 现有 tracked/untracked 修改。
 
-PPU96 `/root` 实测约 **660 GiB 可用**，现有 `/root/rr-local-data` 约 180 GiB、`/root/rr-runs` 约 0.9 GiB。145–230 GiB 最终集放入后预计仍余 **430–515 GiB**，高于 runbook 的 100 GiB 安全线，因此当前**不需要用户先迁走已有数据集**。
+PPU96 `/root` 实测约 **660 GiB 可用**；EPFS 在当前实例上对应 `/mnt/cpfs`（与 `/mnt/workspace` 同一共享文件系统），实测约 **52.7 TiB 可用**。根盘只接收前两个 condition，中心占用约 **282–316 GiB**，完成后预计仍余 **344–378 GiB**，高于 runbook 的 100 GiB 安全线；因此按当前估计不需要用户先迁走已有根盘数据。上传器在每个 LMDB 传输前仍按“payload bytes + 100 GiB 根盘余量”动态 fail-closed，不能靠估计硬塞。后三个 condition 中心占用约 **423–474 GiB**，放 EPFS 并保留至少 1 TiB 动态余量。
 
-每个闭合 LMDB 从实际持有数据的机器直接传到 `/root/rr-local-data/processed/joint_training_0821/<source>.lmdb.incoming/`，使用 resumable `rsync -aP --partial --append-verify`。目标端核对 bytes、`data.mdb` SHA-256、metadata/full validator 和 loader smoke 后原子改名并写 `.transfer-complete`。NAS 是 canonical copy；PPU96 根盘只是训练用快速副本。
+目标布局固定为：
 
-### 3.6 开跑审批 gate
+```text
+/root/rr-local-data/processed/joint_training_0821/
+  {rgbd-skill,rgbd-gp-skill}/{furniturebench,maniskill,automate}.lmdb/
 
-本文提交和 push 后暂停。只有用户明确批准本版规划后，才依次实施：维护版 AutoMate multi-env collector→严格回归→volume2 durable I/O probe→创建 production campaign 根→采集与滚动监督→三个 LMDB→PPU96 传输与验收。规划批准本身不授权开始造数或上传。
+/mnt/cpfs/users/hy/rr-local-data/processed/joint_training_0821/
+  {rgbd-colored-gp,rgbd-grasp-part,rgbd-grasp-part-colored}/
+    {furniturebench,maniskill,automate}.lmdb/
+```
+
+每个闭合 LMDB 由能直接读取 canonical NAS 的 r218 传到对应目标的 `.lmdb.incoming/`，不经过控制工作站中转，使用 resumable `rsync -aP --partial --append-verify`。目标端核对 bytes、`data.mdb` SHA-256、condition/mode/provenance、metadata validator 和 loader smoke 后原子改名并写 `.transfer-complete`。NAS 是 canonical copy；PPU96 根盘和 EPFS 是训练副本。
+
+r218→PPU96 已测单流约 0.81 MiB/s，四流 aggregate 约 0.91 MiB/s，没有值得承担复杂度的并行增益，因此使用单流顺序断点续传。按 705–790 GiB 估计，纯传输约 **9.2–11.6 天**；含重连、逐 LMDB SHA/loader 校验与发布，操作窗口按 **10–13 天**。第一套实际 bytes 出来后立即更新该窗口；若落到旧保守上界，窗口会相应延长。
+
+### 3.6 当前执行授权与 gate
+
+用户已经明确批准开始数采并要求持续监督，因此 collector 和滚动审计继续运行；本次五-condition 修改不重启或扰动现有 raw 采集。LMDB 构建必须等待对应 source 的精确配额、全量 scripted/raw/projection audit、NAS manifest/hash 和上传 marker 全部闭合。上传必须等待每个 condition/source 的 NAS LMDB completion marker，随后逐个执行断点传输、目标空间 gate、SHA、metadata 与 loader 验收。最终完成条件从原来的三个 LMDB 改为 **15 个 LMDB 全部在 NAS 闭合，根盘两套/EPFS 三套全部发布并有 15 份 transfer receipt**。
 
 ## 4. 附录：此前实现细节的验证结论
 
