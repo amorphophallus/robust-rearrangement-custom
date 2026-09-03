@@ -454,10 +454,10 @@ NAS 路径统一为 `<NAS>/processed/lmdb/<condition>/<source>.lmdb/`。表中�
 
 | # | Condition | Part/source | Episodes | 计划/实际容量 | 当前验收状态 | PPU96 初始位置 | 236 初始热层 |
 |---:|---|---|---:|---:|---|---|---|
-| 1 | `rgbd-skill` | `furniturebench` | 600 | **75,107,962,880 bytes / 69.95 GiB 实测** | `NAS PASS`；PPU96 pre-transfer SHA 中 | `/root` | — |
+| 1 | `rgbd-skill` | `furniturebench` | 600 | **75,107,962,880 bytes / 69.95 GiB 实测** | `NAS PASS`；PPU96 `.incoming` 传输中 | `/root` | — |
 | 2 | `rgbd-skill` | `maniskill` | 1,100 | 28–31 GiB | `PENDING` | `/root` | — |
 | 3 | `rgbd-skill` | `automate` | 4,950 | 28–31 GiB | `PENDING` | `/root` | — |
-| 4 | `rgbd-gp-skill` | `furniturebench` | 600 | 70–96 GiB | `PENDING` | `/root` | — |
+| 4 | `rgbd-gp-skill` | `furniturebench` | 600 | 70–96 GiB | `BUILDING` since 2026-09-03 13:43 | `/root` | — |
 | 5 | `rgbd-gp-skill` | `maniskill` | 1,100 | 28–31 GiB | `PENDING` | `/root` | — |
 | 6 | `rgbd-gp-skill` | `automate` | 4,950 | 28–31 GiB | `PENDING` | `/root` | — |
 | 7 | `rgbd-colored-gp` | `furniturebench` | 600 | 70–96 GiB | `PENDING` | EPFS | 236 SSD |
@@ -506,7 +506,7 @@ NAS 路径统一为 `<NAS>/processed/lmdb/<condition>/<source>.lmdb/`。表中�
 
 | # | NAS actual episodes/transitions | `data.mdb` bytes / SHA256 | NAS gates / receipt | PPU96 replica | 236 replica | Overall |
 |---:|---|---|---|---|---|---|
-| 1 | 600 / 251,980 | 75,107,962,880 / `e034484219a158aaca87a528bc9b99461088b4a20896e490b71df6e4a45bbeaa` | `NAS PASS`；`du=75,108,102,144`；full/core/campaign/loader PASS；`logs/joint-training-production-20260901/lmdb_production_v3_5conditions/rgbd-skill__furniturebench.receipt` | `/root` pre-transfer SHA | N/A | `NAS PASS / PPU TRANSFERRING` |
+| 1 | 600 / 251,980 | 75,107,962,880 / `e034484219a158aaca87a528bc9b99461088b4a20896e490b71df6e4a45bbeaa` | `NAS PASS`；`du=75,108,102,144`；full/core/campaign/loader PASS；`logs/joint-training-production-20260901/lmdb_production_v3_5conditions/rgbd-skill__furniturebench.receipt` | `/root` `.incoming` rsync since 2026-09-03 13:45 | N/A | `NAS PASS / PPU TRANSFERRING` |
 | 2 | — | — | pending | `/root` pending | N/A | `PENDING` |
 | 3 | — | — | pending | `/root` pending | N/A | `PENDING` |
 | 4 | — | — | pending | `/root` pending | N/A | `PENDING` |
@@ -526,17 +526,19 @@ NAS 路径统一为 `<NAS>/processed/lmdb/<condition>/<source>.lmdb/`。表中�
 
 #### 3.8.6 2026-09-03 执行基线、后续顺序与 ETA
 
-下表是 2026-09-03 13:30（Asia/Shanghai）的可验事实快照；它替代 §3.3 的启动前估算。采集速度始终按 **attempted rollouts/hour** 记录，多环境并行是否有效也只看这个指标；成功比例只用于把“还缺多少条成功轨迹”换算成总 attempts 和完工 ETA，不作为加速指标。
+下表是 2026-09-03 13:57（Asia/Shanghai）的可验事实快照；它替代 §3.3 的启动前估算。采集速度始终按 **attempted rollouts/hour** 记录，多环境并行是否有效也只看这个指标；成功比例只用于把“还缺多少条成功轨迹”换算成总 attempts 和完工 ETA，不作为加速指标。
 
 | 阶段 | 当前闭合量 | 尚欠交付 | 后续动作与通过条件 | 当前 ETA |
 |---|---|---|---|---:|
 | FurnitureBench raw | NAS 600/600；251,980 transitions；36.60 GiB；全量 scripted/raw/reprojection audit 与 source receipt 已通过 | 无 | canonical raw 保留到 15/15 LMDB 验收；r218 派生 staging 已在 hash 后清理并回收 39,302,455,296 bytes | `PASS` |
-| ManiSkill raw | NAS 10×100=1,000；Poke 旧 staging 4，四路本轮截至 13:25 新增 8 | Poke 最终需聚合、去重并形成 100 条 strict-pass canonical set | GPU1/2 从 12:15 开始，稳定约 1.9k attempted rollouts/hour；GPU0/3 从 13:14 加入后，13:19–13:25 窗口四路合计约 **3.8k attempted rollouts/hour**，约为双路 1.9 倍；闭合后做 100/100 strict audit、bundle SHA 和原子发布 | 尝试吞吐已达约 3.8k/h；按当前成功换算暂约 7–12 h，attempt 上限和聚合逻辑持续监督 |
+| ManiSkill raw | NAS 10×100=1,000；Poke 旧 staging 4，四路本轮截至 13:56 新增 14 | Poke 最终需聚合、去重并形成 100 条 strict-pass canonical set | GPU1/2 从 12:15 开始，累计 3,204 attempts；GPU0/3 从 13:14 加入，累计 1,284 attempts；4,488 attempts 的长窗口合计约 **3.77k attempted rollouts/hour**，约为双路 1.9 倍；闭合后做 100/100 strict audit、bundle SHA 和原子发布 | 尝试吞吐稳定约 3.8k/h；按当前成功换算暂约 7–12 h，attempt 上限和聚合逻辑持续监督 |
 | AutoMate raw | NAS 97×50=4,850 | 100 条：`00410` 50、`00863` 50 | 32-env 单卡实测约 1,378–1,478 attempted rollouts/hour，已证明多 env 并行有效；当前 checkpoint 随附 `env.yaml` 指向 `00015` width，使用 task-specific USD；正式补采等待兼容宽度语义确认并将该值写入 provenance | rollout 单位吞吐已知；语义 gate 未闭合前不报伪精确总 ETA |
 | NAS raw 最终闭合 | 6,450/6,650 pickle；108/111 unit receipts；1/3 source receipts | Poke 100、AutoMate 100；Mani/Auto source receipts | 两个 tail 各自全量 audit、bundle hash、source-complete receipt | 当前由 Poke 与 AutoMate 语义 gate 决定 |
-| 15 个 NAS LMDB | **1/15 final**；#1 为 75,107,962,880 bytes，`du=75,108,102,144`，所有本地/NAS gates PASS | §3.8.3 #2–#15；#2 已续跑 | source-major 构建；一次只保留一个本地 `.building`；每个 part 独立 full-stats/hash/loader/原子发布；#1 原子改名后曾因 r218 目录缓存竞态生成空 bytes receipt，已按 NAS audit/marker/stat 修复且未重建数据 | 首 part 本地 build 25 min、full-stats+local audit 10.6 min、NAS 写入 11 min、NAS campaign gate 约 13 min；全部仍保留 24–72 h 工程窗口 |
-| PPU96 15 个 replica | 0/15；#1 已越过 NAS marker，正在独立 pre-transfer SHA gate | 根盘 6、EPFS 9 | 每个 NAS part 一闭合即开始单流断点传输；每个 part 独立校验并写 receipt | 当前 planning band 纯传输 9.2–11.2 d，操作窗口 10–13 d；#1 纯传输约 24.6 h |
+| 15 个 NAS LMDB | **1/15 final**；#1 为 75,107,962,880 bytes，`du=75,108,102,144`，所有本地/NAS gates PASS；#4 于 13:43 开始写入 | §3.8.3 其余 14 行；当前在建 #4 | source-major 构建；一次只保留一个本地 `.building`；每个 part 独立 full-stats/hash/loader/原子发布；#1 原子改名后曾因 r218 目录缓存竞态生成空 bytes receipt，已按 NAS audit/marker/stat 修复且未重建数据 | 首 part 本地 build 25 min、full-stats+local audit 10.6 min、NAS 写入 11 min、NAS campaign gate 约 13 min；全部仍保留 24–72 h 工程窗口 |
+| PPU96 15 个 replica | 0/15；#1 源 SHA PASS，13:45 开始向 `/root/.../furniturebench.lmdb.incoming` 断点 rsync，远端文件已增长 | 根盘 6、EPFS 9 | 每个 NAS part 一闭合即开始单流断点传输；每个 part 独立校验并写 receipt | 当前 planning band 纯传输 9.2–11.2 d，操作窗口 10–13 d；#1 按预检 0.81 MiB/s 约 24.6 h，运行中按 10–30 min 实测窗口滚动更新 |
 | 236 初始热层 | 0/6 | 两个 condition、6 个 part | 首个新 condition NAS 验收后，再按 §3.6.1 精确 reader gate 删除六个旧 med LMDB；实时空间 gate 后落盘并验收 | 数据 ready 后约 2–6 h，首传前用 NAS→236 durable probe 更新 |
+
+PPU96 首份传输的运行中诊断单独保留，避免拿瞬时值改写整个 ETA：13:45:05 的 rsync attempt 1 在约 0.14–0.30 MiB/s 的低速状态下运行到 153 MB 后于 13:53:29 断线，`.incoming` 被保留；隔离 rclone/SFTP 四流 probe 达到约 2.0–3.0 MiB/s，但同名单大文件二次启动会从 0 重写，未满足断点续传合同，因此未替代 production，临时 probe 已删除。rsync attempt 2 从原 partial 续传，13:55:53–13:57:07 的 74 秒窗口由 397,672,448 增至 661,127,168 bytes，约 **3.40 MiB/s**。当前继续使用可恢复 rsync，并按 10–30 分钟窗口更新 ETA；若重连后又长期低于 0.81 MiB/s，备用方案是 NAS 临时固定-size chunks、逐 chunk SHA/并行传输、PPU 重组后整文件 SHA，不能直接使用不可恢复的单文件 rclone。
 
 执行顺序不是全串行：FurnitureBench 一发布就立即构建它的 5 个 LMDB；每个 LMDB 在 NAS 闭合后立即进入 PPU96 单流队列；同时用 236 GPU0–3 修复并补齐 ManiSkill/AutoMate。以 tail gate 在一天内关闭、全量 LMDB 构建落在 24–72 小时预留内为前提，**全部 15 个 NAS LMDB 的工作窗口约 1–3 天，PPU96 最终 15/15 的端到端窗口约 11–16 天**。PPU96 慢链路是最终交付关键路径；如果 ManiSkill/AutoMate probe 未过，或第一份 LMDB 实测推翻容量/写入速度假设，立即更新本表而不是继续沿用旧 ETA。
 
