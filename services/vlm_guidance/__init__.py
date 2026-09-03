@@ -5,3 +5,5 @@ SKILL_NAMES = ("push", "pick", "place", "insert", "screw")
 # text SFT, where skill and the raw-pixel point are parsed from generated JSON.
 POINT_POLICY_VERSION = 2
 ORIGINAL_SFT_POLICY_VERSION = 3
+POSE_SFT_POLICY_VERSION = 4
+POSE_OUTPUT_SCHEMA = "skill_point_rotation6d"

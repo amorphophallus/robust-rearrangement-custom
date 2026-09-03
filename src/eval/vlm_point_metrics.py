@@ -183,11 +183,13 @@ def make_point_error_record(
         "error_px": None,
         "same_depth_error_mm": None,
         "projected_noise_residuals_px": None,
+        "vlm_output_valid": True,
         "valid": False,
     }
     predicted = _to_numpy(vlm_point)
     if predicted.shape != (2,) or not np.isfinite(predicted).all():
-        raise ValueError("invalid VLM point in metric record")
+        record["vlm_output_valid"] = False
+        return record
     record["vlm_point"] = predicted.tolist()
     if oracle_point is None:
         return record
@@ -297,7 +299,10 @@ def _finish_summary(stats: dict[str, Any]) -> dict[str, Any]:
             "p95_error_px": (
                 float(np.quantile(errors, 0.95)) if len(errors) else None
             ),
-            "count_invalid_gt": count_total - count_valid,
+            "count_invalid_gt": int(
+                stats.get("count_invalid_gt", count_total - count_valid)
+            ),
+            "count_invalid_vlm": int(stats.get("count_invalid_vlm", 0)),
             "coverage": count_valid / count_total if count_total else None,
             "mean_dx_px": sum_dx / count_valid if count_valid else None,
             "mean_dy_px": sum_dy / count_valid if count_valid else None,
@@ -401,6 +406,13 @@ def _summarize(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     stats = {
         "count_valid": count_valid,
         "count_total": count_total,
+        "count_invalid_vlm": sum(
+            row.get("vlm_output_valid") is False for row in rows
+        ),
+        "count_invalid_gt": sum(
+            row.get("vlm_output_valid") is not False and not row.get("valid")
+            for row in rows
+        ),
         "same_depth_count": len(same_depth),
         "error_samples_px": errors,
         "tail_count_gt_40px": sum(error > 40.0 for error in errors),
@@ -863,6 +875,61 @@ def summarize_point_error_records(records: Sequence[dict[str, Any]]) -> dict[str
     }
 
 
+def _summarize_pose_records(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    rows = list(records)
+    rotation_values = np.asarray(
+        [
+            float(row["rotation_error_deg"])
+            for row in rows
+            if row.get("rotation_error_deg") is not None
+            and math.isfinite(float(row["rotation_error_deg"]))
+        ],
+        dtype=np.float64,
+    )
+    grasp_rows = [row for row in rows if row.get("grasp_projection_required")]
+    grasp_valid = sum(row.get("grasp_projection_valid") is True for row in grasp_rows)
+    depth_valid = sum(row.get("depth_valid") is True for row in rows)
+    output_valid = sum(row.get("vlm_output_valid") is not False for row in rows)
+    return {
+        "count_total": len(rows),
+        "model_output_valid_count": int(output_valid),
+        "model_output_coverage": output_valid / len(rows) if rows else None,
+        "rotation_count": int(rotation_values.size),
+        "rotation_error_samples_deg": rotation_values.tolist(),
+        "rotation_mean_deg": (
+            float(rotation_values.mean()) if rotation_values.size else None
+        ),
+        "rotation_median_deg": (
+            float(np.median(rotation_values)) if rotation_values.size else None
+        ),
+        "rotation_p90_deg": (
+            float(np.percentile(rotation_values, 90)) if rotation_values.size else None
+        ),
+        "depth_valid_count": int(depth_valid),
+        "depth_coverage": depth_valid / len(rows) if rows else None,
+        "grasp_projection_count": len(grasp_rows),
+        "grasp_projection_valid_count": int(grasp_valid),
+        "grasp_projection_coverage": (
+            grasp_valid / len(grasp_rows) if grasp_rows else None
+        ),
+    }
+
+
+def summarize_pose_error_records(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    rows = list(records)
+    fresh = [row for row in rows if row.get("is_fresh_query")]
+    return {
+        "overall": _summarize_pose_records(rows),
+        "by_skill": {
+            skill: _summarize_pose_records(
+                [row for row in rows if row.get("oracle_skill") == skill]
+            )
+            for skill in SKILLS
+        },
+        "fresh_queries": _summarize_pose_records(fresh),
+    }
+
+
 def build_vlm_point_error_summary(
     records_per_env: Sequence[Sequence[dict[str, Any]]],
     success_flags: Sequence[bool],
@@ -886,6 +953,11 @@ def build_vlm_point_error_summary(
         "all": summarize_point_error_records(all_records),
         "success_only": summarize_point_error_records(success_records),
         "failure_only": summarize_point_error_records(failure_records),
+        "pose": {
+            "all": summarize_pose_error_records(all_records),
+            "success_only": summarize_pose_error_records(success_records),
+            "failure_only": summarize_pose_error_records(failure_records),
+        },
     }
 
 
@@ -986,6 +1058,12 @@ def merge_vlm_point_error_summaries(summaries: Sequence[dict[str, Any]]) -> dict
         merged = {
             "count_valid": count_valid,
             "count_total": count_total,
+            "count_invalid_vlm": sum(
+                int(stats.get("count_invalid_vlm", 0)) for stats in stats_list
+            ),
+            "count_invalid_gt": sum(
+                int(stats.get("count_invalid_gt", 0)) for stats in stats_list
+            ),
             "same_depth_count": same_depth_count,
             "error_samples_px": [
                 float(value)
@@ -1044,4 +1122,65 @@ def merge_vlm_point_error_summaries(summaries: Sequence[dict[str, Any]]) -> dict
             ),
             "distribution_samples": fresh_samples,
         }
+    def merge_pose_rows(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        count_total = sum(int(row.get("count_total", 0)) for row in rows)
+        output_valid = sum(
+            int(row.get("model_output_valid_count", row.get("count_total", 0)))
+            for row in rows
+        )
+        rotation_values = np.asarray(
+            [
+                float(value)
+                for row in rows
+                for value in row.get("rotation_error_samples_deg", [])
+            ],
+            dtype=np.float64,
+        )
+        depth_valid = sum(int(row.get("depth_valid_count", 0)) for row in rows)
+        grasp_count = sum(int(row.get("grasp_projection_count", 0)) for row in rows)
+        grasp_valid = sum(
+            int(row.get("grasp_projection_valid_count", 0)) for row in rows
+        )
+        return {
+            "count_total": count_total,
+            "model_output_valid_count": output_valid,
+            "model_output_coverage": output_valid / count_total if count_total else None,
+            "rotation_count": int(rotation_values.size),
+            "rotation_error_samples_deg": rotation_values.tolist(),
+            "rotation_mean_deg": (
+                float(rotation_values.mean()) if rotation_values.size else None
+            ),
+            "rotation_median_deg": (
+                float(np.median(rotation_values)) if rotation_values.size else None
+            ),
+            "rotation_p90_deg": (
+                float(np.percentile(rotation_values, 90)) if rotation_values.size else None
+            ),
+            "depth_valid_count": depth_valid,
+            "depth_coverage": depth_valid / count_total if count_total else None,
+            "grasp_projection_count": grasp_count,
+            "grasp_projection_valid_count": grasp_valid,
+            "grasp_projection_coverage": (
+                grasp_valid / grasp_count if grasp_count else None
+            ),
+        }
+
+    pose_output = {}
+    for outcome in ("all", "success_only", "failure_only"):
+        scoped = [summary.get("pose", {}).get(outcome, {}) for summary in summaries]
+        pose_output[outcome] = {
+            "overall": merge_pose_rows(
+                [item.get("overall", {}) for item in scoped]
+            ),
+            "by_skill": {
+                skill: merge_pose_rows(
+                    [item.get("by_skill", {}).get(skill, {}) for item in scoped]
+                )
+                for skill in SKILLS
+            },
+            "fresh_queries": merge_pose_rows(
+                [item.get("fresh_queries", {}) for item in scoped]
+            ),
+        }
+    output["pose"] = pose_output
     return output

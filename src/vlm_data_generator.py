@@ -192,6 +192,34 @@ POSE_DEFAULT_USER_PROMPT = (
     f"like this example: {POSE_OUTPUT_JSON_EXAMPLE}"
 )
 
+# Ver2 text-SFT contract. Unlike the enrichment wire format above, the
+# deployed assistant response intentionally omits target_point_3d: production
+# reconstructs translation from the predicted front pixel and sensor depth.
+POSE_VER2_BASE_SYSTEM_PROMPT = POSE_BASE_SYSTEM_PROMPT.replace(
+    "target_point_3d and state_info.base.ee_pos are expressed in the same "
+    "robot-base coordinate frame. ",
+    "",
+)
+POSE_VER2_TASK_SYSTEM_PROMPTS = {
+    task: prompt.replace(POSE_BASE_SYSTEM_PROMPT, POSE_VER2_BASE_SYSTEM_PROMPT, 1)
+    for task, prompt in POSE_TASK_SYSTEM_PROMPTS.items()
+}
+POSE_VER2_OUTPUT_JSON_EXAMPLE = (
+    '{"skill": "pick", "target_point_2d": [160.0, 153.0], '
+    '"target_rotation_6d": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]}'
+)
+POSE_VER2_DEFAULT_USER_PROMPT = (
+    "This is the front camera image:\n"
+    "<image>\n"
+    "This is the wrist camera image:\n"
+    "<image>\n"
+    "This is the robot proprioceptive state information:\n"
+    f"{STATE_INFO_PLACEHOLDER}\n"
+    "Please analyze the images and state information, then provide the current skill, "
+    "target point, and target orientation. Return the answer in JSON format exactly "
+    f"like this example: {POSE_VER2_OUTPUT_JSON_EXAMPLE}"
+)
+
 
 def _default_data_dir_raw() -> Path:
     return Path.cwd()

@@ -11,6 +11,8 @@ from pathlib import Path
 from services.vlm_guidance import (
     ORIGINAL_SFT_POLICY_VERSION,
     POINT_POLICY_VERSION,
+    POSE_OUTPUT_SCHEMA,
+    POSE_SFT_POLICY_VERSION,
     SKILL_NAMES,
 )
 
@@ -65,12 +67,15 @@ def build_manifest(args) -> dict:
     policy = checkpoint_config.get("hy_furniture_policy", {})
     detected_mode = "structured" if policy else "original_sft"
     requested_mode = getattr(args, "model_mode", "auto")
+    output_schema = getattr(args, "output_schema", "skill_point")
     model_mode = detected_mode if requested_mode == "auto" else requested_mode
     if model_mode != detected_mode:
         raise RuntimeError(
             f"checkpoint looks like {detected_mode}, not requested {model_mode}"
         )
     if model_mode == "structured":
+        if output_schema != "skill_point":
+            raise RuntimeError("structured mode does not implement Rotation6D")
         if "base_model" not in roots:
             raise RuntimeError("structured mode requires --base-model-dir")
         if policy.get("version") != POINT_POLICY_VERSION:
@@ -83,7 +88,24 @@ def build_manifest(args) -> dict:
             checkpoint_config.get("architectures", ())
         ):
             raise RuntimeError("original_sft checkpoint is not native Qwen3.5")
-        policy_version = ORIGINAL_SFT_POLICY_VERSION
+        policy_version = (
+            POSE_SFT_POLICY_VERSION
+                if output_schema == POSE_OUTPUT_SCHEMA
+            else ORIGINAL_SFT_POLICY_VERSION
+        )
+    hy_furniture = None
+    if output_schema == POSE_OUTPUT_SCHEMA:
+        hy_furniture_root = getattr(args, "hy_furniture_root", None)
+        if not hy_furniture_root:
+            raise RuntimeError("pose schema requires --hy-furniture-root")
+        hy_root = Path(hy_furniture_root).resolve()
+        prediction_path = hy_root / "prediction.py"
+        if not prediction_path.is_file():
+            raise FileNotFoundError(prediction_path)
+        hy_furniture = {
+            "root": str(hy_root),
+            "prediction_sha256": _sha256(prediction_path),
+        }
     files = {}
     for root_name, root in roots.items():
         for name in _artifact_files(root_name, root):
@@ -100,6 +122,8 @@ def build_manifest(args) -> dict:
         "base_revision": getattr(args, "base_revision", None),
         "checkpoint_revision": args.checkpoint_revision,
         "policy_version": policy_version,
+        "output_schema": output_schema,
+        "hy_furniture": hy_furniture,
         "skill_names": list(SKILL_NAMES),
         "files": files,
     }
@@ -113,6 +137,12 @@ def main() -> None:
         "--model-mode", choices=("auto", "structured", "original_sft"), default="auto"
     )
     parser.add_argument("--base-revision")
+    parser.add_argument(
+        "--output-schema",
+        choices=("skill_point", POSE_OUTPUT_SCHEMA),
+        default="skill_point",
+    )
+    parser.add_argument("--hy-furniture-root")
     parser.add_argument("--checkpoint-revision", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()

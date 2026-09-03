@@ -74,8 +74,10 @@ from src.eval.progress_schema import (
     tracking_histories_are_complete,
 )
 from src.eval.vlm_guidance import (
+    POSE_POLICY_VERSION,
     VLMGuidanceClient,
     VLMPrediction,
+    materialize_pose_predictions,
     policy_bundles_from_vlm,
     state_info_for_env,
 )
@@ -609,6 +611,39 @@ def _transpose_step_env_annotations(values, num_envs: int):
     return [[values[step_idx][env_idx] for step_idx in range(len(values))] for env_idx in range(num_envs)]
 
 
+def _accepted_env_count(
+    *, num_envs: int, completed_rollouts: int, requested_rollouts: int, target_mode: bool
+) -> int:
+    if target_mode:
+        return int(num_envs)
+    return max(0, min(int(num_envs), int(requested_rollouts) - int(completed_rollouts)))
+
+
+def _saved_media_env_count_for_round(
+    *,
+    num_envs: int,
+    accepted_env_count: int,
+    save_rollouts_this_round: bool,
+    save_rollouts_to_wandb: bool,
+    save_failures: bool,
+    max_saved_rollouts: Optional[int],
+    saved_rollouts_count: int,
+) -> int:
+    """Return how many leading environments need full RGBD histories.
+
+    When failures are saved, every accepted environment is eligible in stable
+    index order. A finite file-save budget can therefore be applied before
+    collecting the large media tensors. Other modes may select successful
+    environments only after the rollout, so they retain all environment media.
+    """
+    if not save_rollouts_this_round:
+        return 0
+    if save_rollouts_to_wandb or not save_failures or max_saved_rollouts is None:
+        return int(num_envs)
+    remaining = max(0, int(max_saved_rollouts) - int(saved_rollouts_count))
+    return min(int(num_envs), int(accepted_env_count), remaining)
+
+
 def _build_rollout_progress_summary(rollout_stats: RolloutStats) -> dict:
     return {
         "n_success": int(rollout_stats.n_success),
@@ -708,7 +743,7 @@ class SuccessTqdm(tqdm):
         else:
             desc = (
                 f"Performing rollouts ({self.task_name}): "
-                f"round {self.round}/{self.n_rollouts//self.num_envs}, "
+                f"round {self.round}/{(self.n_rollouts + self.num_envs - 1)//self.num_envs}, "
                 f"success: {n_success}/{total} ({success_rate:.1%})"
             )
         self.set_description(desc)
@@ -754,6 +789,14 @@ def _query_vlm_annotations(
         ],
         step_idx=step_idx,
     )
+    if client.expected_policy_version == POSE_POLICY_VERSION:
+        if "depth_image2" not in obs:
+            raise ValueError("VLM pose guidance requires resized front depth")
+        predictions = materialize_pose_predictions(
+            oracle_bundles,
+            predictions,
+            [obs["depth_image2"][idx] for idx in range(env.num_envs)],
+        )
     return policy_bundles_from_vlm(
         oracle_bundles, predictions, step_idx=step_idx
     ), predictions
@@ -780,8 +823,7 @@ def _record_vlm_point_errors(
             + int(step_idx) * 97_409
             + int(prediction.query_step) * 9_176
         )
-        records_per_env[env_idx].append(
-            make_point_error_record(
+        record = make_point_error_record(
                 step_idx=step_idx,
                 oracle_skill=oracle.get("skill"),
                 vlm_skill=prediction.skill,
@@ -793,7 +835,32 @@ def _record_vlm_point_errors(
                 noise_seed=noise_seed,
                 noise_projection_samples=noise_projection_samples,
             )
+        rotation_error_deg = None
+        oracle_pose = oracle.get("guidance_pose_clean")
+        if oracle_pose is None:
+            oracle_pose = oracle.get("guidance_pose")
+        if prediction.rotation_matrix is not None and oracle_pose is not None:
+            oracle_pose_np = np.asarray(oracle_pose, dtype=np.float64)
+            if oracle_pose_np.shape == (4, 4) and np.isfinite(oracle_pose_np).all():
+                relative = (
+                    np.asarray(prediction.rotation_matrix, dtype=np.float64)
+                    @ oracle_pose_np[:3, :3].T
+                )
+                cos_theta = float(np.clip((np.trace(relative) - 1.0) * 0.5, -1.0, 1.0))
+                rotation_error_deg = float(np.degrees(np.arccos(cos_theta)))
+        record.update(
+            {
+                "vlm_output_valid": prediction.model_output_valid,
+                "vlm_parse_error": prediction.parse_error,
+                "rotation_error_deg": rotation_error_deg,
+                "depth_valid": prediction.sampled_depth_m is not None,
+                "sampled_depth_m": prediction.sampled_depth_m,
+                "depth_valid_count": int(prediction.depth_valid_count),
+                "grasp_projection_required": prediction.skill in {"pick", "place"},
+                "grasp_projection_valid": prediction.grasp_projection_valid,
+            }
         )
+        records_per_env[env_idx].append(record)
 
 
 def rollout(
@@ -804,6 +871,7 @@ def rollout(
     resize_video: bool = True,
     n_parts_assemble: int = 1,
     save_rollouts: bool = False,
+    saved_media_env_count: Optional[int] = None,
     pc_generator = None,
     annotate_skill: bool = False,
     annotate_guidance_point: bool = False,
@@ -837,6 +905,16 @@ def rollout(
         raise ValueError(f"unsupported annotation_source: {annotation_source}")
     if use_vlm and vlm_client is None:
         raise ValueError("annotation_source=vlm requires a VLM client")
+    if saved_media_env_count is None:
+        saved_media_env_count = env.num_envs if save_rollouts else 0
+    saved_media_env_count = int(saved_media_env_count)
+    if not 0 <= saved_media_env_count <= env.num_envs:
+        raise ValueError(
+            "saved_media_env_count must be between 0 and env.num_envs, got "
+            f"{saved_media_env_count} for {env.num_envs} environments"
+        )
+    if not save_rollouts and saved_media_env_count != 0:
+        raise ValueError("saved_media_env_count must be zero when save_rollouts is false")
     query_interval = None
     if use_vlm:
         query_interval = int(vlm_query_interval or actor.action_horizon)
@@ -936,6 +1014,21 @@ def rollout(
         initial_guidance_points_2d = [
             bundle.get("guidance_point_2d", {}) for bundle in initial_annotations
         ]
+        # Persist and score the same VLM geometry that is rendered into the
+        # policy observation.  Clean fields intentionally remain sourced from
+        # the scripted bundle as the tracking reference.
+        initial_guidance_points = [
+            bundle.get("guidance_point") for bundle in initial_annotations
+        ]
+        initial_guidance_poses = [
+            bundle.get("guidance_pose") for bundle in initial_annotations
+        ]
+        initial_guidance_gripper_widths = [
+            bundle.get("guidance_gripper_width") for bundle in initial_annotations
+        ]
+        initial_grasp_annotations_2d = [
+            bundle.get("grasp_annotation_2d", {}) for bundle in initial_annotations
+        ]
     _apply_policy_visual_annotations(
         obs,
         initial_annotations,
@@ -978,10 +1071,27 @@ def rollout(
         env, video_obs["robot_state"]
     )
     robot_states = [TensorDict(video_obs["robot_state"], batch_size=env.num_envs)]
-    imgs1 = [] if "color_image1" not in video_obs else [video_obs["color_image1"].cpu()]
-    imgs2 = [] if "color_image2" not in video_obs else [video_obs["color_image2"].cpu()]
-    depth_image1 = [] if video_obs.get("depth_image1") is None else [video_obs["depth_image1"]]
-    depth_image2 = [] if video_obs.get("depth_image2") is None else [video_obs["depth_image2"]]
+    def _init_cpu_media_history(key: str):
+        if not save_rollouts or key not in video_obs or video_obs.get(key) is None:
+            return None
+        initial_frame = video_obs[key][:saved_media_env_count].cpu()
+        history = torch.empty(
+            (saved_media_env_count, rollout_max_steps + 1, *initial_frame.shape[1:]),
+            dtype=initial_frame.dtype,
+            device="cpu",
+        )
+        history[:, 0].copy_(initial_frame)
+        return history
+
+    imgs1 = _init_cpu_media_history("color_image1")
+    imgs2 = _init_cpu_media_history("color_image2")
+    # Depth videos are only used for persisted rollout artifacts.  Keeping every
+    # frame on CUDA makes memory usage grow linearly with episode length and the
+    # final stack briefly needs a second full-sized CUDA allocation.  RGB frames
+    # already follow the intended CPU-history pattern above, so do the same for
+    # depth while leaving the live observation tensors on-device for inference.
+    depth_image1 = _init_cpu_media_history("depth_image1")
+    depth_image2 = _init_cpu_media_history("depth_image2")
     parts_poses = [video_obs["parts_poses"].cpu()]
     skills = [initial_skills]
     skill_states = [initial_skill_states]
@@ -1218,6 +1328,18 @@ def rollout(
         current_guidance_points_2d = [
             bundle.get("guidance_point_2d", {}) for bundle in current_annotations
         ]
+        current_guidance_points = [
+            bundle.get("guidance_point") for bundle in current_annotations
+        ]
+        current_guidance_poses = [
+            bundle.get("guidance_pose") for bundle in current_annotations
+        ]
+        current_guidance_gripper_widths = [
+            bundle.get("guidance_gripper_width") for bundle in current_annotations
+        ]
+        current_grasp_annotations_2d = [
+            bundle.get("grasp_annotation_2d", {}) for bundle in current_annotations
+        ]
         _apply_policy_visual_annotations(
             obs,
             current_annotations,
@@ -1298,14 +1420,23 @@ def rollout(
             ),
         )
         if save_rollouts:
-            if "color_image1" in video_obs:
-                imgs1.append(video_obs["color_image1"].cpu())
-            if "color_image2" in video_obs:
-                imgs2.append(video_obs["color_image2"].cpu())
-            if video_obs.get("depth_image1") is not None:
-                depth_image1.append(video_obs["depth_image1"])
-            if video_obs.get("depth_image2") is not None:
-                depth_image2.append(video_obs["depth_image2"])
+            media_frame_idx = step_idx + 1
+            if imgs1 is not None:
+                imgs1[:, media_frame_idx].copy_(
+                    video_obs["color_image1"][:saved_media_env_count]
+                )
+            if imgs2 is not None:
+                imgs2[:, media_frame_idx].copy_(
+                    video_obs["color_image2"][:saved_media_env_count]
+                )
+            if depth_image1 is not None:
+                depth_image1[:, media_frame_idx].copy_(
+                    video_obs["depth_image1"][:saved_media_env_count]
+                )
+            if depth_image2 is not None:
+                depth_image2[:, media_frame_idx].copy_(
+                    video_obs["depth_image2"][:saved_media_env_count]
+                )
             actions.append(action_pred.cpu())
             parts_poses.append(video_obs["parts_poses"].cpu())
             guidance_points_2d.append(current_guidance_points_2d)
@@ -1399,16 +1530,35 @@ def rollout(
     if enable_annotation_verify:
         print(_verify_history.summary(), flush=True)
 
+    # RGBD histories are preallocated as [env, step, ...] CPU tensors. Slicing
+    # them here is a view, avoiding a second multi-gigabyte allocation at the
+    # 1000-step boundary.
+    media_steps = step_idx + 1
+    stacked_depth_image1 = (
+        depth_image1[:, :media_steps] if depth_image1 is not None else []
+    )
+    stacked_depth_image2 = (
+        depth_image2[:, :media_steps] if depth_image2 is not None else []
+    )
+    stacked_imgs1 = imgs1[:, :media_steps] if imgs1 is not None else []
+    stacked_imgs2 = imgs2[:, :media_steps] if imgs2 is not None else []
+    stacked_robot_states = torch.stack(robot_states, dim=1) if robot_states else []
+    robot_states.clear()
+    stacked_actions = torch.stack(actions, dim=1) if actions else []
+    actions.clear()
+    stacked_parts_poses = torch.stack(parts_poses, dim=1) if parts_poses else []
+    parts_poses.clear()
+
     return RolloutSaveValues(
-        torch.stack(robot_states, dim=1) if robot_states else [],
-        torch.stack(imgs1, dim=1) if imgs1 else [],
-        torch.stack(imgs2, dim=1) if imgs2 else [],
-        torch.stack(actions, dim=1) if actions else [],
+        stacked_robot_states,
+        stacked_imgs1,
+        stacked_imgs2,
+        stacked_actions,
         rewards,
-        torch.stack(parts_poses, dim=1) if parts_poses else [],
+        stacked_parts_poses,
         pcs_per_env,
-        torch.stack(depth_image1, dim=1) if depth_image1 else [],
-        torch.stack(depth_image2, dim=1) if depth_image2 else [],
+        stacked_depth_image1,
+        stacked_depth_image2,
         skills_per_env,
         skill_states_per_env,
         assembly_steps_per_env,
@@ -1477,8 +1627,6 @@ def calculate_success_rate(
     tracking_metric_type: Optional[str] = None,
     vlm_noise_projection_samples: int = DEFAULT_MONTE_CARLO_SAMPLES_PER_PAIR,
     eepose_frame: str = ROBOT_BASE,
-    process_seed: Optional[int] = None,
-    rollout_randomness: Optional[str] = None,
 ) -> RolloutStats:
 
     use_target_mode = target_successes is not None and target_successes > 0
@@ -1487,7 +1635,10 @@ def calculate_success_rate(
         num_envs=env.num_envs,
         n_rollouts=n_rollouts,
         task_name=env.task_name,
-        total=rollout_max_steps * (n_rollouts // env.num_envs),
+        total=(
+            rollout_max_steps
+            * ((n_rollouts + env.num_envs - 1) // env.num_envs)
+        ),
         desc="Performing rollouts",
         leave=True,
         unit="step",
@@ -1557,6 +1708,21 @@ def calculate_success_rate(
         save_rollouts_this_round = save_rollouts and (
             max_saved_rollouts is None or saved_rollouts_count < max_saved_rollouts
         )
+        accepted_env_count_for_round = _accepted_env_count(
+            num_envs=env.num_envs,
+            completed_rollouts=n_total_rollouts,
+            requested_rollouts=n_rollouts,
+            target_mode=use_target_mode,
+        )
+        saved_media_env_count = _saved_media_env_count_for_round(
+            num_envs=env.num_envs,
+            accepted_env_count=accepted_env_count_for_round,
+            save_rollouts_this_round=save_rollouts_this_round,
+            save_rollouts_to_wandb=save_rollouts_to_wandb,
+            save_failures=save_failures,
+            max_saved_rollouts=max_saved_rollouts,
+            saved_rollouts_count=saved_rollouts_count,
+        )
 
         rollout_data: RolloutSaveValues = rollout(
             env,
@@ -1566,6 +1732,7 @@ def calculate_success_rate(
             resize_video=resize_video,
             n_parts_assemble=n_parts_assemble,
             save_rollouts=save_rollouts_this_round,
+            saved_media_env_count=saved_media_env_count,
             pc_generator=pc_generator,
             annotate_skill=annotate_skill,
             annotate_guidance_point=annotate_guidance_point,
@@ -1597,7 +1764,14 @@ def calculate_success_rate(
 
         # Calculate the success rate
         success_flags = rollout_data.rewards.sum(dim=1) == n_parts_assemble
-        for env_idx in range(env.num_envs):
+        accepted_env_count = _accepted_env_count(
+            num_envs=env.num_envs,
+            completed_rollouts=n_total_rollouts,
+            requested_rollouts=n_rollouts,
+            target_mode=use_target_mode,
+        )
+        accepted_success_flags = success_flags[:accepted_env_count]
+        for env_idx in range(accepted_env_count):
             rewards_for_stats = rollout_data.rewards[env_idx].numpy()
             episode_returns.append(
                 np.sum(rewards_for_stats * discount ** np.arange(len(rewards_for_stats)))
@@ -1610,14 +1784,15 @@ def calculate_success_rate(
                         vlm_model_revisions.add(str(annotation["model_revision"]))
             vlm_point_error_summaries.append(
                 build_vlm_point_error_summary(
-                    rollout_data.vlm_point_error_records,
-                    [bool(value) for value in success_flags.tolist()],
+                    rollout_data.vlm_point_error_records[:accepted_env_count],
+                    [bool(value) for value in accepted_success_flags.tolist()],
                 )
             )
-        n_success += success_flags.sum().item()
-        n_total_rollouts += env.num_envs
+        n_success += accepted_success_flags.sum().item()
+        previous_total_rollouts = n_total_rollouts
+        n_total_rollouts += accepted_env_count
 
-        for env_idx in range(env.num_envs):
+        for env_idx in range(accepted_env_count):
             robot_states_for_tracking = []
             if collect_skill_stats and rollout_data.robot_states is not None:
                 robot_states_for_tracking = tensordict_to_list_of_dicts(
@@ -1639,7 +1814,7 @@ def calculate_success_rate(
                 step_completion_counts=step_completion_counts,
             )
             if guidance_bank_out is not None:
-                episode_idx = n_total_rollouts - env.num_envs + env_idx
+                episode_idx = previous_total_rollouts + env_idx
                 guidance_bank_records.extend(
                     _guidance_bank_records_for_episode(
                         task=str(
@@ -1712,22 +1887,12 @@ def calculate_success_rate(
             have_img_obs = rollout_data.imgs1 is not None and len(rollout_data.imgs1) > 0
             have_depth_obs = rollout_data.depth_image1 is not None and len(rollout_data.depth_image1) > 0
 
-            for env_idx in range(env.num_envs):
+            for env_idx in range(accepted_env_count):
                 robot_states = tensordict_to_list_of_dicts(rollout_data.robot_states[env_idx])
                 actions = rollout_data.actions[env_idx].numpy()
                 rewards = rollout_data.rewards[env_idx].numpy()
                 parts_poses = rollout_data.parts_poses[env_idx].numpy()
                 skills = rollout_data.skills[env_idx] if rollout_data.skills else []
-                skill_states = (
-                    rollout_data.skill_states[env_idx]
-                    if rollout_data.skill_states
-                    else []
-                )
-                assembly_steps = (
-                    rollout_data.assembly_steps[env_idx]
-                    if rollout_data.assembly_steps
-                    else []
-                )
                 guidance_points = (
                     rollout_data.guidance_points[env_idx]
                     if rollout_data.guidance_points
@@ -1809,14 +1974,20 @@ def calculate_success_rate(
                     first_success.append(success)
                     continue
 
+                have_img_obs_for_env = (
+                    have_img_obs and env_idx < rollout_data.imgs1.shape[0]
+                )
+                have_depth_obs_for_env = (
+                    have_depth_obs and env_idx < rollout_data.depth_image1.shape[0]
+                )
                 video1 = (
                     rollout_data.imgs1[env_idx].numpy()
-                    if have_img_obs
+                    if have_img_obs_for_env
                     else np.zeros((len(robot_states), 2, 2, 3), dtype=np.uint8)
                 )
                 video2 = (
                     rollout_data.imgs2[env_idx].numpy()
-                    if have_img_obs
+                    if have_img_obs_for_env
                     else np.zeros((len(robot_states), 2, 2, 3), dtype=np.uint8)
                 )
                 video2_for_video = video2.copy()
@@ -1831,12 +2002,12 @@ def calculate_success_rate(
                         )
                 depth_video1 = (
                     rollout_data.depth_image1[env_idx].cpu().numpy()
-                    if have_depth_obs
+                    if have_depth_obs_for_env
                     else np.zeros((len(robot_states), 2, 2, 3), dtype=np.uint8)
                 )
                 depth_video2 = (
                     rollout_data.depth_image2[env_idx].cpu().numpy()
-                    if have_depth_obs
+                    if have_depth_obs_for_env
                     else np.zeros((len(robot_states), 2, 2, 3), dtype=np.uint8)
                 )
 
@@ -1853,13 +2024,13 @@ def calculate_success_rate(
                 trim_start_steps = 0
 
                 # Stack the two videos side by side
-                if have_img_obs:
+                if have_img_obs_for_env:
                     video = np.concatenate([video1, video2_for_video], axis=2)[
                         trim_start_steps:n_steps
                     ]
                     video = create_in_memory_mp4(video, fps=20)
 
-                if save_rollouts_to_wandb and have_img_obs:
+                if save_rollouts_to_wandb and have_img_obs_for_env:
                     table_rows.append(
                         [
                             wandb.Video(video, fps=20, format="mp4"),
@@ -1880,6 +2051,12 @@ def calculate_success_rate(
                     )
                 )
                 if should_save_rollout:
+                    if not have_img_obs_for_env or not have_depth_obs_for_env:
+                        raise RuntimeError(
+                            "rollout selected for persistence without a collected "
+                            f"RGBD history (env_idx={env_idx}, "
+                            f"saved_media_env_count={saved_media_env_count})"
+                        )
                     point_error_records_to_save = None
                     if annotation_source == "vlm":
                         point_error_records_to_save = []
@@ -1908,8 +2085,6 @@ def calculate_success_rate(
                         depth_image2=depth_video2[trim_start_steps : n_steps + 1],
                         parts_poses=parts_poses[trim_start_steps : n_steps + 1],
                         skills=skills[trim_start_steps : n_steps + 1],
-                        skill_states=skill_states[trim_start_steps : n_steps + 1],
-                        assembly_steps=assembly_steps[trim_start_steps : n_steps + 1],
                         guidance_points=guidance_points[trim_start_steps : n_steps + 1],
                         guidance_points_clean=guidance_points_clean[trim_start_steps : n_steps + 1],
                         guidance_poses=guidance_poses[trim_start_steps : n_steps + 1],
@@ -1925,8 +2100,8 @@ def calculate_success_rate(
                         action_type=env.action_type,
                         rollout_save_dir=rollout_save_dir,
                         compress_pickles=compress_pickles,
-                        have_img_obs=have_img_obs,
-                        have_depth_obs=have_depth_obs,
+                        have_img_obs=have_img_obs_for_env,
+                        have_depth_obs=have_depth_obs_for_env,
                         pcs=pcs_trimmed,
                         skill_on_image=skill_on_image,
                         output_only_pickle=output_only_pickle,
@@ -1962,19 +2137,6 @@ def calculate_success_rate(
                         eepose_frame=ROBOT_BASE,
                         eepose_original_frame=SIM_LOCAL,
                         policy_eepose_frame=eepose_frame,
-                        guidance_frame=ROBOT_BASE,
-                        collection_metadata={
-                            "schema": "rr-furniturebench-rollout-metadata-v1",
-                            "process_seed": process_seed,
-                            "env_index": env_idx,
-                            "global_attempt_index": (
-                                n_total_rollouts - env.num_envs + env_idx + 1
-                            ),
-                            "batch_index": n_total_rollouts // env.num_envs,
-                            "n_envs": env.num_envs,
-                            "randomness": rollout_randomness,
-                            "randomness_semantics": "furniturebench-native",
-                        },
                     )
                     saved_rollouts_count += 1
 

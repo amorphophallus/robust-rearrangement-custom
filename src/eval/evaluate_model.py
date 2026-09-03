@@ -817,6 +817,18 @@ if __name__ == "__main__":
     )
     parser.add_argument("--vlm-timeout-seconds", type=float, default=10.0)
     parser.add_argument(
+        "--vlm-policy-version",
+        type=int,
+        default=int(os.environ.get("VLM_POLICY_VERSION", "3")),
+        help="Expected VLM service contract version (3=point, 4=point+Rotation6D).",
+    )
+    parser.add_argument(
+        "--vlm-output-schema",
+        choices=["skill_point", "skill_point_rotation6d"],
+        default=os.environ.get("VLM_OUTPUT_SCHEMA"),
+        help="Expected response schema advertised by the VLM service.",
+    )
+    parser.add_argument(
         "--vlm-query-interval",
         type=int,
         default=0,
@@ -1111,6 +1123,8 @@ if __name__ == "__main__":
         vlm_client = VLMGuidanceClient(
             args.vlm_base_url,
             timeout_seconds=args.vlm_timeout_seconds,
+            expected_policy_version=args.vlm_policy_version,
+            expected_output_schema=args.vlm_output_schema,
         )
         readiness = vlm_client.check_ready()
         print(
@@ -1601,8 +1615,6 @@ if __name__ == "__main__":
                         vlm_noise_projection_samples=(
                             args.vlm_noise_projection_samples
                         ),
-                        process_seed=args.seed,
-                        rollout_randomness=args.randomness,
                     )
 
                     if args.store_video_wandb:

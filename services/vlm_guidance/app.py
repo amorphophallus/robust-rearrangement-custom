@@ -27,6 +27,7 @@ def _engine_from_env() -> FurnitureInferenceEngine:
         max_new_tokens=int(os.getenv("VLM_MAX_NEW_TOKENS", "256")),
         model_revision=os.getenv("VLM_MODEL_REVISION", "unknown"),
         manifest_path=os.getenv("VLM_MANIFEST_PATH"),
+        output_schema=os.getenv("VLM_OUTPUT_SCHEMA", "skill_point"),
     )
 
 
@@ -67,6 +68,7 @@ def ready(request: Request):
         "model_revision": engine.model_revision,
         "policy_version": engine.policy_version,
         "model_mode": engine.model_mode,
+        "output_schema": engine.output_schema,
         "device": str(engine.device),
         "attention_backend": engine.attention_backend,
     }

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import sys
+from pathlib import Path
 from typing import Sequence
 
 from services.vlm_guidance import SKILL_NAMES
@@ -64,3 +67,32 @@ def pixels_to_qwen(point_px: Sequence[float]) -> list[float]:
         float(point_px[0]) / 319.0 * 1000.0,
         float(point_px[1]) / 239.0 * 1000.0,
     ]
+
+
+def _hy_furniture_pose_api():
+    """Load the Ver2 parser from an explicitly selected source checkout."""
+
+    root_value = os.environ.get("VLM_HY_FURNITURE_ROOT")
+    if not root_value:
+        raise RuntimeError("VLM_HY_FURNITURE_ROOT is required for the Ver2 pose policy")
+    root = Path(root_value).expanduser().resolve()
+    prediction_path = root / "prediction.py"
+    if not prediction_path.is_file():
+        raise RuntimeError(f"hy_furniture Ver2 parser is missing: {prediction_path}")
+    parent = str(root.parent)
+    if parent not in sys.path:
+        sys.path.insert(0, parent)
+    import hy_furniture.prediction as prediction_api
+
+    loaded_path = Path(prediction_api.__file__).resolve()
+    if loaded_path != prediction_path:
+        raise RuntimeError(
+            f"loaded hy_furniture parser from {loaded_path}, expected {prediction_path}"
+        )
+    return prediction_api
+
+
+def parse_native_pose_prediction(text: str):
+    """Parse all Ver2 control fields using the hy_furniture implementation."""
+
+    return _hy_furniture_pose_api().parse_pose_prediction(text)

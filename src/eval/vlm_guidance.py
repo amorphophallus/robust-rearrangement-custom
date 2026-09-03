@@ -8,7 +8,7 @@ import json
 import logging
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -30,6 +30,8 @@ STATE_INFO_BASE_KEYS = (
 )
 VALID_SKILLS = {"push", "pick", "place", "insert", "screw"}
 EXPECTED_POLICY_VERSION = 3
+POSE_POLICY_VERSION = 4
+POSE_OUTPUT_SCHEMA = "skill_point_rotation6d"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -51,15 +53,25 @@ class VLMGuidanceError(RuntimeError):
 @dataclass(frozen=True)
 class VLMPrediction:
     request_id: str
-    skill: str
+    skill: str | None
     skill_confidence: float | None
     skill_probabilities: dict[str, float] | None
-    point_1000: np.ndarray
-    point_px: np.ndarray
+    point_1000: np.ndarray | None
+    point_px: np.ndarray | None
     model_revision: str
     query_step: int
+    model_output_valid: bool = True
+    parse_error: str | None = None
+    pose_contract: bool = False
     generated_text: str | None = None
     recovered_from_invalid_json: bool = False
+    rotation_6d: np.ndarray | None = None
+    rotation_matrix: np.ndarray | None = None
+    guidance_pose: np.ndarray | None = None
+    grasp_annotation_2d: dict[str, Any] | None = None
+    sampled_depth_m: float | None = None
+    depth_valid_count: int = 0
+    grasp_projection_valid: bool | None = None
 
 
 def _parse_recoverable_generated_prefix(text: str) -> tuple[str, list[float]] | None:
@@ -152,11 +164,15 @@ class VLMGuidanceClient:
         timeout_seconds: float = 10.0,
         api_token: str | None = None,
         session: requests.Session | None = None,
+        expected_policy_version: int = EXPECTED_POLICY_VERSION,
+        expected_output_schema: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = float(timeout_seconds)
         self.api_token = api_token if api_token is not None else os.getenv("VLM_API_TOKEN")
         self.session = session or requests.Session()
+        self.expected_policy_version = int(expected_policy_version)
+        self.expected_output_schema = expected_output_schema
         self.ready_model_revision: str | None = None
         self.ready_model_mode: str | None = None
         self.prediction_http_request_count = 0
@@ -185,10 +201,19 @@ class VLMGuidanceClient:
             raise VLMGuidanceError(f"VLM readiness check failed: {exc}") from exc
         if payload.get("status") != "ready":
             raise VLMGuidanceError(f"VLM returned invalid readiness payload: {payload}")
-        if payload.get("policy_version") != EXPECTED_POLICY_VERSION:
+        if payload.get("policy_version") != self.expected_policy_version:
             raise VLMGuidanceError(
-                "VLM point-policy version mismatch: "
-                f"expected {EXPECTED_POLICY_VERSION}, got {payload.get('policy_version')}"
+                "VLM policy version mismatch: "
+                f"expected {self.expected_policy_version}, got {payload.get('policy_version')}"
+            )
+        if (
+            self.expected_output_schema is not None
+            and payload.get("output_schema") != self.expected_output_schema
+        ):
+            raise VLMGuidanceError(
+                "VLM output schema mismatch: "
+                f"expected {self.expected_output_schema!r}, "
+                f"got {payload.get('output_schema')!r}"
             )
         self.ready_model_revision = str(payload.get("model_revision", "unknown"))
         self.ready_model_mode = str(payload.get("model_mode", "unknown"))
@@ -295,7 +320,11 @@ class VLMGuidanceClient:
     ) -> dict[str, Any] | None:
         """Recover a valid control prefix from one original-SFT 422 response."""
 
-        if error.status_code != 422 or self.ready_model_mode != "original_sft":
+        if (
+            error.status_code != 422
+            or self.ready_model_mode != "original_sft"
+            or self.expected_policy_version != EXPECTED_POLICY_VERSION
+        ):
             return None
         response_payload = error.response_payload
         if not isinstance(response_payload, dict):
@@ -330,7 +359,7 @@ class VLMGuidanceClient:
         )
         return {
             "model_revision": self.ready_model_revision or "unknown",
-            "policy_version": EXPECTED_POLICY_VERSION,
+            "policy_version": self.expected_policy_version,
             "model_mode": "original_sft",
             "predictions": [
                 {
@@ -388,6 +417,7 @@ class VLMGuidanceClient:
             else:
                 should_retry_singletons = (
                     self.ready_model_mode == "original_sft"
+                    and self.expected_policy_version == EXPECTED_POLICY_VERSION
                     and error.status_code == 422
                 )
                 if not should_retry_singletons:
@@ -437,10 +467,19 @@ class VLMGuidanceClient:
                         ) + float(value)
 
         rows = payload.get("predictions")
-        if payload.get("policy_version") != EXPECTED_POLICY_VERSION:
+        if payload.get("policy_version") != self.expected_policy_version:
             raise VLMGuidanceError(
-                "VLM prediction point-policy version mismatch: "
-                f"expected {EXPECTED_POLICY_VERSION}, got {payload.get('policy_version')}"
+                "VLM prediction policy version mismatch: "
+                f"expected {self.expected_policy_version}, got {payload.get('policy_version')}"
+            )
+        if (
+            self.expected_output_schema is not None
+            and payload.get("output_schema") != self.expected_output_schema
+        ):
+            raise VLMGuidanceError(
+                "VLM prediction output schema mismatch: "
+                f"expected {self.expected_output_schema!r}, "
+                f"got {payload.get('output_schema')!r}"
             )
         if not isinstance(rows, list) or len(rows) != batch_size:
             raise VLMGuidanceError("VLM response batch size mismatch")
@@ -459,6 +498,35 @@ class VLMGuidanceClient:
         predictions = []
         for item in items:
             row = by_id[item["request_id"]]
+            if row.get("valid") is False:
+                if self.expected_policy_version != POSE_POLICY_VERSION:
+                    raise VLMGuidanceError(
+                        "VLM returned an invalid-row sentinel outside the pose contract"
+                    )
+                parse_error = row.get("parse_error")
+                if not isinstance(parse_error, str) or not parse_error:
+                    raise VLMGuidanceError("invalid VLM row is missing parse_error")
+                predictions.append(
+                    VLMPrediction(
+                        request_id=item["request_id"],
+                        skill=None,
+                        skill_confidence=None,
+                        skill_probabilities=None,
+                        point_1000=None,
+                        point_px=None,
+                        model_revision=revision,
+                        query_step=step_idx,
+                        model_output_valid=False,
+                        parse_error=parse_error,
+                        pose_contract=True,
+                        generated_text=(
+                            str(row["generated_text"])
+                            if row.get("generated_text") is not None
+                            else None
+                        ),
+                    )
+                )
+                continue
             skill = str(row.get("skill"))
             if skill not in VALID_SKILLS:
                 raise VLMGuidanceError(f"VLM returned invalid skill: {skill!r}")
@@ -470,6 +538,22 @@ class VLMGuidanceClient:
                 raise VLMGuidanceError("VLM returned non-finite point")
             if not (0 <= point_px[0] <= 319 and 0 <= point_px[1] <= 239):
                 raise VLMGuidanceError(f"VLM point is outside front image: {point_px}")
+            rotation_6d = None
+            rotation_matrix = None
+            if self.expected_policy_version == POSE_POLICY_VERSION:
+                rotation_6d = np.asarray(row.get("rotation_6d"), dtype=np.float32)
+                rotation_matrix = np.asarray(row.get("rotation_matrix"), dtype=np.float32)
+                if rotation_6d.shape != (6,) or not np.isfinite(rotation_6d).all():
+                    raise VLMGuidanceError("VLM returned invalid Rotation6D")
+                if rotation_matrix.shape != (3, 3) or not np.isfinite(rotation_matrix).all():
+                    raise VLMGuidanceError("VLM returned invalid rotation matrix")
+                orthogonality = rotation_matrix @ rotation_matrix.T
+                if not np.allclose(orthogonality, np.eye(3), atol=1e-4):
+                    raise VLMGuidanceError("VLM returned a non-orthogonal rotation matrix")
+                if not math.isclose(
+                    float(np.linalg.det(rotation_matrix)), 1.0, abs_tol=1e-4
+                ):
+                    raise VLMGuidanceError("VLM returned a non-right-handed rotation matrix")
             raw_probabilities = row.get("skill_probabilities")
             raw_confidence = row.get("skill_confidence")
             if raw_probabilities is None and raw_confidence is None:
@@ -500,6 +584,13 @@ class VLMGuidanceClient:
                     point_px=point_px,
                     model_revision=revision,
                     query_step=step_idx,
+                    model_output_valid=True,
+                    parse_error=(
+                        str(row["parse_error"])
+                        if row.get("parse_error") is not None
+                        else None
+                    ),
+                    pose_contract=self.expected_policy_version == POSE_POLICY_VERSION,
                     generated_text=(
                         str(row["generated_text"])
                         if row.get("generated_text") is not None
@@ -508,6 +599,8 @@ class VLMGuidanceClient:
                     recovered_from_invalid_json=bool(
                         row.get("recovered_from_invalid_json", False)
                     ),
+                    rotation_6d=rotation_6d,
+                    rotation_matrix=rotation_matrix,
                 )
             )
         timing = {
@@ -528,6 +621,128 @@ class VLMGuidanceClient:
         }
 
 
+def _front_depth_median(
+    depth_image: Any,
+    point_px: np.ndarray,
+    *,
+    window_radius: int = 2,
+    min_depth_m: float = 0.10,
+    max_depth_m: float = 1.50,
+) -> tuple[float | None, int]:
+    if torch is not None and torch.is_tensor(depth_image):
+        depth_image = depth_image.detach().cpu().numpy()
+    # Isaac Gym camera tensors encode forward depth as negative values; saved
+    # rollout depth is normalized with the same absolute-value convention.
+    depth = np.abs(np.asarray(depth_image, dtype=np.float32).squeeze())
+    if depth.ndim != 2:
+        raise VLMGuidanceError(f"expected HxW front depth, got {depth.shape}")
+    x = int(round(float(point_px[0])))
+    y = int(round(float(point_px[1])))
+    x0 = max(0, x - window_radius)
+    x1 = min(depth.shape[1], x + window_radius + 1)
+    y0 = max(0, y - window_radius)
+    y1 = min(depth.shape[0], y + window_radius + 1)
+    values = depth[y0:y1, x0:x1]
+    valid = values[
+        np.isfinite(values) & (values >= min_depth_m) & (values <= max_depth_m)
+    ]
+    if not valid.size:
+        return None, 0
+    return float(np.median(valid)), int(valid.size)
+
+
+def _backproject_front_pixel(
+    point_px: np.ndarray,
+    depth_m: float,
+    camera_info: Mapping[str, Any],
+) -> np.ndarray:
+    intrinsics = np.asarray(camera_info.get("intrinsics"), dtype=np.float64)
+    camera_to_robot_base = np.asarray(
+        camera_info.get("camera_to_robot_base"), dtype=np.float64
+    )
+    if intrinsics.shape != (3, 3) or camera_to_robot_base.shape != (4, 4):
+        raise VLMGuidanceError("front camera calibration is incomplete")
+    fx, fy = float(intrinsics[0, 0]), float(intrinsics[1, 1])
+    cx, cy = float(intrinsics[0, 2]), float(intrinsics[1, 2])
+    if not all(math.isfinite(value) and abs(value) > 1e-8 for value in (fx, fy)):
+        raise VLMGuidanceError("front camera focal length is invalid")
+    x_camera = (float(point_px[0]) - cx) * depth_m / fx
+    y_cv = (float(point_px[1]) - cy) * depth_m / fy
+    point_camera = np.array([x_camera, -y_cv, depth_m, 1.0], dtype=np.float64)
+    point_robot_base = camera_to_robot_base @ point_camera
+    if not np.isfinite(point_robot_base).all() or abs(point_robot_base[3]) < 1e-8:
+        raise VLMGuidanceError("front pixel backprojection is non-finite")
+    return (point_robot_base[:3] / point_robot_base[3]).astype(np.float32)
+
+
+def materialize_pose_predictions(
+    oracle_bundles: Sequence[Mapping[str, Any]],
+    predictions: Sequence[VLMPrediction],
+    front_depth_images: Sequence[Any],
+) -> list[VLMPrediction]:
+    """Build pose/grasp geometry using only VLM output, depth, and calibration."""
+
+    if not (len(oracle_bundles) == len(predictions) == len(front_depth_images)):
+        raise VLMGuidanceError("pose materialization batch size mismatch")
+    from src.eval.skill_annotation_util import (
+        DEFAULT_GRASP_HEIGHT_M,
+        DEFAULT_GRASP_WIDTH_M,
+        project_pose_to_grasp_annotation_2d,
+    )
+
+    output = []
+    for calibration_bundle, prediction, depth_image in zip(
+        oracle_bundles, predictions, front_depth_images
+    ):
+        if not prediction.model_output_valid:
+            output.append(
+                replace(
+                    prediction,
+                    guidance_pose=None,
+                    grasp_annotation_2d=None,
+                    sampled_depth_m=None,
+                    depth_valid_count=0,
+                    grasp_projection_valid=False,
+                )
+            )
+            continue
+        if prediction.rotation_matrix is None:
+            raise VLMGuidanceError("pose policy prediction is missing Rotation6D")
+        camera_info = calibration_bundle.get("camera_info", {}).get("color_image2")
+        if not isinstance(camera_info, Mapping):
+            raise VLMGuidanceError("front camera calibration is missing")
+        depth_m, valid_count = _front_depth_median(depth_image, prediction.point_px)
+        pose = None
+        grasp = None
+        projection_valid: bool | None = None
+        if depth_m is not None:
+            center = _backproject_front_pixel(prediction.point_px, depth_m, camera_info)
+            pose = np.eye(4, dtype=np.float32)
+            pose[:3, :3] = prediction.rotation_matrix
+            pose[:3, 3] = center
+            if prediction.skill in {"pick", "place"}:
+                grasp = project_pose_to_grasp_annotation_2d(
+                    pose,
+                    dict(camera_info),
+                    gripper_width=DEFAULT_GRASP_WIDTH_M,
+                    grasp_height=DEFAULT_GRASP_HEIGHT_M,
+                )
+                projection_valid = grasp is not None
+        elif prediction.skill in {"pick", "place"}:
+            projection_valid = False
+        output.append(
+            replace(
+                prediction,
+                guidance_pose=pose,
+                grasp_annotation_2d=grasp,
+                sampled_depth_m=depth_m,
+                depth_valid_count=valid_count,
+                grasp_projection_valid=projection_valid,
+            )
+        )
+    return output
+
+
 def policy_bundles_from_vlm(
     oracle_bundles: Sequence[dict[str, Any]],
     predictions: Sequence[VLMPrediction],
@@ -544,13 +759,84 @@ def policy_bundles_from_vlm(
             oracle.get("guidance_point_2d", {})
         )
         bundle["skill"] = prediction.skill
-        bundle["guidance_point_2d"] = {"color_image2": prediction.point_px.copy()}
+        bundle["guidance_point_2d"] = {
+            "color_image2": (
+                prediction.point_px.copy() if prediction.point_px is not None else None
+            )
+        }
+        if prediction.pose_contract:
+            # These are the only geometry fields consumed by grasp-part
+            # rendering. Overwrite them unconditionally for pose-policy rows so
+            # invalid depth/projection becomes blank, never scripted fallback.
+            bundle["guidance_point"] = (
+                prediction.guidance_pose[:3, 3].copy()
+                if prediction.guidance_pose is not None
+                else None
+            )
+            bundle["guidance_pose"] = (
+                prediction.guidance_pose.copy()
+                if prediction.guidance_pose is not None
+                else None
+            )
+            bundle["guidance_gripper_width"] = (
+                0.05 if prediction.guidance_pose is not None else None
+            )
+            bundle["grasp_annotation_2d"] = {
+                "color_image2": (
+                    {
+                        key: value.copy() if isinstance(value, np.ndarray) else value
+                        for key, value in prediction.grasp_annotation_2d.items()
+                    }
+                    if prediction.grasp_annotation_2d is not None
+                    else None
+                )
+            }
         bundle["vlm_annotation"] = {
             "request_id": prediction.request_id,
             "model_revision": prediction.model_revision,
             "skill_confidence": prediction.skill_confidence,
             "skill_probabilities": prediction.skill_probabilities,
-            "point_1000": prediction.point_1000.copy(),
+            "model_output_valid": prediction.model_output_valid,
+            "parse_error": prediction.parse_error,
+            "point_1000": (
+                prediction.point_1000.copy()
+                if prediction.point_1000 is not None
+                else None
+            ),
+            "point_px": (
+                prediction.point_px.copy()
+                if prediction.point_px is not None
+                else None
+            ),
+            "rotation_6d": (
+                prediction.rotation_6d.copy()
+                if prediction.rotation_6d is not None
+                else None
+            ),
+            "rotation_matrix": (
+                prediction.rotation_matrix.copy()
+                if prediction.rotation_matrix is not None
+                else None
+            ),
+            "guidance_pose": (
+                prediction.guidance_pose.copy()
+                if prediction.guidance_pose is not None
+                else None
+            ),
+            "sampled_depth_m": prediction.sampled_depth_m,
+            "depth_valid_count": prediction.depth_valid_count,
+            "grasp_projection_valid": prediction.grasp_projection_valid,
+            "grasp_annotation_2d": (
+                {
+                    key: value.copy() if isinstance(value, np.ndarray) else value
+                    for key, value in prediction.grasp_annotation_2d.items()
+                }
+                if prediction.grasp_annotation_2d is not None
+                else None
+            ),
+            "depth_window": "5x5_median_abs_valid_0.10_1.50m",
+            "fixed_grasp_width_m": 0.05,
+            "fixed_grasp_height_m": 0.02,
             "generated_text": prediction.generated_text,
             "recovered_from_invalid_json": prediction.recovered_from_invalid_json,
             "query_step": prediction.query_step,

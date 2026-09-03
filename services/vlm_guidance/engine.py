@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import math
+import os
 import threading
 import time
 from contextlib import nullcontext
@@ -18,6 +20,8 @@ from transformers import AutoModelForImageTextToText, AutoProcessor
 from services.vlm_guidance import (
     ORIGINAL_SFT_POLICY_VERSION,
     POINT_POLICY_VERSION,
+    POSE_OUTPUT_SCHEMA,
+    POSE_SFT_POLICY_VERSION,
     SKILL_NAMES,
 )
 from services.vlm_guidance.modeling import (
@@ -27,10 +31,19 @@ from services.vlm_guidance.modeling import (
 from services.vlm_guidance.native_sft import (
     configure_native_processor,
     parse_native_prediction,
+    parse_native_pose_prediction,
     pixels_to_qwen,
     try_parse_native_prediction,
 )
-from src.vlm_data_generator import DEFAULT_USER_PROMPT, TASK_SYSTEM_PROMPTS
+from src.vlm_data_generator import (
+    DEFAULT_USER_PROMPT,
+    POSE_VER2_DEFAULT_USER_PROMPT,
+    POSE_VER2_TASK_SYSTEM_PROMPTS,
+    TASK_SYSTEM_PROMPTS,
+)
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _load_state_dict(checkpoint_dir: Path) -> dict[str, torch.Tensor]:
@@ -74,6 +87,7 @@ class FurnitureInferenceEngine:
         allow_invalid_predictions: bool = False,
         model_revision: str = "unknown",
         manifest_path: str | None = None,
+        output_schema: str = "skill_point",
     ) -> None:
         self.base_model_dir = Path(base_model_dir) if base_model_dir else None
         self.checkpoint_dir = Path(checkpoint_dir)
@@ -87,6 +101,9 @@ class FurnitureInferenceEngine:
         self.allow_invalid_predictions = bool(allow_invalid_predictions)
         self.model_revision = model_revision
         self.manifest_path = Path(manifest_path) if manifest_path else None
+        if output_schema not in {"skill_point", POSE_OUTPUT_SCHEMA}:
+            raise ValueError(f"unsupported output schema: {output_schema}")
+        self.output_schema = output_schema
         self._lock = threading.Lock()
         self._load()
 
@@ -124,6 +141,20 @@ class FurnitureInferenceEngine:
                 f"manifest model mode {manifest_mode!r} conflicts with "
                 f"requested {self.requested_model_mode!r}"
             )
+        manifest_schema = manifest.get("output_schema", "skill_point")
+        if manifest_schema != self.output_schema:
+            raise RuntimeError(
+                f"manifest output schema {manifest_schema!r} conflicts with "
+                f"requested {self.output_schema!r}"
+            )
+        hy_manifest = manifest.get("hy_furniture")
+        if self.output_schema == POSE_OUTPUT_SCHEMA:
+            hy_root = Path(os.environ["VLM_HY_FURNITURE_ROOT"]).resolve()
+            prediction_path = hy_root / "prediction.py"
+            if not isinstance(hy_manifest, dict):
+                raise RuntimeError("pose manifest is missing hy_furniture provenance")
+            if self._sha256(prediction_path) != hy_manifest.get("prediction_sha256"):
+                raise RuntimeError("hy_furniture prediction parser checksum mismatch")
 
     def _load(self) -> None:
         self._verify_manifest()
@@ -145,6 +176,8 @@ class FurnitureInferenceEngine:
                 f"checkpoint looks like {detected_mode}, not requested {self.model_mode}"
             )
         if self.model_mode == "structured":
+            if self.output_schema != "skill_point":
+                raise RuntimeError("the structured checkpoint does not implement Rotation6D")
             if policy.get("version") != POINT_POLICY_VERSION:
                 raise RuntimeError(f"unsupported point policy: {policy}")
             if tuple(policy.get("skill_names", ())) != SKILL_NAMES:
@@ -159,7 +192,11 @@ class FurnitureInferenceEngine:
                     "original_sft checkpoint is not Qwen3_5ForConditionalGeneration: "
                     f"{architectures}"
                 )
-            self.policy_version = ORIGINAL_SFT_POLICY_VERSION
+            self.policy_version = (
+                POSE_SFT_POLICY_VERSION
+                if self.output_schema == POSE_OUTPUT_SCHEMA
+                else ORIGINAL_SFT_POLICY_VERSION
+            )
 
         self.processor = AutoProcessor.from_pretrained(
             str(self.checkpoint_dir), trust_remote_code=True
@@ -202,20 +239,30 @@ class FurnitureInferenceEngine:
     def _collate(self, samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
         texts = []
         batch_images = []
+        task_prompts = (
+            POSE_VER2_TASK_SYSTEM_PROMPTS
+            if self.output_schema == POSE_OUTPUT_SCHEMA
+            else TASK_SYSTEM_PROMPTS
+        )
+        user_prompt = (
+            POSE_VER2_DEFAULT_USER_PROMPT
+            if self.output_schema == POSE_OUTPUT_SCHEMA
+            else DEFAULT_USER_PROMPT
+        )
         for sample in samples:
             task = str(sample["task"])
-            if task not in TASK_SYSTEM_PROMPTS:
+            if task not in task_prompts:
                 raise ValueError(f"unsupported task: {task}")
             base_state = sample["state_info"]["base"]
             compact_state = json.dumps(
                 {"base": base_state}, ensure_ascii=False, separators=(",", ":")
             )
-            user_text = DEFAULT_USER_PROMPT.replace("<state_info>", compact_state)
+            user_text = user_prompt.replace("<state_info>", compact_state)
             images = [sample["front"].convert("RGB"), sample["wrist"].convert("RGB")]
             messages = [
                 {
                     "role": "system",
-                    "content": [{"type": "text", "text": TASK_SYSTEM_PROMPTS[task]}],
+                    "content": [{"type": "text", "text": task_prompts[task]}],
                 },
                 {"role": "user", "content": _interleave_images(user_text, images)},
             ]
@@ -265,6 +312,51 @@ class FurnitureInferenceEngine:
         predictions = []
         if self.model_mode == "original_sft":
             for sample, generated_text in zip(samples, generated_texts):
+                if self.output_schema == POSE_OUTPUT_SCHEMA:
+                    try:
+                        pose_prediction = parse_native_pose_prediction(generated_text)
+                    except ValueError as error:
+                        # A generation is an untrusted per-environment model
+                        # result, not a request-contract error. Keep the strict
+                        # Ver2 parser, but isolate an invalid row so the other
+                        # environments in the batch remain usable. The rollout
+                        # turns this row into blank guidance for the full cache
+                        # horizon and records the failure in coverage metrics.
+                        predictions.append(
+                            {
+                                "request_id": sample["request_id"],
+                                "valid": False,
+                                "skill": None,
+                                "skill_confidence": None,
+                                "skill_probabilities": None,
+                                "point_1000": None,
+                                "point_px": None,
+                                "rotation_6d": None,
+                                "rotation_matrix": None,
+                                "generated_text": generated_text,
+                                "parse_error": str(error),
+                            }
+                        )
+                        continue
+                    point_px = list(pose_prediction.point_px)
+                    predictions.append(
+                        {
+                            "request_id": sample["request_id"],
+                            "valid": True,
+                            "skill": pose_prediction.skill,
+                            "skill_confidence": None,
+                            "skill_probabilities": None,
+                            "point_1000": pixels_to_qwen(point_px),
+                            "point_px": point_px,
+                            "rotation_6d": list(pose_prediction.rotation_6d),
+                            "rotation_matrix": [
+                                list(row) for row in pose_prediction.rotation_matrix
+                            ],
+                            "generated_text": generated_text,
+                            "parse_error": None,
+                        }
+                    )
+                    continue
                 if self.allow_invalid_predictions:
                     skill, point_px, parse_error = try_parse_native_prediction(
                         generated_text
@@ -339,6 +431,7 @@ class FurnitureInferenceEngine:
             "model_revision": self.model_revision,
             "policy_version": self.policy_version,
             "model_mode": self.model_mode,
+            "output_schema": self.output_schema,
             "predictions": predictions,
             "timing_ms": {
                 "queue": queue_ms,
@@ -357,14 +450,20 @@ class FurnitureInferenceEngine:
             "ee_ori_vel": [0.0, 0.0, 0.0],
             "gripper_width": 0.0,
         }
-        self.predict_batch(
-            [
-                {
-                    "request_id": "warmup",
-                    "task": "one_leg",
-                    "state_info": {"base": base},
-                    "front": blank,
-                    "wrist": blank,
-                }
-            ]
-        )
+        try:
+            self.predict_batch(
+                [
+                    {
+                        "request_id": "warmup",
+                        "task": "one_leg",
+                        "state_info": {"base": base},
+                        "front": blank,
+                        "wrist": blank,
+                    }
+                ]
+            )
+        except ValueError as error:
+            # A black synthetic image has no meaningful furniture target and
+            # can legitimately fail the strict control parser. Generation has
+            # still exercised the full CUDA path; real requests remain strict.
+            LOGGER.warning("synthetic VLM warmup generation was not actionable: %s", error)
