@@ -1,6 +1,6 @@
 # 联合训练完整实验规划 0821
 
-状态：数据配额已由用户于 2026-08-23 通过；2026-08-31 用户将本 campaign 及后续 rollout 的 annotation source 固定为 `scripted/geometry GT`，不使用 VLM，后续 launch 不再逐次确认。FurnitureBench 三任务已确认通过。ManiSkill 11 个 task 均已有成功轨迹与 strict 2D 验证；最新四个 MP 难项各选择 10 条新成功轨迹，最终 40/40 审计通过，随后修复版 Peg/Plug 又各用 10 条全新 strict success 完成生产吞吐复测。**这里的 10 条只代表当前 task 检查门槛；正式数据集仍为 ManiSkill 100 条/task、合计 1,100 条。** AutoMate 已对训练 final success 最低的 20 个模型做 fresh 抽查：19 个 hardest-init 可产成功数据；`00755` hardest-init 不能成功，已由用户明确从正式任务集合中排除，AutoMate 正式任务数固定为 99。2026-09-01 用户将 AutoMate 正式配额下调为 **50 条/task**，并要求以 attempted rollouts/hour 为并行速度指标。用户随后批准生产并要求持续监督；2026-09-02 又把最终数据固定为 **一份 raw pickle、五个训练 condition、默认 15 个物理 LMDB**，其中两个 condition 放 PPU96 根盘，三个放 EPFS。
+状态：数据配额已由用户于 2026-08-23 通过；2026-08-31 用户将本 campaign 及后续 rollout 的 annotation source 固定为 `scripted/geometry GT`，不使用 VLM，后续 launch 不再逐次确认。FurnitureBench 三任务已确认通过。ManiSkill 11 个 task 均已有成功轨迹与 strict 2D 验证；最新四个 MP 难项各选择 10 条新成功轨迹，最终 40/40 审计通过，随后修复版 Peg/Plug 又各用 10 条全新 strict success 完成生产吞吐复测。**这里的 10 条只代表当前 task 检查门槛；正式数据集仍为 ManiSkill 100 条/task、合计 1,100 条。** AutoMate 已对训练 final success 最低的 20 个模型做 fresh 抽查：19 个 hardest-init 可产成功数据；`00755` hardest-init 不能成功，已由用户明确从正式任务集合中排除，AutoMate 正式任务数固定为 99。2026-09-01 用户将 AutoMate 正式配额下调为 **50 条/task**，并要求以 attempted rollouts/hour 为并行速度指标。用户随后批准生产并要求持续监督；2026-09-02 又把最终数据固定为 **一份 raw pickle、五个训练 condition、默认 15 个 canonical LMDB**，其中两个 condition 放 PPU96 根盘，三个放 EPFS。
 
 新 Codex session 不应从历史日志反推生产参数；唯一执行交接为 `reports/joint_training_data_collection_handoff.md`。本文保留任务证据、资源规划和历史诊断，若执行配置与交接文档冲突，以交接文档为准。
 
@@ -8,30 +8,30 @@
 
 ### 1.1 总量与口径
 
-本轮只生成新数据，不复用或补标旧 pickle。排除 AutoMate `00755` 后，物理数据集更新为 **113 个 task、6,650 条成功轨迹、约 526,386 个训练 transition**：
+本轮只生成新数据，不复用或补标旧 pickle。排除 AutoMate `00755` 后，物理数据集更新为 **113 个 task、6,650 条成功轨迹、约 450,000 个训练 transition**；其中 FurnitureBench 已用本轮完整 raw 替换历史外推：
 
 | Environment | Task 数 | 每 task 成功轨迹 | 成功轨迹合计 | 预计 transition | 数量来源 |
 |---|---:|---:|---:|---:|---|
-| FurnitureBench | 3 | 200 | 600 | 约 328,000 | 历史正式 campaign 就是 200/task；600 条曾产生 328,386 transitions |
+| FurnitureBench | 3 | 200 | 600 | **251,980** | 本轮 600/600 全量 audit 实测 |
 | ManiSkill | 11 | 100 | 1,100 | 约 99,000 | 100/task 已由用户确认；step 按当前成功 pilot 或 task horizon 外推 |
 | AutoMate | 99 | **50** | **4,950** | 约 99,000 | 明确排除 `00755`；按 20 transitions/trajectory 规划 |
-| 合计 | 113 | — | **6,650** | **约 526,386** | transition 指落盘 action step，不是 PhysX substep |
+| 合计 | 113 | — | **6,650** | **约 449,980** | transition 指落盘 action step，不是 PhysX substep；ManiSkill/AutoMate 待最终实测替换外推 |
 
 物理条数和训练时的 source sampling 是两件事。历史讨论中的主训练权重为 `FurnitureBench / AutoMate / ManiSkill = 50% / 35% / 15%`；精确来源是 `/home/hy/.codex/sessions/2026/08/21/rollout-2026-08-21T11-55-44-01a02275-dcb7-7191-83f8-48bfc936542f.jsonl` ordinal 10。该比例已有 sampler/DDP smoke，但仍是工程配置，不是已证明最优的比例。
 
 randomness 合同按仿真器原生语义记录：FurnitureBench=`low`；ManiSkill 保留每个 task 的 native randomized reset，并写 `randomness_semantics=task_native`；AutoMate=`hardest_init`、deterministic specialist policy、no SBC，变化只来自不重复的 reset seed。manifest 必须记录 process seed、env index、global attempt index 和初始状态 hash，不能把 ManiSkill/AutoMate 都伪装成 FurnitureBench 的 `low/med/high`。
 
-物理配额下降不改变训练时的 source sampler 权重。容量按五个 condition 管理：canonical raw 仍只有一份，约 **350–450 GiB**；每个 condition 的三来源 zstd level-1 LMDB 当前中心估计约 **141–158 GiB**，五套约 **705–790 GiB**。旧的 145–230 GiB/condition 区间继续作为保守上界检查。加上单个 `.building.lmdb`、NAS `.incoming`、本地 staging、manifest、reject 和安全余量，NAS campaign 预留从 1.2 TiB 提高到 **2.0 TiB**。旧数据只作为步数、大小和吞吐参考，不进入本轮 manifest。
+物理配额下降不改变训练时的 source sampler 权重。容量按五个 condition 管理：canonical compressed raw 仍只有一份，按 2026-09-03 实测/外推约 **55–65 GiB**；每个 condition 的三来源 zstd level-1 LMDB 当前中心估计约 **141–158 GiB**，五套约 **705–790 GiB**。旧的 145–230 GiB/condition 区间继续作为保守上界检查。加上单个 `.building.lmdb`、NAS `.incoming`、本地 staging、manifest、reject 和安全余量，NAS campaign 保持 **2.0 TiB** 预留。旧数据只作为步数、大小和吞吐参考，不进入本轮 manifest。
 
 ### 1.2 FurnitureBench：3 个 task
 
-历史 600 条正式数据共有 328,386 transitions，suite 均值约 547 transitions/trajectory。旧报告只保留 aggregate，没有可靠的逐 task transition 总数，因此下表先把 aggregate 均分为容量预算；20/task 新 pilot 后替换成每 task 的真实均值和 p95。
+本轮 fresh v4 的 600 条正式数据共有 **251,980 transitions**，并已得到可靠的逐 task 全量统计；下面用实测值替换历史 campaign 的 328,386 aggregate 外推。
 
 | Task | 新成功轨迹 | 规划 transition | 成功轨迹验证 | scripted 2D guidance 验证 | GPU 仿真 | 当前结论 |
 |---|---:|---:|---|---|---|---|
-| `one_leg` | 200 | 约 109,000 | v2 保存 1 条 success，296 transitions | 全帧 strict + 重投影通过；raw mode=`none` | r218 GPU PhysX 已验证 | 用户视频目检通过 |
-| `round_table` | 200 | 约 109,000 | v2 保存 1 条 success，541 transitions | 全帧 strict + 重投影通过；raw mode=`none` | r218 GPU PhysX 已验证 | 用户视频目检通过 |
-| `lamp` | 200 | 约 109,000 | v2 保存 1 条 success，608 transitions | 全帧 strict + 重投影通过；raw mode=`none` | r218 GPU PhysX 已验证 | 用户视频目检通过 |
+| `one_leg` | 200 | **61,661** | v4 200/200 complete-FSM success | 全帧 strict + 重投影通过；raw mode=`none` | r218 GPU PhysX 已验证 | production raw audit 通过 |
+| `round_table` | 200 | **108,849** | v4 200/200 complete-FSM success | 全帧 strict + 重投影通过；raw mode=`none` | r218 GPU PhysX 已验证 | production raw audit 通过 |
+| `lamp` | 200 | **81,470** | v4 200/200 complete-FSM success | 全帧 strict + 重投影通过；raw mode=`none` | r218 GPU PhysX 已验证 | production raw audit 通过 |
 
 首轮按用户指定复用了 `/data/hy/gpu-snatcher/auto_data_preparation.sh` 和 r218 现有 `rr` 环境。标准流程使用 4 env、`action_type=pos`、task-specific horizon/padding、low randomness，5 分 14 秒内产出 11 条成功轨迹。原始动作在 FurnitureSim 内会饱和到 `[-1,1]`；writer 现在把实际执行的 gripper 命令写入 canonical pickle。11/11 文件的 base-frame delta action、时序、GT 2D metadata 和重投影均通过，但 `--guidance-point-on-image` 在采集期把红点烧入了 front raw，因此整批 4,845-transition/3.18-GiB gate 只能作为错误证据，不能进入正式 manifest 或 LMDB。
 
@@ -247,6 +247,8 @@ GPU0–3 是共享资源。collector 暂停、退出或 task 切换时，必须�
 
 ### 3.3 采集 ETA
 
+本节保留的是正式启动前的容量模型和调度方法；生产后的当前缺口与修订 ETA 以 §3.8.6 的带时间戳执行基线为准。
+
 AutoMate 第 `i` 个 task 的计划公式为：
 
 ```text
@@ -297,21 +299,21 @@ pure_rollout_hours = total_attempts / sum(active GPU attempted-rollout throughpu
 | `rgbd-grasp-part` | F | F | F | F | F | T |
 | `rgbd-grasp-part-colored` | F | F | T | F | T | T |
 
-每个 condition 默认包含 FurnitureBench、ManiSkill、AutoMate 各一个 LMDB，即 **5×3=15 个物理 LMDB**。LMDB 保留统一的 skill/guidance low-dimensional metadata，训练开关决定实际输入；普通 GP 同时启用 point 与 skill，colored GP 用颜色编码 skill，两个 grasp-part condition 分别使用普通/colored grasp-part 输入。condition、物理 mode、训练开关和 provenance 必须一一对应，不能只改目录名。
+每个 condition 默认包含 FurnitureBench、ManiSkill、AutoMate 各一个 LMDB，即 **5×3=15 个 canonical LMDB**。LMDB 保留统一的 skill/guidance low-dimensional metadata，训练开关决定实际输入；普通 GP 同时启用 point 与 skill，colored GP 用颜色编码 skill，两个 grasp-part condition 分别使用普通/colored grasp-part 输入。condition、物理 mode、训练开关和 provenance 必须一一对应，不能只改目录名。
 
 2026-09-02 对本轮 production raw 做了 read-only 五模式 smoke：FurnitureBench lamp 348 帧（含 178 个 pick/place）、ManiSkill Peg 119 帧（含 50 个 pick）和 AutoMate 9 帧均能渲染全部五种 mode，`missing_grasp_geometry=0`，且 `none` 模式逐像素保持原图。另用一条 AutoMate production pickle 实际写出五个临时 zstd LMDB；五套 full-stats、condition/provenance/hash reader 均通过且 `data.mdb` hash 各不相同，临时 LMDB 随后删除。构建器会在每个 source 闭合后重跑 raw render gate；最终逐帧转换本身仍是全量 fail-closed 检查。
 
 | 范围 | Episodes | Transitions | 当前 zstd 中心估计 |
 |---|---:|---:|---:|
-| 一个 condition：FurnitureBench | 600 | 约 328k | 约 85–96 GiB |
+| 一个 condition：FurnitureBench | 600 | **251,980（本轮 raw 已实测）** | 约 85–96 GiB；第一份 LMDB 后收紧 |
 | 一个 condition：ManiSkill | 1,100 | 约 99k | 约 28–31 GiB |
 | 一个 condition：AutoMate | 4,950 | 约 99k | 约 28–31 GiB |
-| 一个 condition 合计 | 6,650 | 约 526k | **约 141–158 GiB** |
-| 五个 condition 合计 | 33,250 个 condition-episode | 约 2.63M 个 condition-transition | **约 705–790 GiB** |
+| 一个 condition 合计 | 6,650 | 约 450k | **约 141–158 GiB** |
+| 五个 condition 合计 | 33,250 个 condition-episode | 约 2.25M 个 condition-transition | **约 705–790 GiB** |
 
-旧规划的 145–230 GiB/condition 作为保守上界，不直接乘成已发生占用；第一套完成后按实际 compressed bytes/frame 更新其余四套 ETA 和空间。NAS 同时保留 raw 350–450 GiB 与最终 LMDB 705–790 GiB，中心总量约 1.03–1.21 TiB；再考虑一个本地 `.building.lmdb`、一个 NAS `.incoming` 和安全余量，campaign 预留 **2.0 TiB**。
+旧规划的 145–230 GiB/condition 作为保守上界，不直接乘成已发生占用；第一套完成后按实际 compressed bytes/frame 更新其余四套 ETA 和空间。2026-09-03 的 raw 实测/外推已经显著低于早期未压缩估计：FurnitureBench 600 条为 36.60 GiB，ManiSkill 当前 800 条为 5.05 GiB，AutoMate 当前 4,850 条为 10.79 GiB；按未完成任务外推，完整 canonical compressed pickle 约 **55–65 GiB**，不再沿用 350–450 GiB。加最终 LMDB 705–790 GiB 后，NAS 稳态约 **760–855 GiB**；再考虑正在写入的 part、日志、manifest、失败证据和安全余量，campaign 仍预留 **2.0 TiB**。
 
-构建按 source-major 顺序进行：每个 source 闭合后只做一次 raw manifest/hash/provenance gate，再串行渲染五个 condition。r218 `/tmp` 一次只保留一个 `.building.lmdb`；该 LMDB 经 236 写入 NAS、通过 hash/schema/loader gate并生成 completion marker 后，才删除本地派生副本并构建下一个。默认不拆分；若 FurnitureBench 单 LMDB 的实测大小使 r218 不能保留至少 40 GiB 安全余量，则只对该 source 按 task 或 30–40 GiB balanced shard 拆分，并同步增加五个 condition 的 shard 数。
+构建按 source-major 顺序进行：每个 source 闭合后只做一次 raw manifest/hash/provenance gate，再串行渲染五个 condition。r218 `/tmp` 一次只保留一个 `.building.lmdb`；该 LMDB 经 236 写入 NAS、通过 hash/schema/loader gate并生成 completion marker 后，才删除本地派生副本并构建下一个。默认不拆分；若 FurnitureBench 单 LMDB 的实测大小使 r218 不能保留至少 40 GiB 安全余量，则在写入前暂停，更新本报告的 part 数、路径、空间与验收表并取得用户批准，不能由构建器自动增加 shard。
 
 每个输出从 fresh `.building.lmdb` 开始，禁止 overwrite；依次验证精确 episode/task/count、source manifest/hash、`scripted`、source mode `none`、condition 对应的 output mode、zstd metadata、全量 stats、action/state/depth/order 等价和 loader/training-reader smoke。每个 condition/source 都单独记录 `data.mdb` bytes、SHA-256、本机/NAS/PPU audit 与 completion marker。
 
@@ -408,6 +410,102 @@ nas_verified -> queued -> reserved -> transferring -> local_verified
 ### 3.7 当前执行授权与 gate
 
 用户已经明确批准开始数采并要求持续监督，因此 collector 和滚动审计继续运行；本次五-condition 与双训练节点修改不重启或扰动现有 raw 采集。LMDB 构建必须等待对应 source 的精确配额、全量 scripted/raw/projection audit、NAS manifest/hash 和上传 marker 全部闭合。上传必须等待每个 condition/source 的 NAS LMDB completion marker，随后逐个执行断点传输、目标空间 gate、SHA、metadata 与 loader 验收。数据交付完成条件从原来的三个 LMDB 改为：**15 个 LMDB 全部在 NAS 闭合；PPU 根盘两套/EPFS 三套全部发布并有 15 份 transfer receipt；236 的两套初始热数据有 6 份 placement receipt，且 training/cleanup queue 已登记**。训练启动是后续独立 gate，不因数据传完自动发生。
+
+### 3.8 最终交付清单与逐项验收表
+
+#### 3.8.1 `condition`、`part`、`LMDB` 和副本的固定口径
+
+- 一个 **condition** 是一个逻辑训练数据集，共 5 个。
+- 每个 condition 固定包含 3 个 **source part**：`furniturebench`、`maniskill`、`automate`。
+- 每个 part 是一个独立 LMDB 目录，内部有一个主 `data.mdb`、一个 `lock.mdb` 及 metadata；默认不再拆成 shard。
+- 因此唯一逻辑数据为 **5 conditions × 3 parts = 15 个 LMDB**，每个 condition 恰好 3 个 part。
+- NAS、PPU96、236 上内容相同且 hash 相同的目录只是 replica，不增加逻辑 LMDB 数。初始训练就绪时计划有 **36 个物理 LMDB 目录副本**：NAS canonical 15、PPU96 15、236 热层 6。
+- 当前空间和单 part 上界允许不拆分。若任一 FurnitureBench `.building.lmdb` 会使 r218 `/tmp` 低于 40 GiB，或实际单 part 无法通过目标盘余量 gate，必须在写入前暂停、更新本表并取得批准；不得静默把 15 个改成更多 shard，也不得用同名 `part-1/part-2` 绕过验收。
+
+#### 3.8.2 原始 pickle 中间交付
+
+raw pickle 只交付一套，不随 condition 复制。最终应有 **6,650 条**：FurnitureBench 600、ManiSkill 1,100、AutoMate 4,950。逐级交付如下：
+
+| Source | 组织方式 | 成功轨迹 | unit `SHA256SUMS`/receipt | 当前完整容量估计 |
+|---|---|---:|---:|---:|
+| FurnitureBench | 3 task × 200，统一 source root | 600 | 1 | 36.60 GiB（已实测） |
+| ManiSkill | 11 task × 100 | 1,100 | 11 | 约 6.5–8 GiB |
+| AutoMate | 99 task × 50 | 4,950 | 99 | 约 11 GiB |
+| **合计** | 113 个 task 单元 | **6,650** | **111 个 unit manifest/receipt** | **约 55–65 GiB** |
+
+每个 source 还必须有一份 aggregate manifest/bundle hash 和 source-complete receipt，因此除 111 个 unit receipt 外，最终另有 **3 份 source-level receipt**。每条 pickle 均检查 `annotation_source=scripted`、顶层 `image_annotation_mode=none`、无 VLM metadata、task/randomness/seed/attempt/initial-state 唯一性、完整 FSM、相机标定、2D bounds/null 语义及同帧 3D 重投影。raw 是所有五个 condition 的唯一来源；15 个 LMDB 全部验收前不得删除 canonical raw。
+
+#### 3.8.3 15 个逻辑 LMDB 的逐项 ledger
+
+NAS 路径统一为 `<NAS>/processed/lmdb/<condition>/<source>.lmdb/`。表中容量是 zstd level 1 的交付前估计，最终验收必须用 `stat data.mdb` 和 `du -sB1` 替换估计值；同一 source 在不同渲染 mode 下可能有少量差异。
+
+| # | Condition | Part/source | Episodes | 预计容量 | PPU96 初始位置 | 236 初始热层 |
+|---:|---|---|---:|---:|---|---|
+| 1 | `rgbd-skill` | `furniturebench` | 600 | 85–96 GiB | `/root` | — |
+| 2 | `rgbd-skill` | `maniskill` | 1,100 | 28–31 GiB | `/root` | — |
+| 3 | `rgbd-skill` | `automate` | 4,950 | 28–31 GiB | `/root` | — |
+| 4 | `rgbd-gp-skill` | `furniturebench` | 600 | 85–96 GiB | `/root` | — |
+| 5 | `rgbd-gp-skill` | `maniskill` | 1,100 | 28–31 GiB | `/root` | — |
+| 6 | `rgbd-gp-skill` | `automate` | 4,950 | 28–31 GiB | `/root` | — |
+| 7 | `rgbd-colored-gp` | `furniturebench` | 600 | 85–96 GiB | EPFS | 236 SSD |
+| 8 | `rgbd-colored-gp` | `maniskill` | 1,100 | 28–31 GiB | EPFS | 236 SSD |
+| 9 | `rgbd-colored-gp` | `automate` | 4,950 | 28–31 GiB | EPFS | 236 SSD |
+| 10 | `rgbd-grasp-part` | `furniturebench` | 600 | 85–96 GiB | EPFS | queue |
+| 11 | `rgbd-grasp-part` | `maniskill` | 1,100 | 28–31 GiB | EPFS | queue |
+| 12 | `rgbd-grasp-part` | `automate` | 4,950 | 28–31 GiB | EPFS | queue |
+| 13 | `rgbd-grasp-part-colored` | `furniturebench` | 600 | 85–96 GiB | EPFS | 236 SSD |
+| 14 | `rgbd-grasp-part-colored` | `maniskill` | 1,100 | 28–31 GiB | EPFS | 236 SSD |
+| 15 | `rgbd-grasp-part-colored` | `automate` | 4,950 | 28–31 GiB | EPFS | 236 SSD |
+
+汇总口径：每个 condition 3 个 part、约 141–158 GiB；5 个 condition 共 15 个 part、约 **705–790 GiB**。PPU96 初始副本为根盘 6 个 part（2 conditions，约 282–316 GiB）和 EPFS 9 个 part（3 conditions，约 423–474 GiB）；236 初始热层为 6 个 part（2 conditions，约 282–316 GiB）。NAS canonical raw + LMDB 稳态约 760–855 GiB，2.0 TiB reservation 覆盖稳态、一个在建 part、日志和失败保留。
+
+#### 3.8.4 每个 LMDB part 的验收项
+
+最终验收按上表 #1–#15 逐行执行，不接受只报 condition 总数。每行必须同时填写并通过：
+
+1. `state=nas_verified`，最终目录存在，`.building`/`.incoming` 不作为完成；同级没有 owner 冲突或失败 marker。
+2. episode 总数和逐 task 数严格等于本表；episode ID、source pickle hash 和顺序无重复/缺失。
+3. `annotation_source=scripted`；source mode=`none`；输出 `image_annotation_mode` 与 condition matrix 精确一致；VLM metadata 不存在。
+4. frame compression 精确为 `zstd` level 1；RGB-D、action、robot state、skill、guidance geometry、camera calibration 的 leading dimension/schema/full-stats 通过。
+5. `data.mdb` bytes、`du -sB1`、SHA-256、source manifest bundle SHA、RR/collector commit、writer runtime 和完成时间已登记。
+6. core validator、campaign validator、loader smoke 均通过；五个 condition 的 `data.mdb` hash 不得因错误复用同一渲染输出而意外相同。
+7. NAS canonical 验收后才可创建 replica；PPU/236 逐 replica 核对相同 bytes/SHA、目标为本地快盘或批准的 EPFS tier、余量 gate 通过，并各写一份 receipt。
+
+#### 3.8.5 最终中间件、最终数据与完成定义
+
+最终保留的中间交付：
+
+- 6,650 条 canonical raw pickle、111 个 unit manifest/receipt、3 个 source aggregate receipt；
+- 15 份 writer provenance JSON、15 份 full-stats、15 份 NAS campaign validator 输出和 15 份 NAS canonical completion receipt；
+- PPU96 15 份 transfer receipt、236 初始 6 份 placement receipt；
+- `asset_registry.tsv`、`transfer_queue.tsv`、`training_queue.tsv`、`cleanup_receipts.tsv`，以及失败/重试/排除证据；
+- 每次本地 raw/building 清理的精确路径、清理前后 bytes、canonical hash 和 cleanup-complete receipt。
+
+最终数据交付定义：
+
+1. NAS 有唯一 raw 及 #1–#15 全部 canonical LMDB，合计 15/15；
+2. PPU96 有 15/15 replica，其中初始 `/root` 6、EPFS 9，且无半传目录；
+3. 236 有初始训练所需 6/6 热层 replica，旧 med 清理和可用空间 receipt 完整；
+4. 36 个初始物理目录副本均可由 canonical `data.mdb` SHA 反查，逻辑数据仍是 15 个；
+5. 所有 queue/reservation 均有 owner，所有传输和清理均闭合；最终 audit 逐行输出 PASS/FAIL，不以“总大小大致相符”替代逐 part 验收。
+
+#### 3.8.6 2026-09-03 执行基线、后续顺序与 ETA
+
+下表是 2026-09-03 11:10（Asia/Shanghai）的可验事实快照；它替代 §3.3 的启动前估算。采集速度始终按 **attempted rollouts/hour** 记录，多环境并行是否有效也只看这个指标；成功比例只用于把“还缺多少条成功轨迹”换算成总 attempts 和完工 ETA，不作为加速指标。
+
+| 阶段 | 当前闭合量 | 尚欠交付 | 后续动作与通过条件 | 当前 ETA |
+|---|---|---|---|---:|
+| FurnitureBench raw | r218 本地 600/600；251,980 transitions；36.60 GiB；全量 scripted/raw/reprojection audit 已通过 | NAS canonical source receipt | 在 clean RR commit 上重跑 pinned 全量 audit，经 236 向同一 NAS volume 的 `.incoming` 断点上传，r218 只读复核 SHA 后原子发布 | 约 0.75–1.5 h |
+| ManiSkill raw | NAS 8×100=800；PlugCharger 本地 staging 100；PokeCube 4；LiftPegUpright 0 | 共 196 条：Poke 96、Lift 100；另需 Plug 上传，最终 11×100 | 先做不进入 production 的 fresh-seed 隔离 probe，确认当前 checkpoint/code 与 seed 域；随后在 GPU0–3 恢复有界并行 collector、逐 task strict audit 和原子上传 | 若 probe 恢复已验证产出域，约 1–2 h；否则在诊断通过前不报伪精确 ETA |
+| AutoMate raw | NAS 97×50=4,850；`00863` 隔离 staging 3；`00410` 0 | 100 条：`00410` 50、`00863` 50 | 32-env 单卡实测约 1,378–1,478 attempted rollouts/hour，已证明多 env 并行有效；继续前先解决这两个 task 的状态/配置长尾，再按新 seed 多 lane 收集并 aggregate，历史失败和 diagnostic 不进入 canonical | rollout 单位吞吐已知；总 ETA 取决于修复后所需 attempts，修复 gate 前保持 unknown |
+| NAS raw 最终闭合 | 目前 97 个 AutoMate task、8 个 ManiSkill task；FB 待发布 | 6,650 pickle、111 unit receipt、3 source receipt | 三 source 各自全量 audit、bundle hash、source-complete receipt | tail 修复后预计 0.5–1 d；当前由 Mani/Auto 两项 gate 决定 |
+| 15 个 NAS LMDB | 0/15 | §3.8.3 #1–#15 | source-major 构建；source 闭合即可开始其 5 个 condition；一次只保留一个本地 `.building`；每个 part 独立 full-stats/hash/loader/原子发布 | 首个 FurnitureBench part 用作标定；当前为全部 24–72 h 的工程预留，不把 smoke 外推成承诺 |
+| PPU96 15 个 replica | 0/15 | 根盘 6、EPFS 9 | 每个 NAS part 一闭合即开始单流断点传输，可与后续 build/采集重叠；每个 part 独立校验并写 receipt | 已测路径决定纯传输 9.2–11.6 d，操作窗口 10–13 d |
+| 236 初始热层 | 0/6 | 两个 condition、6 个 part | 首个新 condition NAS 验收后，再按 §3.6.1 精确 reader gate 删除六个旧 med LMDB；实时空间 gate 后落盘并验收 | 数据 ready 后约 2–6 h，首传前用 NAS→236 durable probe 更新 |
+
+执行顺序不是全串行：FurnitureBench 一发布就立即构建它的 5 个 LMDB；每个 LMDB 在 NAS 闭合后立即进入 PPU96 单流队列；同时用 236 GPU0–3 修复并补齐 ManiSkill/AutoMate。以 tail gate 在一天内关闭、全量 LMDB 构建落在 24–72 小时预留内为前提，**全部 15 个 NAS LMDB 的工作窗口约 1–3 天，PPU96 最终 15/15 的端到端窗口约 11–16 天**。PPU96 慢链路是最终交付关键路径；如果 ManiSkill/AutoMate probe 未过，或第一份 LMDB 实测推翻容量/写入速度假设，立即更新本表而不是继续沿用旧 ETA。
+
+最终验收时复制 §3.8.3 的 15 行生成 completion 表，每行增加 `actual episodes`、`actual transitions`、`data.mdb bytes`、`du bytes`、`NAS SHA`、`PPU SHA`、`236 SHA/N/A`、`validator`、`loader smoke` 和 `receipt path` 十列并逐项勾选；只有 15 行全部 PASS、PPU 15/15、236 6/6 且三套 queue/cleanup receipt 闭合，才报告数据交付完成。
 
 ## 4. 附录：此前实现细节的验证结论
 
