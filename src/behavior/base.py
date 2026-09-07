@@ -19,7 +19,11 @@ from src.models import get_encoder
 
 from ipdb import set_trace as bp  # noqa
 from src.common.geometry import proprioceptive_quat_to_6d_rotation
-from src.common.vision import FrontCameraTransform, WristCameraTransform
+from src.common.vision import (
+    LEGACY_224_SPATIAL_TRANSFORM,
+    FrontCameraTransform,
+    WristCameraTransform,
+)
 from src.common.skills import SKILL_ORDER
 
 import src.common.geometry as C
@@ -200,8 +204,8 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
 
     model: nn.Module
 
-    camera1_transform = WristCameraTransform(mode="eval")
-    camera2_transform = FrontCameraTransform(mode="eval")
+    camera1_transform: WristCameraTransform
+    camera2_transform: FrontCameraTransform
 
     encoder1: VisionEncoder
     encoder1_proj: nn.Module
@@ -254,6 +258,17 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
 
         # Regularization
         self.augment_image = cfg.data.augment_image
+        self.image_spatial_transform = cfg.data.get(
+            "image_spatial_transform", LEGACY_224_SPATIAL_TRANSFORM
+        )
+        # These must be instance modules: train/eval mode is actor-local and the
+        # spatial policy is selected independently by each experiment config.
+        self.camera1_transform = WristCameraTransform(
+            mode="eval", spatial_transform=self.image_spatial_transform
+        )
+        self.camera2_transform = FrontCameraTransform(
+            mode="eval", spatial_transform=self.image_spatial_transform
+        )
         self.confusion_loss_beta = actor_cfg.get("confusion_loss_beta", 0.0)
 
         self.device = device
@@ -576,7 +591,8 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
             # Get size of the image
             img_size = obs[0]["color_image1"].shape[-3:]
 
-            # Images come in as obs_horizon x (n_envs, 224, 224, 3) concatenate to (n_envs * obs_horizon, 224, 224, 3)
+            # Concatenate the observation horizon before applying the configured
+            # spatial transform. Native full-frame inputs remain 240x320.
             image1 = torch.cat(
                 [o["color_image1"].unsqueeze(1) for o in obs], dim=1
             ).reshape(B * self.obs_horizon, *img_size)
@@ -590,7 +606,7 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
             image1 = image1.float() / 255.0
             image2 = image2.float() / 255.0
 
-            # Apply the transforms to resize the images to 224x224, (B * obs_horizon, C, 224, 224)
+            # Apply the experiment's configured spatial transform and RGB augmentation.
             image1: torch.Tensor = self.camera1_transform(image1)
             image2: torch.Tensor = self.camera2_transform(image2)
 
@@ -980,7 +996,7 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
             # DONE: fix value error: [0, 255] to [0, 1]
             image1 = image1.float() / 255.0
             image2 = image2.float() / 255.0
-            # Apply the transforms to resize the images to 224x224, (B * obs_horizon, C, 224, 224)
+            # Apply the experiment's configured spatial transform and RGB augmentation.
             # Since we're in training mode, the transform also performs augmentation
             image1: torch.Tensor = self.camera1_transform(image1)
             image2: torch.Tensor = self.camera2_transform(image2)
@@ -1072,7 +1088,7 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
             image1 = image1.reshape(B * self.obs_horizon, *image1.shape[-3:])
             image2 = image2.reshape(B * self.obs_horizon, *image2.shape[-3:])
 
-            # Apply the transforms to resize the images to 224x224, (B * obs_horizon, C, 224, 224)
+            # Apply the experiment's configured spatial transform and RGB augmentation.
             # Since we're in training mode, the transform also performs augmentation
             image1: torch.Tensor = self.camera1_transform(image1)
             image2: torch.Tensor = self.camera2_transform(image2)

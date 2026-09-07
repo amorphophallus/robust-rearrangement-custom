@@ -12,6 +12,9 @@ data:
   action_horizon: ${action_horizon}
   predict_past_actions: ${predict_past_actions}
   augment_image: true
+  # legacy-224 preserves the historical crop/resize path. Set to none only for
+  # experiments whose encoder should receive native 240x320 RGB-D frames.
+  image_spatial_transform: legacy-224
   # 引导信息
   annotate_guidance_point: false
   annotate_guidance_point_colored: false

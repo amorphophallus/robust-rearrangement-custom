@@ -1,10 +1,12 @@
 import unittest
+from pathlib import Path
 
 import numpy as np
 import torch
+from hydra import compose, initialize_config_dir
 from scipy.spatial.transform import Rotation as R
 
-from src.common.vision import FrontCameraTransform
+from src.common.vision import FrontCameraTransform, WristCameraTransform
 from src.data_collection.pickle_contract import (
     camera_calibration_to_robot_base,
     center_crop_camera_calibration,
@@ -54,6 +56,65 @@ class PickleImageSizeTest(unittest.TestCase):
         transformed = transform(canonical_rgbd)
         self.assertEqual(tuple(transformed.shape), (2, 4, 224, 224))
         torch.testing.assert_close(transformed[:, 3:], canonical_rgbd[:, 3:])
+
+    def test_fullframe_eval_preserves_rgbd_pixels_for_both_cameras(self):
+        rgbd = torch.arange(2 * 4 * 240 * 320, dtype=torch.float32).reshape(
+            2, 4, 240, 320
+        )
+
+        for transform_type in (WristCameraTransform, FrontCameraTransform):
+            with self.subTest(transform=transform_type.__name__):
+                transformed = transform_type(
+                    mode="eval", spatial_transform="none"
+                )(rgbd)
+                self.assertEqual(tuple(transformed.shape), (2, 4, 240, 320))
+                torch.testing.assert_close(transformed, rgbd)
+
+    def test_fullframe_training_preserves_depth_and_spatial_shape(self):
+        rgbd = torch.rand((2, 4, 240, 320), dtype=torch.float32)
+
+        for transform_type in (WristCameraTransform, FrontCameraTransform):
+            with self.subTest(transform=transform_type.__name__):
+                transformed = transform_type(
+                    mode="train", spatial_transform="none"
+                )(rgbd)
+                self.assertEqual(tuple(transformed.shape), (2, 4, 240, 320))
+                torch.testing.assert_close(transformed[:, 3:], rgbd[:, 3:])
+
+    def test_fullframe_transform_rejects_non_native_input(self):
+        rgbd = torch.ones((1, 4, 224, 224), dtype=torch.float32)
+
+        for transform_type in (WristCameraTransform, FrontCameraTransform):
+            with self.subTest(transform=transform_type.__name__):
+                transform = transform_type(mode="eval", spatial_transform="none")
+                with self.assertRaisesRegex(ValueError, "requires native 240x320"):
+                    transform(rgbd)
+
+    def test_legacy_wrist_transform_still_resizes_to_224(self):
+        rgbd = torch.ones((1, 4, 240, 320), dtype=torch.float32)
+        transformed = WristCameraTransform(mode="eval")(rgbd)
+        self.assertEqual(tuple(transformed.shape), (1, 4, 224, 224))
+
+    def test_fullframe_cotrain_config_reuses_aligned_lmdb_without_spatial_crop(self):
+        config_dir = str(Path(__file__).resolve().parents[1] / "src" / "config")
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            cfg = compose(
+                config_name="base",
+                overrides=[
+                    "+experiment=rgbd/real_ol_cotrain_colored_gp_fullframe"
+                ],
+            )
+
+        self.assertEqual(cfg.data.image_spatial_transform, "none")
+        self.assertEqual(
+            list(cfg.data.data_paths_override),
+            [
+                "osc/real/one_leg/teleop/low/success/"
+                "real40-timeline10hz-rgbd-skill-point-colored-zstd.lmdb",
+                "diffik/sim/one_leg/rollout/med/success/"
+                "rgbd-skill-point-colored-zstd.lmdb",
+            ],
+        )
 
     def test_crop_updates_annotations_and_front_intrinsics(self):
         source_shapes = {"color_image2": (240, 320)}

@@ -264,8 +264,8 @@ class ResnetEncoder(VisionEncoder):
             error_msgs,
         )
 
-    # Expect input to be a batch of images of shape (batch_size, 3, 224, 224) in range [0, 1]
-    # or RGBD images of shape (batch_size, 4, 224, 224)
+    # ResNet's adaptive pooling accepts variable H/W. Inputs are RGB in [0, 1]
+    # with shape (batch_size, 3, H, W), or RGB-D with four channels.
     def forward(self, x):
         if self.is_rgbd:
             self._require_depth_normalizer_stats()
