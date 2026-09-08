@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -216,10 +217,48 @@ class LatencyProfile:
 
     @classmethod
     def load(cls, path: Path) -> "LatencyProfile":
-        value = json.loads(Path(path).expanduser().read_text())
+        resolved_path = cls.resolve_path(path)
+        value = json.loads(resolved_path.read_text())
         if not isinstance(value, Mapping):
             raise ValueError("latency profile must contain a JSON object")
         return cls.from_mapping(value)
+
+    @classmethod
+    def resolve_path(cls, path: Path, *, now: datetime | None = None) -> Path:
+        """Resolve a profile file or the newest profile measured today in a directory."""
+
+        requested = Path(path).expanduser()
+        if requested.is_file():
+            return requested.resolve()
+        if not requested.is_dir():
+            raise FileNotFoundError(f"latency profile path does not exist: {requested}")
+
+        local_now = now or datetime.now().astimezone()
+        if local_now.tzinfo is None:
+            raise ValueError("now must include a timezone")
+        candidates = []
+        invalid = []
+        for candidate in sorted(requested.glob("latency_profile-*.json")):
+            try:
+                value = json.loads(candidate.read_text())
+                if not isinstance(value, Mapping):
+                    raise ValueError("top-level value is not an object")
+                profile = cls.from_mapping(value)
+                measured_at = datetime.fromisoformat(profile.measured_at)
+                if measured_at.tzinfo is None:
+                    raise ValueError("measured_at has no timezone")
+                if measured_at.astimezone(local_now.tzinfo).date() == local_now.date():
+                    candidates.append((measured_at.timestamp(), candidate.resolve()))
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                invalid.append(f"{candidate.name}: {exc}")
+
+        if not candidates:
+            detail = f"; invalid profiles: {'; '.join(invalid)}" if invalid else ""
+            raise FileNotFoundError(
+                f"no latency_profile-*.json measured on {local_now.date().isoformat()} "
+                f"under {requested.resolve()}{detail}"
+            )
+        return max(candidates, key=lambda item: (item[0], str(item[1])))[1]
 
     def validate(self) -> None:
         if self.schema_version not in {1, 2}:

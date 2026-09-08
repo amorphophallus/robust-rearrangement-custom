@@ -428,7 +428,15 @@ def _parse_args(argv=None):
     parser.add_argument("--interface-cfg", default="config/charmander.yml")
     parser.add_argument("--front-camera-serial", default="327122071654")
     parser.add_argument("--wrist-camera-serial", default="001622071252")
-    parser.add_argument("--latency-profile", type=Path, default=None)
+    parser.add_argument(
+        "--latency-profile",
+        type=Path,
+        default=None,
+        help=(
+            "profile JSON, or a directory from which the newest profile measured "
+            "on the local current date is selected"
+        ),
+    )
     parser.add_argument(
         "--execution-frequency",
         "--frequency",
@@ -513,9 +521,16 @@ def _initialize_policy_runtime(args):
         )
     if actor.action_horizon < args.query_interval_steps:
         raise ValueError("policy action horizon is shorter than query interval")
-    latency = (
-        LatencyProfile.load(args.latency_profile)
+    resolved_latency_profile = (
+        LatencyProfile.resolve_path(args.latency_profile)
         if args.latency_profile is not None
+        else None
+    )
+    if resolved_latency_profile is not None:
+        print(f"resolved latency profile: {resolved_latency_profile}", flush=True)
+    latency = (
+        LatencyProfile.load(resolved_latency_profile)
+        if resolved_latency_profile is not None
         else LatencyProfile(
             0,
             0,
@@ -551,7 +566,12 @@ def _initialize_policy_runtime(args):
             "action_period_ms": period_ns / 1e6,
             "action_horizon": actor.action_horizon,
             "query_interval_steps": args.query_interval_steps,
-            "latency_profile": None if args.latency_profile is None else str(args.latency_profile),
+            "latency_profile": (
+                None if resolved_latency_profile is None else str(resolved_latency_profile)
+            ),
+            "latency_profile_requested": (
+                None if args.latency_profile is None else str(args.latency_profile)
+            ),
             "latency_source": latency.latency_source,
             "latency_basis": latency.basis,
             "action_stale_guard_ms": latency.action_stale_guard_ms,

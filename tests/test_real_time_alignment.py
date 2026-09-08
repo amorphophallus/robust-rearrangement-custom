@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -95,6 +96,55 @@ class RealTimeAlignmentTest(unittest.TestCase):
             )
             profile = LatencyProfile.load(path)
             self.assertEqual(profile.robot_action_ms, 12)
+
+    def test_profile_directory_selects_latest_profile_measured_today(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            now = datetime(2026, 9, 8, 17, 0, tzinfo=timezone(timedelta(hours=8)))
+
+            def write_profile(name, measured_at):
+                path = directory / name
+                path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 2,
+                            "measured_at": measured_at.isoformat(),
+                            "latency_source": "measured",
+                            "basis": "test",
+                            "front_observation_ms": 1,
+                            "wrist_observation_ms": 1,
+                            "robot_observation_ms": 1,
+                            "gripper_observation_ms": 1,
+                            "robot_action_ms": 1,
+                            "gripper_action_ms": 1,
+                        }
+                    )
+                )
+                return path
+
+            write_profile("latency_profile-yesterday.json", now - timedelta(days=1))
+            write_profile("latency_profile-early.json", now - timedelta(hours=2))
+            latest = write_profile(
+                "latency_profile-latest.json", now - timedelta(minutes=5)
+            )
+
+            self.assertEqual(
+                LatencyProfile.resolve_path(directory, now=now), latest.resolve()
+            )
+
+    def test_profile_directory_refuses_to_fall_back_to_previous_day(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            now = datetime(2026, 9, 8, 1, 0, tzinfo=timezone(timedelta(hours=8)))
+            (directory / "latency_profile-old.json").write_text(
+                json.dumps(
+                    {
+                        "measured_at": (now - timedelta(days=1)).isoformat(),
+                    }
+                )
+            )
+            with self.assertRaisesRegex(FileNotFoundError, "no latency_profile"):
+                LatencyProfile.resolve_path(directory, now=now)
 
     def test_v2_estimated_latency_profile_records_stale_guard(self):
         profile = LatencyProfile.from_mapping(

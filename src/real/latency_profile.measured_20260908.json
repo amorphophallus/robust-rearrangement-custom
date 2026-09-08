@@ -1,0 +1,25 @@
+{
+  "schema_version": 2,
+  "measured_at": "2026-09-08T17:29:10.441843+08:00",
+  "latency_source": "measured",
+  "basis": "Pooled medians from three FrankaControl full calibrations at 2026-09-08T17:27:10+08:00, 17:28:12+08:00, and 17:29:10+08:00; robot action rounded from 119.047 ms to 120 ms; single gripper value rounded from pooled 641.725 ms to 642 ms and agrees with the pooled close median 642.339 ms.",
+  "action_stale_guard_ms": 10.0,
+  "front_observation_ms": 36.81,
+  "wrist_observation_ms": 40.304,
+  "robot_observation_ms": 0.067,
+  "gripper_observation_ms": 0.067,
+  "robot_action_ms": 120.0,
+  "gripper_action_ms": 642.0,
+  "calibrated_fields": [
+    "front_observation_ms",
+    "wrist_observation_ms",
+    "robot_observation_ms",
+    "gripper_observation_ms",
+    "robot_action_ms",
+    "gripper_action_ms"
+  ],
+  "inherited_fields": [
+    "action_stale_guard_ms"
+  ],
+  "calibration_clock": "FrankaControl time.time_ns; RealSense global/system time for exposure; NUC observation path approximated by half ICMP RTT"
+}
