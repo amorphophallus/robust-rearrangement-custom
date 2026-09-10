@@ -742,6 +742,13 @@ if __name__ == "__main__":
     parser.add_argument("--april-tags", action="store_true")
 
     parser.add_argument(
+        "--sim-front-camera-preset",
+        type=str,
+        default=None,
+        help="Simulation front-camera preset, e.g. original or locked_20260910.",
+    )
+
+    parser.add_argument(
         "--observation-space", choices=["image", "state"], default="state"
     )
     parser.add_argument("--action-horizon", type=int, default=None)
@@ -1477,6 +1484,7 @@ if __name__ == "__main__":
                             debug=args.debug,
                             headless=not args.visualize,
                             obs_keys=env_obs_keys,
+                            sim_front_camera_preset=args.sim_front_camera_preset,
                         )
                         env_task = task
 

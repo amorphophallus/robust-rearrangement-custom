@@ -245,7 +245,7 @@ python -m src.train.bc +experiment=state/diff_unet task=factory_peg_hole randomn
 You can run evaluations with a command like:
 
 ```bash
-python -m src.eval.evaluate_model --n-envs 128 --n-rollouts 128 -f one_leg --if-exists append --max-rollout-steps 700 --action-type pos --observation-space image --randomness low --wt-type best_success_rate --run-id <wandb-project>/<wandb-run-id>
+python -m src.eval.evaluate_model --n-envs 128 --n-rollouts 128 -f one_leg --if-exists append --max-rollout-steps 700 --action-type pos --observation-space image --randomness low --april-tags --wt-type best_success_rate --run-id <wandb-project>/<wandb-run-id>
 ```
 
 You can add the following flags to visualize in the viewer or store the rollouts:
@@ -253,6 +253,17 @@ You can add the following flags to visualize in the viewer or store the rollouts
 ```bash
 --observation-space image --save-rollouts --visualize
 ```
+
+The simulation front camera currently uses the locked `locked_20260910`
+preset. The original simulator view is retained as `original`. To compare or
+switch presets, pass:
+
+```bash
+--sim-front-camera-preset original
+```
+
+Omitting the flag keeps the currently locked preset. Add future camera
+candidates as named presets instead of overwriting either existing view.
 
 
 

@@ -174,6 +174,7 @@ def get_rl_env(
                 ctrl_mode="diffik",  # Control mode for the robot. Options are 'osc' and 'diffik'.
                 action_type=action_type,  # Action type for the robot. Options are 'delta' and 'pos'.
                 verbose=verbose,  # If true, prints debug information.
+                april_tags=april_tags,
                 debug=debug,
                 **kwargs,
             )
