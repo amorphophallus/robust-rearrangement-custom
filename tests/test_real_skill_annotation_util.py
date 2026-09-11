@@ -228,6 +228,55 @@ class RealSkillAnnotationUtilTest(unittest.TestCase):
         torch.testing.assert_close(target, expected)
         torch.testing.assert_close(target_after_leg_motion, expected)
 
+    def test_place_fallback_propagates_latest_leg_pose_with_ee_delta(self):
+        annotator = RealSkillAnnotator("one_leg")
+        annotator.april_to_robot = np.eye(4, dtype=np.float32)
+        annotator.robot_to_april = np.eye(4, dtype=np.float32)
+        table_idx, leg_idx = annotator.furniture.should_be_assembled[0]
+        table = annotator.furniture.parts[table_idx]
+        leg = annotator.furniture.parts[leg_idx]
+        rb_states = torch.tensor(
+            [
+                [
+                    0.2,
+                    0.3,
+                    0.4,
+                    np.sqrt(0.5),
+                    0.0,
+                    0.0,
+                    np.sqrt(0.5),
+                ],
+                [0.8, -0.4, 0.2, 0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=torch.float32,
+        )
+        inputs = {
+            "rb_states": rb_states,
+            "part_idxs": {table.name: [0], leg.name: [1]},
+            "sim_to_april_mat": torch.eye(4),
+            "april_to_robot_mat": torch.eye(4),
+            "ee_pos": torch.tensor([0.02, 0.0, 0.0]),
+            "ee_quat": torch.tensor([0.0, 0.0, 0.0, 1.0]),
+        }
+        tracker = annotator._tracked_parts[leg.name]
+        tracker.attached = True
+        tracker.rigid_reference_ee_pose_robot = np.eye(4, dtype=np.float32)
+        tracker.rigid_reference_part_pose_robot = np.eye(4, dtype=np.float32)
+        tracker.rigid_reference_part_pose_robot[:3, 3] = [0.1, 0.0, 0.0]
+        tracker.rigid_reference_frame = 7
+        annotator._start_place_rigid_reference(leg, inputs)
+
+        fallback_inputs, debug = annotator._place_rigid_fallback_inputs(
+            leg, inputs, table.name
+        )
+        self.assertIsNotNone(fallback_inputs)
+        self.assertTrue(debug["place_rigid_fallback_used"])
+        self.assertEqual(debug["place_rigid_reference_frame"], 7)
+        torch.testing.assert_close(
+            fallback_inputs["rb_states"][1, :3],
+            torch.tensor([0.12, 0.0, 0.0]),
+        )
+
     def test_inherits_sim_annotator_and_propagates_occluded_pose(self):
         annotator = RealSkillAnnotator("one_leg")
         self.assertIsInstance(annotator, SkillAnnotator)

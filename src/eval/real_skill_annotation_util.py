@@ -46,7 +46,7 @@ from src.common.guidance import GUIDANCE_SCHEMA_VERSION
 
 
 ANNOTATION_SOURCE = "real_skill_annotation_util"
-ANNOTATION_VERSION = 10
+ANNOTATION_VERSION = 13
 ANNOTATION_STATUS_KEY = "annotation_status"
 ANNOTATION_STATUS_ANNOTATED = "annotated"
 ANNOTATION_STATUS_UNANNOTATED = "unannotated"
@@ -170,6 +170,9 @@ def _project_polygon(
 class _TrackedPart:
     pose_april: Optional[np.ndarray] = None
     ee_to_part_robot: Optional[np.ndarray] = None
+    rigid_reference_ee_pose_robot: Optional[np.ndarray] = None
+    rigid_reference_part_pose_robot: Optional[np.ndarray] = None
+    rigid_reference_frame: Optional[int] = None
     attached: bool = False
     source: str = "uninitialized"
     pending_ee_to_part_robot: Optional[np.ndarray] = None
@@ -215,7 +218,6 @@ class RealSkillAnnotator(SkillAnnotator):
     attached_detection_gate_m: float = 0.040
     relocalization_gate_m: float = 0.030
     relocalization_frames: int = 3
-
     def __post_init__(self):
         if self.furniture_name not in SUPPORTED_FURNITURE:
             raise ValueError(
@@ -236,6 +238,10 @@ class RealSkillAnnotator(SkillAnnotator):
         self._initial_part_pose_robot: Dict[str, np.ndarray] = {}
         self._current_gripper_event: Optional[str] = None
         self._placed_part_names = set()
+        self._place_rigid_reference_part_name: Optional[str] = None
+        self._place_rigid_reference_ee_pose_robot: Optional[np.ndarray] = None
+        self._place_rigid_reference_part_pose_robot: Optional[np.ndarray] = None
+        self._place_rigid_reference_frame: Optional[int] = None
         self._frame_idx = -1
         self.stats = RealAnnotationStats()
 
@@ -249,6 +255,10 @@ class RealSkillAnnotator(SkillAnnotator):
         self._initial_part_pose_robot = {}
         self._current_gripper_event = None
         self._placed_part_names = set()
+        self._place_rigid_reference_part_name = None
+        self._place_rigid_reference_ee_pose_robot = None
+        self._place_rigid_reference_part_pose_robot = None
+        self._place_rigid_reference_frame = None
         self._frame_idx = -1
         self.stats = RealAnnotationStats()
 
@@ -295,6 +305,21 @@ class RealSkillAnnotator(SkillAnnotator):
         )
         return pose, found and valid_flag and numerically_valid, valid_flag and numerically_valid
 
+    def _set_rigid_reference(
+        self,
+        tracker: _TrackedPart,
+        ee_pose_robot: np.ndarray,
+        part_pose_robot: np.ndarray,
+    ) -> None:
+        """Remember the newest pose accepted as a rigid EE-to-leg reference."""
+
+        tracker.ee_to_part_robot = (
+            np.linalg.inv(ee_pose_robot) @ part_pose_robot
+        ).astype(np.float32)
+        tracker.rigid_reference_ee_pose_robot = ee_pose_robot.copy()
+        tracker.rigid_reference_part_pose_robot = part_pose_robot.copy()
+        tracker.rigid_reference_frame = self._frame_idx
+
     def _tracked_pose(
         self,
         observation: Mapping[str, Any],
@@ -317,9 +342,9 @@ class RealSkillAnnotator(SkillAnnotator):
                 detected_pose_robot = (
                     self.april_to_robot @ _pose_vector_to_matrix(raw_pose)
                 )
-                tracker.ee_to_part_robot = (
-                    np.linalg.inv(ee_pose_robot) @ detected_pose_robot
-                ).astype(np.float32)
+                self._set_rigid_reference(
+                    tracker, ee_pose_robot, detected_pose_robot
+                )
         elif detected:
             detected_pose_robot = self.april_to_robot @ _pose_vector_to_matrix(raw_pose)
             if tracker.attached and tracker.ee_to_part_robot is not None:
@@ -343,7 +368,9 @@ class RealSkillAnnotator(SkillAnnotator):
                     tracker.pending_ee_to_part_robot = candidate_ee_to_part
                     if tracker.pending_detection_count >= self.relocalization_frames:
                         tracker.pose_april = raw_pose
-                        tracker.ee_to_part_robot = candidate_ee_to_part
+                        self._set_rigid_reference(
+                            tracker, ee_pose_robot, detected_pose_robot
+                        )
                         tracker.pending_ee_to_part_robot = None
                         tracker.pending_detection_count = 0
                         tracker.source = "relocalized_detection"
@@ -355,9 +382,9 @@ class RealSkillAnnotator(SkillAnnotator):
                 else:
                     tracker.pose_april = raw_pose
                     tracker.source = detected_source
-                    tracker.ee_to_part_robot = (
-                        np.linalg.inv(ee_pose_robot) @ detected_pose_robot
-                    ).astype(np.float32)
+                    self._set_rigid_reference(
+                        tracker, ee_pose_robot, detected_pose_robot
+                    )
                     tracker.pending_ee_to_part_robot = None
                     tracker.pending_detection_count = 0
             else:
@@ -547,12 +574,13 @@ class RealSkillAnnotator(SkillAnnotator):
             previous = self._tracked_parts[self._attached_part_name]
             previous.attached = False
             previous.ee_to_part_robot = None
+            previous.rigid_reference_ee_pose_robot = None
+            previous.rigid_reference_part_pose_robot = None
+            previous.rigid_reference_frame = None
 
         tracker = self._tracked_parts[active_part.name]
         tracker.attached = True
-        tracker.ee_to_part_robot = (
-            np.linalg.inv(ee_pose_robot) @ part_pose_robot
-        ).astype(np.float32)
+        self._set_rigid_reference(tracker, ee_pose_robot, part_pose_robot)
         tracker.pending_ee_to_part_robot = None
         tracker.pending_detection_count = 0
         self._attached_part_name = active_part.name
@@ -561,12 +589,21 @@ class RealSkillAnnotator(SkillAnnotator):
     def _detach_part(self):
         if self._attached_part_name is None:
             return
-        tracker = self._tracked_parts[self._attached_part_name]
+        detached_part_name = self._attached_part_name
+        tracker = self._tracked_parts[detached_part_name]
         tracker.attached = False
         tracker.ee_to_part_robot = None
+        tracker.rigid_reference_ee_pose_robot = None
+        tracker.rigid_reference_part_pose_robot = None
+        tracker.rigid_reference_frame = None
         tracker.pending_ee_to_part_robot = None
         tracker.pending_detection_count = 0
         self._attached_part_name = None
+        if self._place_rigid_reference_part_name == detached_part_name:
+            self._place_rigid_reference_part_name = None
+            self._place_rigid_reference_ee_pose_robot = None
+            self._place_rigid_reference_part_pose_robot = None
+            self._place_rigid_reference_frame = None
 
     def _annotation_inputs(
         self,
@@ -679,6 +716,194 @@ class RealSkillAnnotator(SkillAnnotator):
             part.skill_guidance_pose_robot = aligned_pose.clone()
         return aligned_point, aligned_pose, float(tabletop_z.item())
 
+    @staticmethod
+    def _place_geometry_debug(
+        part,
+        annotation_inputs: Mapping[str, Any],
+        assemble_to_name: str,
+    ) -> Dict[str, Any]:
+        """Return the exact leg/table errors used by ``Leg`` for place->insert."""
+
+        rb_states = annotation_inputs["rb_states"]
+        part_idxs = annotation_inputs["part_idxs"]
+        sim_to_april_mat = annotation_inputs["sim_to_april_mat"]
+        april_to_robot = annotation_inputs["april_to_robot_mat"]
+        leg_pose_robot = part._part_pose_robot(
+            part.name,
+            rb_states,
+            part_idxs,
+            sim_to_april_mat,
+            april_to_robot,
+        )
+        table_pose_robot = part._part_pose_robot(
+            assemble_to_name,
+            rb_states,
+            part_idxs,
+            sim_to_april_mat,
+            april_to_robot,
+        )
+        xy_error, z_error, ori_error = part._part_place_errors_robot(
+            leg_pose_robot,
+            table_pose_robot,
+            ignore_axis=1,
+        )
+        xy_error = float(xy_error.item())
+        z_error = float(z_error.item())
+        ori_error = float(ori_error.item())
+        xy_threshold = float(part.skill_place_part_xz_threshold)
+        z_threshold = float(part.skill_place_z_threshold)
+        ori_threshold = float(part.skill_place_part_ori_threshold)
+        return {
+            "place_xy_error_m": xy_error,
+            "place_z_error_m": z_error,
+            "place_orientation_error_rad": ori_error,
+            "place_xy_threshold_m": xy_threshold,
+            "place_z_threshold_m": z_threshold,
+            "place_orientation_threshold_rad": ori_threshold,
+            "place_xy_ok": xy_error < xy_threshold,
+            "place_z_ok": z_error < z_threshold,
+            "place_orientation_ok": ori_error < ori_threshold,
+            "place_geometry_ok": (
+                xy_error < xy_threshold
+                and z_error < z_threshold
+                and ori_error < ori_threshold
+            ),
+        }
+
+    def _start_place_rigid_reference(
+        self,
+        part,
+        annotation_inputs: Mapping[str, Any],
+    ) -> None:
+        """Freeze the newest feasible EE/leg pair when Place starts."""
+
+        tracker = self._tracked_parts.get(part.name)
+        if (
+            tracker is not None
+            and tracker.rigid_reference_ee_pose_robot is not None
+            and tracker.rigid_reference_part_pose_robot is not None
+        ):
+            reference_ee_pose_robot = tracker.rigid_reference_ee_pose_robot
+            reference_part_pose_robot = tracker.rigid_reference_part_pose_robot
+            reference_frame = tracker.rigid_reference_frame
+        else:
+            reference_ee_pose_robot = np.eye(4, dtype=np.float32)
+            reference_ee_pose_robot[:3, :3] = (
+                C.quat2mat(annotation_inputs["ee_quat"])
+                .detach()
+                .cpu()
+                .numpy()
+            )
+            reference_ee_pose_robot[:3, 3] = (
+                annotation_inputs["ee_pos"].detach().cpu().numpy()
+            )
+            reference_part_pose_robot = (
+                part._part_pose_robot(
+                    part.name,
+                    annotation_inputs["rb_states"],
+                    annotation_inputs["part_idxs"],
+                    annotation_inputs["sim_to_april_mat"],
+                    annotation_inputs["april_to_robot_mat"],
+                )
+                .detach()
+                .cpu()
+                .numpy()
+            )
+            reference_frame = self._frame_idx
+
+        self._place_rigid_reference_part_name = part.name
+        self._place_rigid_reference_ee_pose_robot = (
+            reference_ee_pose_robot.copy()
+        )
+        self._place_rigid_reference_part_pose_robot = (
+            reference_part_pose_robot.copy()
+        )
+        self._place_rigid_reference_frame = reference_frame
+
+    def _place_rigid_fallback_inputs(
+        self,
+        part,
+        annotation_inputs: Mapping[str, Any],
+        assemble_to_name: str,
+    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+        """Propagate the latest feasible leg pose with the current EE delta.
+
+        The reference transform is established only from an attached pose that
+        passed the normal tracker consistency checks.  During Place, the
+        current estimated leg pose is then:
+
+            leg_now = ee_now @ inv(ee_reference) @ leg_reference
+
+        The returned annotation inputs are used only for the Place FSM update;
+        source observations are never modified.
+        """
+
+        if (
+            self._place_rigid_reference_part_name != part.name
+            or self._place_rigid_reference_ee_pose_robot is None
+            or self._place_rigid_reference_part_pose_robot is None
+        ):
+            return None, {
+                "place_rigid_fallback_used": False,
+                "place_rigid_fallback_reason": "no_attached_feasible_reference",
+            }
+
+        current_ee_pose_robot = np.eye(4, dtype=np.float32)
+        current_ee_pose_robot[:3, :3] = (
+            C.quat2mat(annotation_inputs["ee_quat"])
+            .detach()
+            .cpu()
+            .numpy()
+        )
+        current_ee_pose_robot[:3, 3] = (
+            annotation_inputs["ee_pos"].detach().cpu().numpy()
+        )
+        current_part_pose_robot = (
+            current_ee_pose_robot
+            @ np.linalg.inv(self._place_rigid_reference_ee_pose_robot)
+            @ self._place_rigid_reference_part_pose_robot
+        ).astype(np.float32)
+        current_part_pose_april = (
+            self.robot_to_april @ current_part_pose_robot
+        ).astype(np.float32)
+
+        fallback_inputs = dict(annotation_inputs)
+        fallback_rb_states = annotation_inputs["rb_states"].clone()
+        part_idx = annotation_inputs["part_idxs"][part.name][0]
+        fallback_rb_states[part_idx] = torch.as_tensor(
+            _matrix_to_pose_vector(current_part_pose_april),
+            dtype=fallback_rb_states.dtype,
+            device=fallback_rb_states.device,
+        )
+        fallback_inputs["rb_states"] = fallback_rb_states
+
+        active_part = self._active_part()
+        if active_part is not None and active_part.name == part.name:
+            active_pos = fallback_rb_states[part_idx, :3]
+            finger_offset = torch.tensor(
+                [0.01, 0.0, 0.0],
+                dtype=active_pos.dtype,
+                device=active_pos.device,
+            )
+            fallback_inputs["left_finger_pos"] = active_pos - finger_offset
+            fallback_inputs["right_finger_pos"] = active_pos + finger_offset
+
+        debug = {
+            "place_rigid_fallback_used": True,
+            "place_rigid_fallback_source": "latest_feasible_leg_pose_plus_delta_ee",
+            "place_rigid_reference_frame": self._place_rigid_reference_frame,
+            "place_rigid_delta_ee_translation_m": float(
+                np.linalg.norm(
+                    current_ee_pose_robot[:3, 3]
+                    - self._place_rigid_reference_ee_pose_robot[:3, 3]
+                )
+            ),
+            "place_rigid_estimated_leg_pose_robot": (
+                current_part_pose_robot.tolist()
+            ),
+        }
+        return fallback_inputs, debug
+
     def _step_skill_state(self, annotation_inputs: Mapping[str, Any]) -> Dict[str, Any]:
         if self.assemble_idx >= len(self.furniture.should_be_assembled):
             return {
@@ -765,25 +990,71 @@ class RealSkillAnnotator(SkillAnnotator):
             getattr(part1, "skill_state", None) == "done"
         )
         if part1_complete:
-            released_operated_part = (
-                self._current_gripper_event == "opened"
-                and self._attached_part_name == part2.name
-                and getattr(part2, "skill_state", None) == "place"
-            )
-            if released_operated_part:
-                # The real pickle has no contact force with which to certify a
-                # seated part.  On a successful demonstration, releasing the
-                # transported leg at the assembly site is the observable
-                # place->insert boundary.  ``None`` keeps the inherited drop
-                # guard conservative for this transition frame.
-                part2.skill_state = "insert"
-                annotation_inputs["part_contact_forces"][part2.name] = None
-                self._placed_part_names.add(part2.name)
-            elif (
-                part2.name in self._placed_part_names
-                and getattr(part2, "skill_state", None) in {"insert", "screw"}
+            part_state_before_update = getattr(part2, "skill_state", None)
+            state_annotation_inputs = annotation_inputs
+            raw_place_geometry = None
+            if part_state_before_update in {"place", "insert", "screw"}:
+                raw_place_geometry = self._place_geometry_debug(
+                    part2, annotation_inputs, part1.name
+                )
+                if part_state_before_update == "place":
+                    debug.update(
+                        {
+                            f"place_live_{key}": value
+                            for key, value in raw_place_geometry.items()
+                        }
+                    )
+                debug.update(raw_place_geometry)
+            if (
+                part_state_before_update == "place"
+                and raw_place_geometry is not None
+                and not raw_place_geometry["place_geometry_ok"]
             ):
-                annotation_inputs["part_contact_forces"][part2.name] = None
+                (
+                    rigid_inputs,
+                    rigid_debug,
+                ) = self._place_rigid_fallback_inputs(
+                    part2,
+                    annotation_inputs,
+                    part1.name,
+                )
+                debug.update(rigid_debug)
+                if rigid_inputs is not None:
+                    state_annotation_inputs = rigid_inputs
+                    rigid_geometry = self._place_geometry_debug(
+                        part2, state_annotation_inputs, part1.name
+                    )
+                    debug.update(
+                        {
+                            f"place_rigid_{key}": value
+                            for key, value in rigid_geometry.items()
+                        }
+                    )
+                    debug.update(rigid_geometry)
+                    debug["place_geometry_source"] = "rigid_ee_delta"
+            if part_state_before_update in {"insert", "screw"}:
+                # Once place has completed, an opening gripper is the
+                # expected insert->screw action, not evidence that the
+                # leg was dropped. Missing real contact forces must not
+                # reset the state before the width transition is checked.
+                state_annotation_inputs["part_contact_forces"][part2.name] = None
+                gripper_threshold = float(
+                    furniture_bench_config["robot"]["max_gripper_width"][
+                        part2._gripper_width_key
+                    ]
+                    - 0.001
+                )
+                current_width = float(
+                    state_annotation_inputs["gripper_width"].item()
+                )
+                debug.update(
+                    {
+                        "insert_to_screw_gripper_width_m": current_width,
+                        "insert_to_screw_gripper_threshold_m": gripper_threshold,
+                        "insert_to_screw_gripper_ok": current_width
+                        >= gripper_threshold,
+                    }
+                )
             (
                 skill_state,
                 skill,
@@ -791,7 +1062,32 @@ class RealSkillAnnotator(SkillAnnotator):
                 guidance_pose_robot,
                 guidance_gripper_width,
             ) = self._update_operated_part(
-                part2, annotation_inputs, part1.name, assembled
+                part2, state_annotation_inputs, part1.name, assembled
+            )
+            if (
+                part_state_before_update == "pick"
+                and getattr(part2, "skill_state", None) == "place"
+            ):
+                self._start_place_rigid_reference(part2, annotation_inputs)
+                debug["place_rigid_reference_started"] = True
+                debug["place_rigid_reference_frame"] = (
+                    self._place_rigid_reference_frame
+                )
+            if (
+                part_state_before_update == "place"
+                and getattr(part2, "skill_state", None) == "insert"
+                and debug.get("place_geometry_source") == "rigid_ee_delta"
+            ):
+                debug["place_transition_source"] = "rigid_ee_delta"
+            debug["place_state_before_update"] = part_state_before_update
+            debug["place_state_after_update"] = getattr(part2, "skill_state", None)
+            debug["place_transition"] = (
+                part_state_before_update == "place"
+                and getattr(part2, "skill_state", None) == "insert"
+            )
+            debug["insert_to_screw_transition"] = (
+                part_state_before_update == "insert"
+                and getattr(part2, "skill_state", None) == "screw"
             )
             debug["active_part"] = part2.name
             debug["phase"] = "assemble"
@@ -1144,6 +1440,15 @@ def _real_annotation_metadata(
         "missing_pose_policy": "parts_founds + ee_rigid_propagation + held_last",
         "pose_tracking_policy": DEFAULT_POSE_TRACKING_POLICY,
         "release_pose_policy": "held_last",
+        "place_transition_policy": (
+            "geometry_only_when_part_pose_is_reliable; otherwise "
+            "latest feasible leg pose propagated by current EE delta and "
+            "the original leg/table geometry thresholds; "
+            "gripper release is evaluated only after insert"
+        ),
+        "insert_transition_policy": (
+            "gripper_width >= max_gripper_width - 0.001"
+        ),
         "sam2_override_enabled": pose_provider is not None,
         "place_target_policy": PLACE_TARGET_POLICY_TABLETOP,
         "place_target_formula": {
