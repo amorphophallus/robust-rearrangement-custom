@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +38,13 @@ class NoiseLevel:
     perturbation: str = "gaussian"
 
 
+@dataclass(frozen=True)
+class ReplicateConfig:
+    replicate_id: int
+    simulator_seed: int
+    annotation_seed: int
+
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CHECKPOINT_ROOT = REPO_ROOT / "checkpoints" / "bc" / "one_leg+round_table+lamp" / "low"
 AUTO_EVAL_DEFAULT = Path("/home/huyue/projects/gpu-snatcher/auto_eval.sh")
@@ -44,6 +54,11 @@ FIGURES_DEFAULT = REPO_ROOT / "reports" / "figures" / "fresh36"
 DATA_DEFAULT = REPO_ROOT / "reports" / "data" / "fresh36"
 GROUP_LOGS_DEFAULT = REPO_ROOT / "logs" / "annotation_noise_clean_train_fresh36_groups"
 GUIDANCE_BANK_DEFAULT = REPO_ROOT / "logs" / "annotation_noise_guidance_bank"
+VLM_COVER_MANIFEST_DEFAULT = REPO_ROOT / "logs" / "annotation_noise_vlm_cover_108" / "manifest.jsonl"
+VLM_COVER_REPORT_DEFAULT = REPO_ROOT / "reports" / "annotation_noise_vlm_cover_108.md"
+VLM_COVER_FIGURES_DEFAULT = REPO_ROOT / "reports" / "figures" / "vlm_cover_108"
+VLM_COVER_DATA_DEFAULT = REPO_ROOT / "reports" / "data" / "vlm_cover_108"
+VLM_COVER_GROUPS_DEFAULT = REPO_ROOT / "logs" / "annotation_noise_vlm_cover_108" / "groups"
 
 CONDITIONS = [
     ConditionConfig(
@@ -108,6 +123,9 @@ POINT_NOISE_LEVELS = [
     NoiseLevel("n2", "6mm", 0.006, 0.0),
     NoiseLevel("n3", "12mm", 0.012, 0.0),
     NoiseLevel("n4", "24mm", 0.024, 0.0),
+    NoiseLevel("n5", "48mm", 0.048, 0.0),
+    NoiseLevel("n6", "96mm", 0.096, 0.0),
+    NoiseLevel("n7", "192mm", 0.192, 0.0),
 ]
 
 GRASP_NOISE_LEVELS = [
@@ -116,7 +134,15 @@ GRASP_NOISE_LEVELS = [
     NoiseLevel("n2", "6mm/5deg", 0.006, 5.0),
     NoiseLevel("n3", "12mm/10deg", 0.012, 10.0),
     NoiseLevel("n4", "24mm/20deg", 0.024, 20.0),
+    NoiseLevel("n5", "48mm/40deg", 0.048, 40.0),
+    NoiseLevel("n6", "96mm/60deg", 0.096, 60.0),
+    NoiseLevel("n7", "192mm/90deg", 0.192, 90.0),
 ]
+
+FIXED_R180 = NoiseLevel(
+    "r180", "orientation-only-180deg", 0.0, 180.0,
+    perturbation="fixed_geodesic",
+)
 
 SHUFFLED_GUIDANCE = NoiseLevel(
     "shuffle", "shuffled-guidance", 0.0, 0.0, perturbation="shuffle"
@@ -124,9 +150,11 @@ SHUFFLED_GUIDANCE = NoiseLevel(
 
 
 def _noise_levels_for_family(
-    family: str, *, include_shuffled: bool = False
+    family: str, *, include_shuffled: bool = False, legacy_only: bool = True
 ) -> list[NoiseLevel]:
     levels = list(POINT_NOISE_LEVELS if family == "point" else GRASP_NOISE_LEVELS)
+    if legacy_only:
+        levels = levels[:5]
     if include_shuffled:
         levels.append(SHUFFLED_GUIDANCE)
     return levels
@@ -144,10 +172,29 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _manifest_lookup(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
-    latest: dict[tuple[str, str], dict[str, Any]] = {}
+def _manifest_key(row: dict[str, Any]) -> tuple[str, str, int, int, int]:
+    annotation_seed = row.get("annotation_seed")
+    if annotation_seed is None:
+        annotation_seed = row.get("shuffle_seed", 0)
+    return (
+        str(row.get("condition_id")),
+        str(row.get("noise_id")),
+        int(row.get("replicate_id", 0)),
+        int(row.get("simulator_seed", 0)),
+        int(annotation_seed or 0),
+    )
+
+
+def _manifest_lookup(
+    rows: list[dict[str, Any]], *, replicate_aware: bool = False
+) -> dict[tuple[Any, ...], dict[str, Any]]:
+    latest: dict[tuple[Any, ...], dict[str, Any]] = {}
     for row in rows:
-        key = (str(row.get("condition_id")), str(row.get("noise_id")))
+        key = (
+            _manifest_key(row)
+            if replicate_aware
+            else (str(row.get("condition_id")), str(row.get("noise_id")))
+        )
         current = latest.get(key)
         if current is None or str(row.get("started_at", "")) > str(
             current.get("started_at", "")
@@ -162,6 +209,68 @@ def _append_manifest(path: Path, row: dict[str, Any]) -> None:
         f.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def _upsert_manifest(path: Path, row: dict[str, Any]) -> None:
+    """Keep the profile manifest unique even after retrying a failed key."""
+    key = _manifest_key(row)
+    rows = [item for item in _read_jsonl(path) if _manifest_key(item) != key]
+    rows.append(row)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        "".join(json.dumps(item, sort_keys=True) + "\n" for item in rows)
+    )
+    temporary.replace(path)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _command_output(command: list[str]) -> str | None:
+    try:
+        return subprocess.check_output(
+            command, cwd=REPO_ROOT, text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def _run_provenance() -> dict[str, Any]:
+    source_paths = (
+        REPO_ROOT / "scripts" / "run_clean_train_noise_eval.py",
+        REPO_ROOT / "scripts" / "audit_clean_train_noise_eval.py",
+        REPO_ROOT / "scripts" / "generate_annotation_noise_report.py",
+        REPO_ROOT / "scripts" / "generate_vlm_cover_108_report.py",
+        REPO_ROOT / "src" / "eval" / "annotation_noise.py",
+        REPO_ROOT / "src" / "eval" / "evaluate_model.py",
+        REPO_ROOT / "src" / "eval" / "rollout.py",
+        REPO_ROOT / "src" / "eval" / "skill_annotation_util.py",
+    )
+    return {
+        "hostname": os.uname().nodename,
+        "git_commit": _command_output(["git", "rev-parse", "HEAD"]),
+        "git_status": (_command_output(["git", "status", "--short"]) or "clean"),
+        "python_executable": sys.executable,
+        "python_version": sys.version.split()[0],
+        "gpu": _command_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,driver_version",
+                "--format=csv,noheader",
+            ]
+        ),
+        "source_sha256": {
+            str(path.relative_to(REPO_ROOT)): _sha256(path)
+            for path in source_paths
+            if path.exists()
+        },
+    }
+
+
 def _resolve_conditions(requested: str | None) -> list[ConditionConfig]:
     if not requested:
         return CONDITIONS
@@ -173,6 +282,39 @@ def _resolve_noise_ids(requested: str | None) -> set[str] | None:
     if not requested:
         return None
     return {item.strip() for item in requested.split(",") if item.strip()}
+
+
+def _resolve_replicate_ids(requested: str | None) -> set[int] | None:
+    if not requested:
+        return None
+    values = {int(item.strip()) for item in requested.split(",") if item.strip()}
+    unknown = values - {0, 1, 2}
+    if unknown:
+        raise ValueError(f"unsupported replicate ids: {sorted(unknown)}")
+    return values
+
+
+def _vlm_cover_schedule(
+    conditions: list[ConditionConfig],
+) -> list[tuple[ConditionConfig, NoiseLevel, ReplicateConfig]]:
+    """Return the fixed 111-invocation order, excluding reused legacy cells."""
+    replicates = {seed: ReplicateConfig(seed, seed, seed) for seed in (0, 1, 2)}
+    scheduled: list[tuple[ConditionConfig, NoiseLevel, ReplicateConfig]] = []
+    for condition in conditions:
+        for noise in _noise_levels_for_family(condition.family, legacy_only=False)[5:]:
+            scheduled.append((condition, noise, replicates[0]))
+    for seed in (1, 2):
+        for condition in conditions:
+            for noise in _noise_levels_for_family(condition.family, legacy_only=False):
+                scheduled.append((condition, noise, replicates[seed]))
+    for seed in (0, 1, 2):
+        for condition in conditions:
+            if condition.family == "grasp-part":
+                scheduled.append((condition, FIXED_R180, replicates[seed]))
+    for seed in (1, 2):
+        for condition in conditions:
+            scheduled.append((condition, SHUFFLED_GUIDANCE, replicates[seed]))
+    return scheduled
 
 
 def _latest_json_after(log_dir: Path, start_ts: float) -> Path | None:
@@ -204,25 +346,73 @@ def _group_log_path(
     group_logs_dir: Path,
     condition: ConditionConfig,
     noise: NoiseLevel,
+    replicate: ReplicateConfig | None = None,
+) -> Path:
+    seed_suffix = ""
+    if replicate is not None:
+        seed_suffix = (
+            f"_rep{replicate.replicate_id}_sim{replicate.simulator_seed}"
+            f"_ann{replicate.annotation_seed}"
+        )
+    return (
+        group_logs_dir
+        / _safe_path_part(condition.condition_id)
+        / f"{_safe_path_part(noise.noise_id)}_{_safe_path_part(noise.noise_label)}{seed_suffix}.log"
+    )
+
+
+def _group_summary_path(
+    group_logs_dir: Path,
+    condition: ConditionConfig,
+    noise: NoiseLevel,
+    replicate: ReplicateConfig,
 ) -> Path:
     return (
         group_logs_dir
         / _safe_path_part(condition.condition_id)
-        / f"{_safe_path_part(noise.noise_id)}_{_safe_path_part(noise.noise_label)}.log"
+        / (
+            f"{_safe_path_part(noise.noise_id)}_{_safe_path_part(noise.noise_label)}"
+            f"_rep{replicate.replicate_id}_sim{replicate.simulator_seed}"
+            f"_ann{replicate.annotation_seed}.summary.json"
+        )
     )
 
 
-def _rollout_suffix_model_name(condition: ConditionConfig, noise: NoiseLevel) -> str:
-    return (
+def _group_command_metadata_path(
+    group_logs_dir: Path,
+    condition: ConditionConfig,
+    noise: NoiseLevel,
+    replicate: ReplicateConfig,
+) -> Path:
+    return _group_summary_path(
+        group_logs_dir, condition, noise, replicate
+    ).with_suffix(".command.json")
+
+
+def _rollout_suffix_model_name(
+    condition: ConditionConfig,
+    noise: NoiseLevel,
+    replicate: ReplicateConfig | None = None,
+) -> str:
+    suffix = (
         f"{_safe_path_part(condition.condition_id)}"
         f"/{_safe_path_part(noise.noise_id)}_{_safe_path_part(noise.noise_label)}"
     )
+    if replicate is not None:
+        suffix += (
+            f"/rep{replicate.replicate_id}_sim{replicate.simulator_seed}"
+            f"_ann{replicate.annotation_seed}"
+        )
+    return suffix
 
 
 def _effective_rollout_suffix_model_name(
     condition: ConditionConfig,
     noise: NoiseLevel,
+    replicate: ReplicateConfig | None = None,
 ) -> str:
+    if replicate is not None:
+        return _rollout_suffix_model_name(condition, noise, replicate)
     suffix = _rollout_suffix_model_name(condition, noise)
     if noise.perturbation == "shuffle":
         return f"{suffix}_shuffle_seed0"
@@ -239,8 +429,9 @@ def _rollout_group_dirs(
     randomness: str,
     condition: ConditionConfig,
     noise: NoiseLevel,
+    replicate: ReplicateConfig | None = None,
 ) -> list[Path]:
-    suffix = _effective_rollout_suffix_model_name(condition, noise)
+    suffix = _effective_rollout_suffix_model_name(condition, noise, replicate)
     rollout_dirs = []
     for task in task_group.split("+"):
         base = (
@@ -266,12 +457,14 @@ def _clean_rollout_group(
     randomness: str,
     condition: ConditionConfig,
     noise: NoiseLevel,
+    replicate: ReplicateConfig | None = None,
 ) -> None:
     for rollout_dir in _rollout_group_dirs(
         task_group=task_group,
         randomness=randomness,
         condition=condition,
         noise=noise,
+        replicate=replicate,
     ):
         if rollout_dir.exists():
             shutil.rmtree(rollout_dir)
@@ -283,6 +476,7 @@ def _evict_rollout_group_cache(
     randomness: str,
     condition: ConditionConfig,
     noise: NoiseLevel,
+    replicate: ReplicateConfig | None = None,
 ) -> dict[str, int]:
     stats = {"files": 0, "bytes": 0, "errors": 0}
     if not hasattr(os, "posix_fadvise") or not hasattr(os, "POSIX_FADV_DONTNEED"):
@@ -294,6 +488,7 @@ def _evict_rollout_group_cache(
         randomness=randomness,
         condition=condition,
         noise=noise,
+        replicate=replicate,
     ):
         if not rollout_dir.exists():
             continue
@@ -320,6 +515,7 @@ def _delete_rollout_group_pickles(
     randomness: str,
     condition: ConditionConfig,
     noise: NoiseLevel,
+    replicate: ReplicateConfig | None = None,
 ) -> dict[str, int]:
     stats = {"files": 0, "bytes": 0, "errors": 0}
     for rollout_dir in _rollout_group_dirs(
@@ -327,6 +523,7 @@ def _delete_rollout_group_pickles(
         randomness=randomness,
         condition=condition,
         noise=noise,
+        replicate=replicate,
     ):
         if not rollout_dir.exists():
             continue
@@ -356,7 +553,10 @@ def _build_command(
     save_rollouts_count: int,
     guidance_bank_dir: Path | None = None,
     guidance_bank_out_dir: Path | None = None,
+    replicate: ReplicateConfig | None = None,
 ) -> list[str]:
+    explicit_replicate = replicate is not None
+    replicate = replicate or ReplicateConfig(0, 0, 0)
     command = [
         str(auto_eval_path),
         "--steps",
@@ -372,10 +572,19 @@ def _build_command(
         "--overwrite-wt-path",
         str(checkpoint),
         "--rollout-suffix-model-name",
-        _rollout_suffix_model_name(condition, noise),
+        _rollout_suffix_model_name(
+            condition, noise, replicate if explicit_replicate else None
+        ),
+        "--seed",
+        str(replicate.simulator_seed),
+        "--annotation-source",
+        "scripted",
     ]
-    if save_rollouts_count > 0:
-        command.extend(["--max-saved-rollouts", str(save_rollouts_count)])
+    # auto_eval historically treats the literal string "0" as "omit the flag".
+    # "00" is the same integer while ensuring the evaluator receives the explicit
+    # no-persistence setting required by the vlm-cover profile.
+    saved_count_arg = "00" if save_rollouts_count == 0 else str(save_rollouts_count)
+    command.extend(["--max-saved-rollouts", saved_count_arg])
     command.extend(flags)
     if guidance_bank_out_dir is not None:
         command.extend(["--guidance-bank-out-dir", str(guidance_bank_out_dir)])
@@ -388,12 +597,12 @@ def _build_command(
                 "--annotation-shuffle-bank",
                 str(guidance_bank_dir),
                 "--annotation-shuffle-seed",
-                "0",
+                str(replicate.annotation_seed),
                 "--noise-apply-to",
                 apply_to,
             ]
         )
-    elif noise.pos_std_m > 0.0 or noise.ori_std_deg > 0.0:
+    else:
         command.extend(
             [
                 "--noise-pos-std-m",
@@ -401,9 +610,13 @@ def _build_command(
                 "--noise-ori-std-deg",
                 str(noise.ori_std_deg),
                 "--noise-seed",
-                "0",
+                str(replicate.annotation_seed),
                 "--noise-mode",
-                "gaussian_clip_2sigma",
+                (
+                    "fixed_geodesic"
+                    if noise.perturbation == "fixed_geodesic"
+                    else "gaussian_clip_2sigma"
+                ),
                 "--noise-apply-to",
                 apply_to,
             ]
@@ -452,6 +665,9 @@ def _validate_summary(
     n_rollouts: int,
     randomness: str,
     require_tracking: bool = True,
+    replicate: ReplicateConfig | None = None,
+    expected_saved_rollouts: int | None = None,
+    require_noise_stats: bool = False,
 ) -> list[str]:
     errors: list[str] = []
     if summary_path is None or not summary_path.exists():
@@ -461,6 +677,8 @@ def _validate_summary(
         payload = json.loads(summary_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         return [f"aggregate summary JSON is unreadable: {exc}"]
+    explicit_replicate = replicate is not None
+    replicate = replicate or ReplicateConfig(0, 0, 0)
 
     expected_total = n_rollouts * len(task_group.split("+"))
     if int(payload.get("n_rollouts", -1)) != expected_total:
@@ -491,6 +709,15 @@ def _validate_summary(
         )
     if payload.get("action_type") != "pos":
         errors.append(f"action_type={payload.get('action_type')!r} expected='pos'")
+    if payload.get("annotation_source") != "scripted":
+        errors.append(
+            f"annotation_source={payload.get('annotation_source')!r} expected='scripted'"
+        )
+    if int(payload.get("simulator_seed", -1)) != replicate.simulator_seed:
+        errors.append(
+            f"simulator_seed={payload.get('simulator_seed')!r} "
+            f"expected={replicate.simulator_seed}"
+        )
 
     train_data_cfg = (payload.get("training_config") or {}).get("data") or {}
     for key in ("annotation_noise_pos_std_m", "annotation_noise_ori_std_deg"):
@@ -517,17 +744,23 @@ def _validate_summary(
             {
                 "apply_to": condition.apply_to,
                 "mode": "shuffle",
-                "shuffle_seed": 0,
+                "shuffle_seed": replicate.annotation_seed,
             }
         )
-    elif expected_enabled:
+    elif expected_enabled or explicit_replicate:
         checks.update(
             {
                 "apply_to": condition.apply_to,
-                "mode": "gaussian_clip_2sigma",
-                "seed": 0,
+                "mode": (
+                    "fixed_geodesic"
+                    if noise.perturbation == "fixed_geodesic"
+                    else "gaussian_clip_2sigma"
+                ),
+                "seed": replicate.annotation_seed,
             }
         )
+        if noise.perturbation == "fixed_geodesic":
+            checks["target_geodesic_deg"] = noise.ori_std_deg
     for key, expected in checks.items():
         actual = noise_cfg.get(key)
         if isinstance(expected, float):
@@ -576,6 +809,43 @@ def _validate_summary(
                 f"{task}.eval_randomness={task_payload.get('eval_randomness')!r} "
                 f"expected={randomness!r}"
             )
+        if int(task_payload.get("simulator_seed", -1)) != replicate.simulator_seed:
+            errors.append(
+                f"{task}.simulator_seed={task_payload.get('simulator_seed')!r} "
+                f"expected={replicate.simulator_seed}"
+            )
+        if expected_saved_rollouts is not None:
+            if int(task_payload.get("n_saved_rollouts", -1)) != expected_saved_rollouts:
+                errors.append(
+                    f"{task}.n_saved_rollouts={task_payload.get('n_saved_rollouts')!r} "
+                    f"expected={expected_saved_rollouts}"
+                )
+        if require_noise_stats:
+            stats = task_payload.get("annotation_noise_stats") or {}
+            if int(stats.get("phase_count", 0)) <= 0:
+                errors.append(f"{task}.annotation_noise_stats is missing or empty")
+            for key in (
+                "position_norm_m",
+                "rotation_geodesic_deg",
+                "workspace_valid_rate",
+                "front_projection_visible_rate",
+                "invalid_nonfinite_rate",
+            ):
+                if key not in stats:
+                    errors.append(f"{task}.annotation_noise_stats.{key} is missing")
+            if noise.perturbation == "fixed_geodesic":
+                samples = stats.get("phase_samples") or []
+                realized = [
+                    float(sample.get("realized_ori_geodesic_deg"))
+                    for sample in samples
+                    if sample.get("apply_ori") is True
+                ]
+                if not realized:
+                    errors.append(f"{task}.r180 has no applied orientation samples")
+                elif any(abs(value - noise.ori_std_deg) > 1e-3 for value in realized):
+                    errors.append(
+                        f"{task}.r180 realized geodesic is not {noise.ori_std_deg}±1e-3"
+                    )
         if require_tracking:
             tracking_payload = task_payload.get("tracking_error") or {}
             tracking = tracking_payload.get("overall") or {}
@@ -607,12 +877,25 @@ def _validate_summary(
                     f"{task}.tracking_error.complete="
                     f"{tracking_payload.get('complete')!r} expected=True"
                 )
+            if require_noise_stats and tracking_payload.get("target_source") != (
+                "scripted_displayed_annotation"
+            ):
+                errors.append(
+                    f"{task}.tracking_error.target_source="
+                    f"{tracking_payload.get('target_source')!r} "
+                    "expected='scripted_displayed_annotation'"
+                )
 
     return errors
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--profile",
+        choices=["legacy-fresh36", "vlm-cover-108"],
+        default="legacy-fresh36",
+    )
     parser.add_argument("--task-group", default="one_leg+round_table+lamp")
     parser.add_argument("--n-envs", type=int, default=3)
     parser.add_argument(
@@ -638,16 +921,26 @@ def main() -> None:
     parser.add_argument("--randomness", default="low")
     parser.add_argument("--conditions", default=None)
     parser.add_argument("--noise-ids", default=None)
+    parser.add_argument(
+        "--replicates",
+        default=None,
+        help="Comma-separated replicate ids (0,1,2); mainly for resume and pilots.",
+    )
     parser.add_argument("--auto-eval-path", type=Path, default=AUTO_EVAL_DEFAULT)
-    parser.add_argument("--manifest", type=Path, default=MANIFEST_DEFAULT)
-    parser.add_argument("--report", type=Path, default=REPORT_DEFAULT)
-    parser.add_argument("--figures-dir", type=Path, default=FIGURES_DEFAULT)
-    parser.add_argument("--data-dir", type=Path, default=DATA_DEFAULT)
-    parser.add_argument("--group-logs-dir", type=Path, default=GROUP_LOGS_DEFAULT)
+    parser.add_argument("--manifest", type=Path, default=None)
+    parser.add_argument(
+        "--legacy-manifest", type=Path, default=MANIFEST_DEFAULT,
+        help="Read-only seed-0 source used only by the vlm-cover report/audit.",
+    )
+    parser.add_argument("--report", type=Path, default=None)
+    parser.add_argument("--figures-dir", type=Path, default=None)
+    parser.add_argument("--data-dir", type=Path, default=None)
+    parser.add_argument("--group-logs-dir", type=Path, default=None)
     parser.add_argument("--rerun", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--continue-on-error", action="store_true")
-    parser.add_argument("--save-rollouts-count", type=int, default=8)
+    parser.add_argument("--skip-report", action="store_true")
+    parser.add_argument("--save-rollouts-count", type=int, default=None)
     parser.add_argument("--keep-rollout-cache", action="store_true")
     parser.add_argument(
         "--delete-rollout-pickles",
@@ -660,7 +953,7 @@ def main() -> None:
     parser.add_argument(
         "--initial-min-free-disk-gib",
         type=float,
-        default=500.0,
+        default=None,
         help="Free-space threshold when the manifest has no completed groups.",
     )
     parser.add_argument(
@@ -671,19 +964,45 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.save_rollouts_count <= 0:
+    is_vlm_cover = args.profile == "vlm-cover-108"
+    args.manifest = args.manifest or (
+        VLM_COVER_MANIFEST_DEFAULT if is_vlm_cover else MANIFEST_DEFAULT
+    )
+    args.report = args.report or (
+        VLM_COVER_REPORT_DEFAULT if is_vlm_cover else REPORT_DEFAULT
+    )
+    args.figures_dir = args.figures_dir or (
+        VLM_COVER_FIGURES_DEFAULT if is_vlm_cover else FIGURES_DEFAULT
+    )
+    args.data_dir = args.data_dir or (
+        VLM_COVER_DATA_DEFAULT if is_vlm_cover else DATA_DEFAULT
+    )
+    args.group_logs_dir = args.group_logs_dir or (
+        VLM_COVER_GROUPS_DEFAULT if is_vlm_cover else GROUP_LOGS_DEFAULT
+    )
+    if args.save_rollouts_count is None:
+        args.save_rollouts_count = 0 if is_vlm_cover else 8
+    if args.save_rollouts_count < 0:
+        raise ValueError("--save-rollouts-count must be non-negative")
+    if args.initial_min_free_disk_gib is None:
+        args.initial_min_free_disk_gib = 150.0 if is_vlm_cover else 500.0
+    if is_vlm_cover and (args.shuffled_only or args.include_shuffled):
         raise ValueError(
-            "--save-rollouts-count must be positive: auto_eval interprets zero as "
-            "unlimited saving; use 8 to save only the first eight rollouts per task"
+            "vlm-cover-108 has a fixed Shuffle schedule; filter it with --noise-ids"
         )
 
     env = os.environ.copy()
     env.setdefault("DATA_DIR_RAW", str(REPO_ROOT / "data"))
     selected_conditions = _resolve_conditions(args.conditions)
     selected_noise_ids = _resolve_noise_ids(args.noise_ids)
+    selected_replicates = _resolve_replicate_ids(args.replicates)
     manifest_rows = _read_jsonl(args.manifest)
-    manifest_index = _manifest_lookup(manifest_rows)
-    if (args.shuffled_only or args.include_shuffled) and not args.dry_run:
+    manifest_index = _manifest_lookup(manifest_rows, replicate_aware=is_vlm_cover)
+    if (
+        args.shuffled_only
+        or args.include_shuffled
+        or (is_vlm_cover and (selected_noise_ids is None or "shuffle" in selected_noise_ids))
+    ) and not args.dry_run:
         _validate_guidance_bank(args.guidance_bank_dir, args.task_group.split("+"))
     if not args.dry_run:
         free_disk_gib = shutil.disk_usage(REPO_ROOT).free / (1024**3)
@@ -708,21 +1027,55 @@ def main() -> None:
     if not args.auto_eval_path.exists():
         raise FileNotFoundError(f"Missing auto_eval script: {args.auto_eval_path}")
 
+    if is_vlm_cover:
+        execution_items: list[
+            tuple[ConditionConfig, NoiseLevel, ReplicateConfig | None]
+        ] = list(_vlm_cover_schedule(selected_conditions))
+    else:
+        execution_items = []
+        for condition in selected_conditions:
+            noise_levels = (
+                [SHUFFLED_GUIDANCE]
+                if args.shuffled_only
+                else _noise_levels_for_family(
+                    condition.family,
+                    include_shuffled=args.include_shuffled,
+                )
+            )
+            execution_items.extend((condition, noise, None) for noise in noise_levels)
+
+    execution_items = [
+        (condition, noise, replicate)
+        for condition, noise, replicate in execution_items
+        if (selected_noise_ids is None or noise.noise_id in selected_noise_ids)
+        and (
+            selected_replicates is None
+            or replicate is None
+            or replicate.replicate_id in selected_replicates
+        )
+    ]
+
+    checkpoint_hashes: dict[Path, str] = {}
     for condition in selected_conditions:
         if not condition.checkpoint.exists():
             raise FileNotFoundError(f"Missing checkpoint: {condition.checkpoint}")
-        noise_levels = (
-            [SHUFFLED_GUIDANCE]
-            if args.shuffled_only
-            else _noise_levels_for_family(
-                condition.family,
-                include_shuffled=args.include_shuffled,
+        checkpoint_hashes[condition.checkpoint] = _sha256(condition.checkpoint)
+    run_provenance = _run_provenance()
+
+    for condition, noise, replicate in execution_items:
+            key = (
+                _manifest_key(
+                    {
+                        "condition_id": condition.condition_id,
+                        "noise_id": noise.noise_id,
+                        "replicate_id": replicate.replicate_id,
+                        "simulator_seed": replicate.simulator_seed,
+                        "annotation_seed": replicate.annotation_seed,
+                    }
+                )
+                if replicate is not None
+                else (condition.condition_id, noise.noise_id)
             )
-        )
-        for noise in noise_levels:
-            if selected_noise_ids is not None and noise.noise_id not in selected_noise_ids:
-                continue
-            key = (condition.condition_id, noise.noise_id)
             existing = manifest_index.get(key)
             if not args.rerun and existing is not None and existing.get("status") == "ok":
                 existing_summary_value = str(existing.get("summary_json", "") or "")
@@ -737,6 +1090,9 @@ def main() -> None:
                     n_envs=args.n_envs,
                     n_rollouts=args.n_rollouts,
                     randomness=args.randomness,
+                    replicate=replicate,
+                    expected_saved_rollouts=(0 if is_vlm_cover else None),
+                    require_noise_stats=is_vlm_cover,
                 )
                 if not existing_errors:
                     print(
@@ -765,18 +1121,25 @@ def main() -> None:
                 save_rollouts_count=args.save_rollouts_count,
                 guidance_bank_dir=(
                     args.guidance_bank_dir
-                    if args.shuffled_only or args.include_shuffled
+                    if noise.perturbation == "shuffle"
                     else None
                 ),
                 guidance_bank_out_dir=(
                     args.guidance_bank_dir
-                    if condition.condition_id == "gp_skill" and noise.noise_id == "n0"
+                    if (
+                        not is_vlm_cover
+                        and condition.condition_id == "gp_skill"
+                        and noise.noise_id == "n0"
+                    )
                     else None
                 ),
+                replicate=replicate,
             )
             checkpoint_name = condition.checkpoint.stem
             log_dir = _task_group_log_dir(args.task_group, checkpoint_name)
-            group_log = _group_log_path(args.group_logs_dir, condition, noise)
+            group_log = _group_log_path(
+                args.group_logs_dir, condition, noise, replicate
+            )
             started_at = datetime.now().isoformat(timespec="seconds")
             start_ts = datetime.now().timestamp()
             row = {
@@ -797,7 +1160,17 @@ def main() -> None:
                 "perturbation": noise.perturbation,
                 "save_rollouts_count": args.save_rollouts_count,
                 "checkpoint": str(condition.checkpoint),
+                "checkpoint_sha256": checkpoint_hashes[condition.checkpoint],
                 "checkpoint_name": checkpoint_name,
+                "profile": args.profile,
+                "replicate_id": replicate.replicate_id if replicate else 0,
+                "simulator_seed": replicate.simulator_seed if replicate else 0,
+                "annotation_seed": replicate.annotation_seed if replicate else 0,
+                "seed_kind": (
+                    "shuffle_seed" if noise.perturbation == "shuffle" else "noise_seed"
+                ),
+                "resolved_annotation_source": "scripted",
+                "run_provenance": run_provenance,
                 "command": command,
                 "group_log": str(group_log),
                 "status": "dry_run" if args.dry_run else "started",
@@ -807,14 +1180,45 @@ def main() -> None:
                 f"checkpoint={checkpoint_name} log={group_log}",
                 flush=True,
             )
+            print(f"[command] {shlex.join(command)}", flush=True)
             if args.dry_run:
                 continue
+
+            if is_vlm_cover:
+                assert replicate is not None
+                command_metadata_path = _group_command_metadata_path(
+                    args.group_logs_dir, condition, noise, replicate
+                )
+                command_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+                command_metadata_path.write_text(
+                    json.dumps(
+                        {
+                            "recorded_at": datetime.now().isoformat(timespec="seconds"),
+                            "profile": args.profile,
+                            "condition_id": condition.condition_id,
+                            "noise_id": noise.noise_id,
+                            "replicate_id": replicate.replicate_id,
+                            "simulator_seed": replicate.simulator_seed,
+                            "annotation_seed": replicate.annotation_seed,
+                            "resolved_annotation_source": "scripted",
+                            "checkpoint": str(condition.checkpoint),
+                            "checkpoint_sha256": checkpoint_hashes[condition.checkpoint],
+                            "run_provenance": run_provenance,
+                            "command": command,
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+                row["command_metadata"] = str(command_metadata_path)
 
             _clean_rollout_group(
                 task_group=args.task_group,
                 randomness=args.randomness,
                 condition=condition,
                 noise=noise,
+                replicate=replicate,
             )
             group_log.parent.mkdir(parents=True, exist_ok=True)
             with group_log.open("w") as log_file:
@@ -831,6 +1235,7 @@ def main() -> None:
                     randomness=args.randomness,
                     condition=condition,
                     noise=noise,
+                    replicate=replicate,
                 )
                 row["cache_eviction"] = cache_eviction
                 print(
@@ -842,6 +1247,14 @@ def main() -> None:
             row["returncode"] = completed.returncode
             if completed.returncode == 0:
                 summary_path = _latest_json_after(log_dir, start_ts)
+                if is_vlm_cover and summary_path is not None:
+                    assert replicate is not None
+                    stable_summary_path = _group_summary_path(
+                        args.group_logs_dir, condition, noise, replicate
+                    )
+                    stable_summary_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(summary_path, stable_summary_path)
+                    summary_path = stable_summary_path
                 row["summary_json"] = str(summary_path) if summary_path else ""
                 validation_errors = _validate_summary(
                     summary_path=summary_path,
@@ -851,6 +1264,9 @@ def main() -> None:
                     n_envs=args.n_envs,
                     n_rollouts=args.n_rollouts,
                     randomness=args.randomness,
+                    replicate=replicate,
+                    expected_saved_rollouts=(0 if is_vlm_cover else None),
+                    require_noise_stats=is_vlm_cover,
                 )
                 row["validation_errors"] = validation_errors
                 if validation_errors:
@@ -869,6 +1285,7 @@ def main() -> None:
                             randomness=args.randomness,
                             condition=condition,
                             noise=noise,
+                            replicate=replicate,
                         )
                         row["pickle_cleanup"] = pickle_cleanup
                         print(
@@ -890,7 +1307,10 @@ def main() -> None:
                     f"returncode={completed.returncode} log={group_log}",
                     flush=True,
                 )
-            _append_manifest(args.manifest, row)
+            if is_vlm_cover:
+                _upsert_manifest(args.manifest, row)
+            else:
+                _append_manifest(args.manifest, row)
             manifest_index[key] = row
             if row["status"] != "ok" and not args.continue_on_error:
                 raise SystemExit(int(row.get("returncode", 1) or 1))
@@ -899,13 +1319,31 @@ def main() -> None:
         print("[dry-run] commands printed; manifest and report unchanged", flush=True)
         return
 
-    generate_report(
-        manifest_path=args.manifest,
-        report_path=args.report,
-        figures_dir=args.figures_dir,
-        data_dir=args.data_dir,
-    )
-    print(f"[done] report written to {args.report}", flush=True)
+    if not args.skip_report:
+        if is_vlm_cover:
+            from scripts.audit_clean_train_noise_eval import audit_vlm_cover_108
+
+            audit_payload, audit_returncode = audit_vlm_cover_108(
+                manifest_path=args.manifest,
+                legacy_manifest_path=args.legacy_manifest,
+                require_complete=True,
+                n_rollouts=args.n_rollouts,
+            )
+            if audit_returncode != 0:
+                raise RuntimeError(
+                    "vlm-cover-108 audit failed before report generation: "
+                    f"missing={len(audit_payload['missing'])} "
+                    f"issues={len(audit_payload['issues'])}"
+                )
+        generate_report(
+            manifest_path=args.manifest,
+            report_path=args.report,
+            figures_dir=args.figures_dir,
+            data_dir=args.data_dir,
+            profile=args.profile,
+            legacy_manifest_path=(args.legacy_manifest if is_vlm_cover else None),
+        )
+        print(f"[done] report written to {args.report}", flush=True)
 
 
 if __name__ == "__main__":

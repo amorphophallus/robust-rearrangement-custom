@@ -31,7 +31,7 @@ class AnnotationNoiseConfig:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "pos_std_m": float(self.pos_std_m),
             "ori_std_deg": float(self.ori_std_deg),
             "seed": int(self.seed),
@@ -42,6 +42,9 @@ class AnnotationNoiseConfig:
             "shuffle_record_count": len(self.shuffle_records),
             "enabled": self.enabled,
         }
+        if self.mode == "fixed_geodesic":
+            payload["target_geodesic_deg"] = float(self.ori_std_deg)
+        return payload
 
 
 def make_annotation_noise_config(
@@ -55,7 +58,12 @@ def make_annotation_noise_config(
     shuffle_bank_path: Optional[str | Path] = None,
     shuffle_records: Optional[list[dict[str, Any]]] = None,
 ) -> AnnotationNoiseConfig:
-    if mode not in {"gaussian_clip_2sigma", "uniform", "shuffle"}:
+    if mode not in {
+        "gaussian_clip_2sigma",
+        "uniform",
+        "fixed_geodesic",
+        "shuffle",
+    }:
         raise ValueError(f"Unsupported annotation noise mode: {mode}")
     if apply_to not in {"point", "grasp", "all"}:
         raise ValueError(f"Unsupported annotation noise apply_to: {apply_to}")
@@ -63,6 +71,11 @@ def make_annotation_noise_config(
         raise ValueError("--annotation-noise-pos-std-m must be non-negative")
     if ori_std_deg < 0.0:
         raise ValueError("--annotation-noise-ori-std-deg must be non-negative")
+    if mode == "fixed_geodesic":
+        if pos_std_m != 0.0:
+            raise ValueError("fixed_geodesic requires position std to be zero")
+        if ori_std_deg > 180.0:
+            raise ValueError("fixed_geodesic angle must be in [0, 180] degrees")
     bank_path = None if shuffle_bank_path is None else str(shuffle_bank_path)
     records = list(shuffle_records or [])
     if mode == "shuffle" and not records:
@@ -167,6 +180,28 @@ def _sample_vector(rng: np.random.Generator, std: float, mode: str) -> np.ndarra
     return np.clip(sample, -2.0 * std, 2.0 * std).astype(np.float32)
 
 
+def _sample_unit_axis(rng: np.random.Generator) -> np.ndarray:
+    """Sample a direction uniformly on S2 using an isotropic normal."""
+    while True:
+        axis = rng.normal(0.0, 1.0, size=3)
+        norm = float(np.linalg.norm(axis))
+        if np.isfinite(norm) and norm > 1e-12:
+            return (axis / norm).astype(np.float32)
+
+
+def _rotation_geodesic_deg(rotation: np.ndarray) -> float:
+    matrix = np.asarray(rotation, dtype=np.float64)
+    cosine = np.clip((np.trace(matrix) - 1.0) / 2.0, -1.0, 1.0)
+    sine = 0.5 * np.linalg.norm(
+        [
+            matrix[2, 1] - matrix[1, 2],
+            matrix[0, 2] - matrix[2, 0],
+            matrix[1, 0] - matrix[0, 1],
+        ]
+    )
+    return float(np.degrees(np.arctan2(sine, cosine)))
+
+
 @dataclass
 class AnnotationNoisePhaseState:
     env_idx: int
@@ -175,6 +210,8 @@ class AnnotationNoisePhaseState:
     phase_key: Optional[tuple[Any, ...]] = None
     pos_noise: Optional[np.ndarray] = None
     rot_noise: Optional[np.ndarray] = None
+    rot_axis: Optional[np.ndarray] = None
+    realized_ori_geodesic_deg: float = 0.0
     shuffled_point: Optional[np.ndarray] = None
     shuffled_pose: Optional[np.ndarray] = None
     shuffle_info: Optional[dict[str, Any]] = None
@@ -203,8 +240,7 @@ class AnnotationNoisePhaseState:
         config: Optional[AnnotationNoiseConfig],
         phase_key: tuple[Any, ...],
     ) -> tuple[np.ndarray, np.ndarray, int]:
-        if config is None or not config.enabled:
-            self.phase_key = phase_key
+        if config is None:
             return (
                 np.zeros(3, dtype=np.float32),
                 np.eye(3, dtype=np.float32),
@@ -217,11 +253,25 @@ class AnnotationNoisePhaseState:
             seed=int(config.seed),
         )
         if changed:
-            self.pos_noise = _sample_vector(rng, float(config.pos_std_m), config.mode)
-            ori_std_rad = np.deg2rad(float(config.ori_std_deg))
-            self.rot_noise = _axis_angle_to_matrix(
-                _sample_vector(rng, ori_std_rad, config.mode)
-            )
+            if config.mode == "fixed_geodesic":
+                self.pos_noise = np.zeros(3, dtype=np.float32)
+                self.rot_axis = _sample_unit_axis(rng)
+                axis_angle = self.rot_axis * np.deg2rad(float(config.ori_std_deg))
+            else:
+                self.pos_noise = _sample_vector(
+                    rng, float(config.pos_std_m), config.mode
+                )
+                axis_angle = _sample_vector(
+                    rng, np.deg2rad(float(config.ori_std_deg)), config.mode
+                )
+                axis_norm = float(np.linalg.norm(axis_angle))
+                self.rot_axis = (
+                    None
+                    if axis_norm <= 1e-12
+                    else (axis_angle / axis_norm).astype(np.float32)
+                )
+            self.rot_noise = _axis_angle_to_matrix(axis_angle)
+            self.realized_ori_geodesic_deg = _rotation_geodesic_deg(self.rot_noise)
 
         return (
             np.asarray(self.pos_noise, dtype=np.float32),
@@ -343,6 +393,13 @@ class AnnotationNoisePhaseState:
             "selection_policy": selection_policy,
             "realized_pos_displacement_m": displacement_m,
             "realized_ori_displacement_deg": orientation_displacement_deg,
+            "realized_pos_norm_m": displacement_m,
+            "realized_ori_geodesic_deg": orientation_displacement_deg,
+            "apply_point_pos": self.shuffled_point is not None,
+            "apply_pose_pos": self.shuffled_pose is not None,
+            "apply_ori": config.apply_to != "point" and self.shuffled_pose is not None,
+            "sampled_axis": None,
+            "target_geodesic_deg": None,
             "apply_to": config.apply_to,
         }
         return self.shuffled_point, self.shuffled_pose, self.shuffle_info
@@ -359,7 +416,7 @@ def apply_annotation_noise(
     state: AnnotationNoisePhaseState,
     config: Optional[AnnotationNoiseConfig],
 ) -> tuple[Optional[np.ndarray], Optional[np.ndarray], dict[str, Any]]:
-    if config is None or not config.enabled:
+    if config is None:
         return guidance_point, guidance_pose, {"enabled": False}
 
     if config.mode == "shuffle":
@@ -396,7 +453,11 @@ def apply_annotation_noise(
         noisy_pose[:3, :3] = rot_noise @ noisy_pose[:3, :3]
 
     return noisy_point, noisy_pose, {
-        "enabled": True,
+        "enabled": bool(config.enabled),
+        "mode": config.mode,
+        "target_geodesic_deg": (
+            float(config.ori_std_deg) if config.mode == "fixed_geodesic" else None
+        ),
         "phase_idx": int(phase_idx),
         "seed_offset": int(state.seed_offset),
         "phase_key": [None if item is None else str(item) for item in phase_key],
@@ -410,7 +471,90 @@ def apply_annotation_noise(
             if apply_ori
             else np.eye(3, dtype=float).tolist()
         ),
+        "sampled_axis": (
+            state.rot_axis.astype(float).tolist()
+            if apply_ori and state.rot_axis is not None
+            else None
+        ),
+        "realized_pos_norm_m": (
+            float(np.linalg.norm(pos_noise))
+            if apply_point_pos or apply_pose_pos
+            else 0.0
+        ),
+        "realized_ori_geodesic_deg": (
+            float(state.realized_ori_geodesic_deg) if apply_ori else 0.0
+        ),
         "apply_point_pos": bool(apply_point_pos),
         "apply_pose_pos": bool(apply_pose_pos),
         "apply_ori": bool(apply_ori),
     }
+
+
+def build_annotation_noise_summary(
+    phase_samples: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize one record per semantic phase without dropping invalid targets."""
+
+    def finite_values(key: str) -> np.ndarray:
+        values = []
+        for sample in phase_samples:
+            if key == "realized_pos_norm_m" and not (
+                sample.get("apply_point_pos") or sample.get("apply_pose_pos")
+            ):
+                continue
+            if key == "realized_ori_geodesic_deg" and not sample.get("apply_ori"):
+                continue
+            try:
+                value = float(sample.get(key))
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(value):
+                values.append(value)
+        return np.asarray(values, dtype=np.float64)
+
+    def distribution(key: str) -> dict[str, Any]:
+        values = finite_values(key)
+        if values.size == 0:
+            return {"count": 0, "mean": None, "rms": None, "p50": None, "p90": None, "max": None}
+        return {
+            "count": int(values.size),
+            "mean": float(np.mean(values)),
+            "rms": float(np.sqrt(np.mean(np.square(values)))),
+            "p50": float(np.quantile(values, 0.50)),
+            "p90": float(np.quantile(values, 0.90)),
+            "max": float(np.max(values)),
+        }
+
+    count = len(phase_samples)
+    finite_count = sum(sample.get("target_finite") is True for sample in phase_samples)
+    workspace_count = sum(sample.get("workspace_valid") is True for sample in phase_samples)
+    visible_count = sum(
+        sample.get("front_projection_visible") is True for sample in phase_samples
+    )
+    invalid_count = count - finite_count
+    return {
+        "sample_unit": "semantic_phase",
+        "phase_count": count,
+        "position_norm_m": distribution("realized_pos_norm_m"),
+        "rotation_geodesic_deg": distribution("realized_ori_geodesic_deg"),
+        "finite_count": finite_count,
+        "invalid_nonfinite_count": invalid_count,
+        "invalid_nonfinite_rate": invalid_count / count if count else None,
+        "workspace_valid_count": workspace_count,
+        "workspace_valid_rate": workspace_count / count if count else None,
+        "front_projection_visible_count": visible_count,
+        "front_projection_visible_rate": visible_count / count if count else None,
+        "phase_samples": phase_samples,
+    }
+
+
+def merge_annotation_noise_summaries(
+    summaries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    samples: list[dict[str, Any]] = []
+    for summary in summaries:
+        samples.extend(
+            dict(sample) for sample in summary.get("phase_samples", [])
+            if isinstance(sample, dict)
+        )
+    return build_annotation_noise_summary(samples)

@@ -1993,7 +1993,24 @@ def generate_report(
     data_dir: Path,
     previous_shuffle_manifest_path: Path | None = None,
     saved_tracking_path: Path | None = None,
+    profile: str = "legacy-fresh36",
+    legacy_manifest_path: Path | None = None,
 ) -> None:
+    if profile == "vlm-cover-108":
+        if legacy_manifest_path is None:
+            raise ValueError("vlm-cover-108 requires --legacy-manifest")
+        from scripts.generate_vlm_cover_108_report import (
+            generate_vlm_cover_108_report,
+        )
+
+        generate_vlm_cover_108_report(
+            manifest_path=manifest_path,
+            legacy_manifest_path=legacy_manifest_path,
+            report_path=report_path,
+            figures_dir=figures_dir,
+            data_dir=data_dir,
+        )
+        return
     manifest_rows = _dedupe_latest(_read_jsonl(manifest_path))
     overall_rows, task_rows, per_step_rows, skill_type_rows = _build_rows(manifest_rows)
     saved_tracking_payload = None
@@ -2404,6 +2421,11 @@ def generate_report(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--profile",
+        choices=["legacy-fresh36", "vlm-cover-108"],
+        default="legacy-fresh36",
+    )
+    parser.add_argument(
         "--manifest",
         type=Path,
         default=Path("logs/annotation_noise_clean_train_fresh36_manifest.jsonl"),
@@ -2439,6 +2461,11 @@ def main() -> None:
             "annotation_noise_clean_train_tracking_saved8.json"
         ),
     )
+    parser.add_argument(
+        "--legacy-manifest",
+        type=Path,
+        default=Path("logs/annotation_noise_clean_train_fresh36_manifest.jsonl"),
+    )
     args = parser.parse_args()
     generate_report(
         manifest_path=args.manifest,
@@ -2447,6 +2474,8 @@ def main() -> None:
         data_dir=args.data_dir,
         previous_shuffle_manifest_path=args.previous_shuffle_manifest,
         saved_tracking_path=args.saved_tracking,
+        profile=args.profile,
+        legacy_manifest_path=args.legacy_manifest,
     )
 
 

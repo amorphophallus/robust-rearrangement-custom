@@ -58,7 +58,11 @@ from src.eval.skill_annotation_util import (
     get_annotation_bundle_all_envs,
     reset_skill_annotator,
 )
-from src.eval.annotation_noise import AnnotationNoiseConfig, write_guidance_shuffle_bank
+from src.eval.annotation_noise import (
+    AnnotationNoiseConfig,
+    build_annotation_noise_summary,
+    write_guidance_shuffle_bank,
+)
 from src.eval.perturb_util import PerturbContext, PerturbRunner
 from src.eval.progress_schema import (
     append_tracking_annotation_histories,
@@ -107,6 +111,7 @@ RolloutStats = collections.namedtuple(
         "step_completion_counts",
         "step_success_rates",
         "tracking_error",
+        "annotation_noise_stats",
         "vlm_point_error",
         "vlm_model_revision",
         "n_saved_rollouts",
@@ -136,6 +141,7 @@ RolloutSaveValues = collections.namedtuple(
         "guidance_points_2d",
         "grasp_annotations_2d",
         "camera_infos",
+        "annotation_noises",
         "oracle_skills",
         "oracle_guidance_points_2d",
         "vlm_annotations",
@@ -211,6 +217,20 @@ def _guidance_bank_records_for_episode(
             }
         )
     return records
+
+
+def _tracking_guidance_for_annotation_source(
+    *,
+    annotation_source: str,
+    noisy_guidance_poses,
+    clean_guidance_poses,
+):
+    """Track the target shown to scripted policies; retain GT for VLM evaluation."""
+    if annotation_source == "vlm":
+        return clean_guidance_poses
+    if annotation_source == "scripted":
+        return noisy_guidance_poses
+    raise ValueError(f"unsupported annotation_source: {annotation_source}")
 
 
 def _add_sim_local_ee_pose_to_robot_state(env: Env, robot_state):
@@ -1014,6 +1034,9 @@ def rollout(
     initial_grasp_annotations_2d = [
         bundle.get("grasp_annotation_2d", {}) for bundle in initial_annotations
     ]
+    initial_annotation_noises = [
+        bundle.get("annotation_noise", {}) for bundle in initial_annotations
+    ]
     for env_idx, skill in enumerate(initial_skills):
         if skill is not None:
             previous_skills[env_idx] = skill
@@ -1130,6 +1153,7 @@ def rollout(
     guidance_points_2d = [initial_guidance_points_2d]
     grasp_annotations_2d = [initial_grasp_annotations_2d]
     camera_infos = [[bundle.get("camera_info", {}) for bundle in initial_annotations]]
+    annotation_noises = [initial_annotation_noises]
     oracle_skills = [
         [bundle.get("skill") for bundle in oracle_initial_annotations]
     ]
@@ -1369,6 +1393,9 @@ def rollout(
         current_grasp_annotations_2d = [
             bundle.get("grasp_annotation_2d", {}) for bundle in current_annotations
         ]
+        current_annotation_noises = [
+            bundle.get("annotation_noise", {}) for bundle in current_annotations
+        ]
         _apply_policy_visual_annotations(
             obs,
             current_annotations,
@@ -1421,6 +1448,7 @@ def rollout(
             [bundle.get("vlm_annotation") for bundle in current_annotations]
         )
         active_skill_states = current_skill_states
+        annotation_noises.append(current_annotation_noises)
 
         # Store the results for visualization and logging
         if save_rollouts or collect_skill_stats:
@@ -1555,6 +1583,9 @@ def rollout(
         grasp_annotations_2d, env.num_envs
     )
     camera_infos_per_env = _transpose_step_env_annotations(camera_infos, env.num_envs)
+    annotation_noises_per_env = _transpose_step_env_annotations(
+        annotation_noises, env.num_envs
+    )
     oracle_skills_per_env = _transpose_step_env_annotations(oracle_skills, env.num_envs)
     oracle_guidance_points_2d_per_env = _transpose_step_env_annotations(
         oracle_guidance_points_2d, env.num_envs
@@ -1607,6 +1638,7 @@ def rollout(
         guidance_points_2d_per_env,
         grasp_annotations_2d_per_env,
         camera_infos_per_env,
+        annotation_noises_per_env,
         oracle_skills_per_env,
         oracle_guidance_points_2d_per_env,
         vlm_annotations_per_env,
@@ -1628,6 +1660,7 @@ def calculate_success_rate(
     n_parts_assemble: Optional[int] = None,
     compress_pickles: bool = False,
     resize_video: bool = True,
+    preserve_full_frame_images: bool = False,
     n_steps_padding: int = 30,
     break_on_n_success: bool = False,
     stop_after_n_success: int = 0,
@@ -1700,6 +1733,7 @@ def calculate_success_rate(
     step_counts: dict[str, int] = {}
     step_completion_counts: dict[str, int] = {}
     tracking_error_records: dict[str, list[dict[str, float]]] = {}
+    annotation_noise_phase_samples: list[dict] = []
     tracking_workspace_counts = new_tracking_workspace_counts()
     if tracking_metric_type is None:
         tracking_metric_type = (
@@ -1836,6 +1870,21 @@ def calculate_success_rate(
         n_total_rollouts += accepted_env_count
 
         for env_idx in range(accepted_env_count):
+            previous_phase_identity = None
+            for noise_info in rollout_data.annotation_noises[env_idx]:
+                if not isinstance(noise_info, dict) or "phase_idx" not in noise_info:
+                    continue
+                phase_identity = (
+                    noise_info.get("phase_idx"),
+                    tuple(noise_info.get("phase_key") or ()),
+                )
+                if phase_identity == previous_phase_identity:
+                    continue
+                previous_phase_identity = phase_identity
+                sample = dict(noise_info)
+                sample["episode_index"] = int(previous_total_rollouts + env_idx)
+                sample["env_index"] = int(env_idx)
+                annotation_noise_phase_samples.append(sample)
             robot_states_for_tracking = []
             if collect_skill_stats and rollout_data.robot_states is not None:
                 robot_states_for_tracking = tensordict_to_list_of_dicts(
@@ -1901,10 +1950,16 @@ def calculate_success_rate(
                     if rollout_data.skill_states
                     else []
                 )
-                guidance_poses_for_tracking = (
-                    rollout_data.guidance_poses_clean[env_idx]
-                    if rollout_data.guidance_poses_clean
-                    else []
+                guidance_poses_for_tracking = _tracking_guidance_for_annotation_source(
+                    annotation_source=annotation_source,
+                    noisy_guidance_poses=(
+                        rollout_data.guidance_poses[env_idx]
+                        if rollout_data.guidance_poses else []
+                    ),
+                    clean_guidance_poses=(
+                        rollout_data.guidance_poses_clean[env_idx]
+                        if rollout_data.guidance_poses_clean else []
+                    ),
                 )
                 if tracking_histories_are_complete(
                     robot_states_for_tracking,
@@ -2143,6 +2198,7 @@ def calculate_success_rate(
                         action_type=env.action_type,
                         rollout_save_dir=rollout_save_dir,
                         compress_pickles=compress_pickles,
+                        preserve_full_frame_images=preserve_full_frame_images,
                         have_img_obs=have_img_obs_for_env,
                         have_depth_obs=have_depth_obs_for_env,
                         pcs=pcs_trimmed,
@@ -2262,8 +2318,16 @@ def calculate_success_rate(
         and tracking_episode_count == final_total
         and tracking_incomplete_episode_count == 0
     )
+    tracking_error["target_source"] = (
+        "scripted_displayed_annotation"
+        if annotation_source == "scripted"
+        else "scripted_ground_truth"
+    )
     tracking_error["workspace_filter"] = build_tracking_workspace_filter_summary(
         tracking_workspace_counts
+    )
+    annotation_noise_stats = build_annotation_noise_summary(
+        annotation_noise_phase_samples
     )
     vlm_point_error = (
         merge_vlm_point_error_summaries(vlm_point_error_summaries)
@@ -2291,6 +2355,7 @@ def calculate_success_rate(
         step_completion_counts=step_completion_counts,
         step_success_rates=step_success_rates,
         tracking_error=tracking_error,
+        annotation_noise_stats=annotation_noise_stats,
         vlm_point_error=vlm_point_error,
         vlm_model_revision=vlm_model_revision,
         n_saved_rollouts=saved_rollouts_count,

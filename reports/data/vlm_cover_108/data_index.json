@@ -1,0 +1,62 @@
+{
+  "pipeline": "json -> tables -> figures",
+  "raw_json_manifests": [
+    "logs\\annotation_noise_vlm_cover_108\\manifest.jsonl",
+    "logs\\annotation_noise_clean_train_fresh36_manifest.jsonl"
+  ],
+  "tables": {
+    "success_by_replicate": "reports\\data\\vlm_cover_108\\success_by_replicate.csv",
+    "success_overall_by_replicate": "reports\\data\\vlm_cover_108\\success_overall_by_replicate.csv",
+    "success_tracking_pooled": "reports\\data\\vlm_cover_108\\success_tracking_pooled.csv",
+    "three_task_pooled": "reports\\data\\vlm_cover_108\\three_task_pooled.csv",
+    "vlm_sigma_by_task": "reports\\data\\vlm_cover_108\\vlm_sigma_by_task.csv",
+    "vlm_sigma_3task_pooled": "reports\\data\\vlm_cover_108\\vlm_sigma_3task_pooled.csv",
+    "vlm_skill_error_reference": "reports\\data\\vlm_cover_108\\vlm_skill_error_reference.csv",
+    "vlm_skill_error_reference_pooled": "reports\\data\\vlm_cover_108\\vlm_skill_error_reference_pooled.csv",
+    "vlm_orientation_tracking_equivalent": "reports\\data\\vlm_cover_108\\vlm_orientation_tracking_equivalent.csv",
+    "noise_schedule": "reports\\data\\vlm_cover_108\\noise_schedule.csv",
+    "skill_progression": "reports\\data\\vlm_cover_108\\skill_progression_replicate_and_pooled.csv",
+    "skill_type_replicate_and_pooled": "reports\\data\\vlm_cover_108\\skill_type_replicate_and_pooled.csv",
+    "diagnostics": "reports\\data\\vlm_cover_108\\annotation_noise_diagnostics.csv"
+  },
+  "table_validation": "reports\\data\\vlm_cover_108\\table_validation.csv",
+  "figures_read_only_sources": [
+    "success_tracking_pooled.csv",
+    "three_task_pooled.csv",
+    "vlm_sigma_by_task.csv",
+    "vlm_sigma_3task_pooled.csv",
+    "vlm_skill_error_reference.csv",
+    "vlm_skill_error_reference_pooled.csv",
+    "vlm_orientation_tracking_equivalent.csv",
+    "skill_type_replicate_and_pooled.csv"
+  ],
+  "illustrative_assets": {
+    "vlm_largest_errors_global": null
+  },
+  "figures": {
+    "numeric_png": "reports\\figures\\vlm_cover_108\\vlm_cover_108_success_numeric.png",
+    "numeric_svg": "reports\\figures\\vlm_cover_108\\vlm_cover_108_success_numeric.svg",
+    "numeric_pdf": "reports\\figures\\vlm_cover_108\\vlm_cover_108_success_numeric.pdf",
+    "tracking_error_png": "reports\\figures\\vlm_cover_108\\vlm_cover_108_tracking_error.png",
+    "tracking_error_svg": "reports\\figures\\vlm_cover_108\\vlm_cover_108_tracking_error.svg",
+    "tracking_error_pdf": "reports\\figures\\vlm_cover_108\\vlm_cover_108_tracking_error.pdf",
+    "success_3task_pooled_png": "reports\\figures\\vlm_cover_108\\vlm_cover_108_success_3task_pooled.png",
+    "success_3task_pooled_svg": "reports\\figures\\vlm_cover_108\\vlm_cover_108_success_3task_pooled.svg",
+    "success_3task_pooled_pdf": "reports\\figures\\vlm_cover_108\\vlm_cover_108_success_3task_pooled.pdf",
+    "tracking_position_3task_pooled_png": "reports\\figures\\vlm_cover_108\\vlm_cover_108_tracking_position_3task_pooled.png",
+    "tracking_position_3task_pooled_svg": "reports\\figures\\vlm_cover_108\\vlm_cover_108_tracking_position_3task_pooled.svg",
+    "tracking_position_3task_pooled_pdf": "reports\\figures\\vlm_cover_108\\vlm_cover_108_tracking_position_3task_pooled.pdf",
+    "skill_success_rate_png": "reports\\figures\\vlm_cover_108\\vlm_cover_108_skill_success_rate.png",
+    "skill_success_rate_svg": "reports\\figures\\vlm_cover_108\\vlm_cover_108_skill_success_rate.svg",
+    "skill_success_rate_pdf": "reports\\figures\\vlm_cover_108\\vlm_cover_108_skill_success_rate.pdf",
+    "tracking_position_png": "reports\\figures\\vlm_cover_108\\vlm_cover_108_skill_tracking_position.png",
+    "tracking_position_svg": "reports\\figures\\vlm_cover_108\\vlm_cover_108_skill_tracking_position.svg",
+    "tracking_position_pdf": "reports\\figures\\vlm_cover_108\\vlm_cover_108_skill_tracking_position.pdf",
+    "tracking_orientation_png": "reports\\figures\\vlm_cover_108\\vlm_cover_108_skill_tracking_orientation.png",
+    "tracking_orientation_svg": "reports\\figures\\vlm_cover_108\\vlm_cover_108_skill_tracking_orientation.svg",
+    "tracking_orientation_pdf": "reports\\figures\\vlm_cover_108\\vlm_cover_108_skill_tracking_orientation.pdf",
+    "tracking_total_png": "reports\\figures\\vlm_cover_108\\vlm_cover_108_skill_tracking_total.png",
+    "tracking_total_svg": "reports\\figures\\vlm_cover_108\\vlm_cover_108_skill_tracking_total.svg",
+    "tracking_total_pdf": "reports\\figures\\vlm_cover_108\\vlm_cover_108_skill_tracking_total.pdf"
+  }
+}

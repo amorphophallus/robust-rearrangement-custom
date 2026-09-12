@@ -42,7 +42,10 @@ from src.common.files import trajectory_save_dir
 from src.gym import get_rl_env
 from src.eval.eval_utils import load_checkpoint_payload
 from src.eval.perturb_util import PERTURB_MODES, PerturbRunner
-from src.eval.annotation_noise import make_annotation_noise_config
+from src.eval.annotation_noise import (
+    make_annotation_noise_config,
+    merge_annotation_noise_summaries,
+)
 from src.eval.vlm_guidance import VLMGuidanceClient
 from src.eval.vlm_point_metrics import merge_vlm_point_error_summaries
 from src.eval.progress_schema import (
@@ -652,6 +655,11 @@ if __name__ == "__main__":
     parser.add_argument("--n-rollouts", type=int, default=1)
     parser.add_argument("--randomness", type=str, default="low")
     parser.add_argument(
+        "--disable-obstacle-randomization",
+        action="store_true",
+        help="Keep the simulator obstacle at its nominal pose for camera tuning.",
+    )
+    parser.add_argument(
         "--task",
         "-f",
         type=str,
@@ -680,6 +688,11 @@ if __name__ == "__main__":
         help="Path to .npz file with training init states for train-init evaluation.",
     )
     parser.add_argument("--store-full-resolution-video", action="store_true")
+    parser.add_argument(
+        "--preserve-full-frame-images",
+        action="store_true",
+        help="Store rollout RGB-D frames as 240x320 instead of cropping to 224x224.",
+    )
 
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--leaderboard", action="store_true")
@@ -740,7 +753,6 @@ if __name__ == "__main__":
     )
     parser.add_argument("--max-rollout-steps", type=int, default=None)
     parser.add_argument("--april-tags", action="store_true")
-
     parser.add_argument(
         "--sim-front-camera-preset",
         type=str,
@@ -856,7 +868,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--annotation-noise-mode",
         type=str,
-        choices=["gaussian_clip_2sigma", "uniform"],
+        choices=["gaussian_clip_2sigma", "uniform", "fixed_geodesic"],
         default="gaussian_clip_2sigma",
     )
     parser.add_argument(
@@ -888,8 +900,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-saved-rollouts",
         type=int,
-        default=0,
-        help="If > 0, save at most this many rollout trajectories per task.",
+        default=-1,
+        help=(
+            "Maximum saved trajectories per task; 0 saves none and the default "
+            "-1 preserves unlimited saving."
+        ),
     )
     parser.add_argument(
         "--rollout-suffix-model-name",
@@ -952,6 +967,8 @@ if __name__ == "__main__":
     validate_args(args)
     if args.seed < 0:
         parser.error("--seed must be non-negative")
+    if args.max_saved_rollouts < -1:
+        parser.error("--max-saved-rollouts must be -1 or greater")
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -1085,6 +1102,11 @@ if __name__ == "__main__":
             if child_point_error_summaries
             else None
         )
+        child_noise_summaries = [
+            summary["annotation_noise_stats"]
+            for summary in per_task_summaries.values()
+            if summary.get("annotation_noise_stats")
+        ]
         multitask_payload = {
             "task_group": task_group,
             "checkpoint_name": first_task_summary.get(
@@ -1111,6 +1133,9 @@ if __name__ == "__main__":
                 else None
             ),
             "vlm_point_error": multitask_vlm_point_error,
+            "annotation_noise_stats": merge_annotation_noise_summaries(
+                child_noise_summaries
+            ),
             "vlm_model_revision": first_task_summary.get("vlm_model_revision"),
             "per_task": per_task_summaries,
         }
@@ -1157,6 +1182,7 @@ if __name__ == "__main__":
     summary_step_counts: Dict[str, int] = {}
     summary_step_completion_counts: Dict[str, int] = {}
     summary_tracking_error: Optional[Dict[str, Any]] = None
+    summary_annotation_noise_stats: Optional[Dict[str, Any]] = None
     summary_vlm_point_error: Optional[Dict[str, Any]] = None
     summary_vlm_model_revision: Optional[str] = None
     summary_saved_rollouts = 0
@@ -1484,6 +1510,7 @@ if __name__ == "__main__":
                             debug=args.debug,
                             headless=not args.visualize,
                             obs_keys=env_obs_keys,
+                            randomize_obstacle=not args.disable_obstacle_randomization,
                             sim_front_camera_preset=args.sim_front_camera_preset,
                         )
                         env_task = task
@@ -1565,6 +1592,7 @@ if __name__ == "__main__":
                         n_parts_assemble=args.n_parts_assemble,
                         compress_pickles=args.compress_pickles,
                         resize_video=not args.store_full_resolution_video,
+                        preserve_full_frame_images=args.preserve_full_frame_images,
                         break_on_n_success=args.break_on_n_success,
                         stop_after_n_success=args.stop_after_n_success,
                         rollout_after_success=task_rollout_after_success,
@@ -1600,7 +1628,7 @@ if __name__ == "__main__":
                         init_states=task_init_states,
                         max_saved_rollouts=(
                             args.max_saved_rollouts
-                            if args.max_saved_rollouts > 0
+                            if args.max_saved_rollouts >= 0
                             else None
                         ),
                         guidance_bank_out=(
@@ -1669,7 +1697,7 @@ if __name__ == "__main__":
                         "n_rollouts": rollout_stats.n_rollouts,
                         "n_saved_rollouts": rollout_stats.n_saved_rollouts,
                         "max_saved_rollouts": (
-                            args.max_saved_rollouts if args.max_saved_rollouts > 0 else None
+                            args.max_saved_rollouts if args.max_saved_rollouts >= 0 else None
                         ),
                         "success_rate": success_rate,
                         "rollout_max_steps": rollout_stats.rollout_max_steps,
@@ -1678,6 +1706,7 @@ if __name__ == "__main__":
                         "rollout_path_hint": str(rollout_path_hint),
                         "perturb_mode": args.perturb_mode,
                         "tracking_error": rollout_stats.tracking_error,
+                        "annotation_noise_stats": rollout_stats.annotation_noise_stats,
                         "vlm_point_error": rollout_stats.vlm_point_error,
                         "vlm_model_revision": rollout_stats.vlm_model_revision,
                         "vlm_transport": (
@@ -1821,6 +1850,9 @@ if __name__ == "__main__":
                     )
                     if len(tasks) == 1:
                         summary_tracking_error = rollout_stats.tracking_error
+                        summary_annotation_noise_stats = (
+                            rollout_stats.annotation_noise_stats
+                        )
                         if rollout_stats.vlm_point_error:
                             summary_vlm_point_error = (
                                 merge_vlm_point_error_summaries(
@@ -1892,7 +1924,7 @@ if __name__ == "__main__":
                         "n_rollouts": summary_total_rollouts,
                         "n_saved_rollouts": summary_saved_rollouts,
                         "max_saved_rollouts": (
-                            args.max_saved_rollouts if args.max_saved_rollouts > 0 else None
+                            args.max_saved_rollouts if args.max_saved_rollouts >= 0 else None
                         ),
                         "success_rate": (
                             summary_total_success / summary_total_rollouts
@@ -1900,6 +1932,7 @@ if __name__ == "__main__":
                             else None
                         ),
                         "tracking_error": summary_tracking_error,
+                        "annotation_noise_stats": summary_annotation_noise_stats,
                         "vlm_point_error": summary_vlm_point_error,
                         "vlm_model_revision": summary_vlm_model_revision,
                         "vlm_transport": (

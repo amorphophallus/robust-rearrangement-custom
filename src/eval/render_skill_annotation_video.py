@@ -168,6 +168,7 @@ def standard_annotation_frame(
     camera_info: Optional[Mapping[str, Any]] = None,
     *,
     show_robot_base_axes: bool = False,
+    use_skill_color: bool = False,
 ) -> np.ndarray:
     """Return one frame using the simulator rollout annotation settings."""
 
@@ -185,7 +186,7 @@ def standard_annotation_frame(
         front,
         guidance,
         skill=observation.get("skill"),
-        use_skill_color=False,
+        use_skill_color=use_skill_color,
     )
     skill = observation.get("skill")
     if isinstance(skill, bytes):
@@ -239,6 +240,7 @@ def render_skill_annotation_video(
     *,
     fps: int = DEFAULT_FPS,
     show_robot_base_axes: bool = False,
+    use_skill_color: bool = False,
 ) -> Dict[str, Any]:
     data = _load_annotated_pickle(annotated_pickle)
     observations = data.get("observations")
@@ -247,7 +249,10 @@ def render_skill_annotation_video(
 
     camera_info = data.get("camera_info")
     sample = standard_annotation_frame(
-        observations[0], camera_info, show_robot_base_axes=show_robot_base_axes
+        observations[0],
+        camera_info,
+        show_robot_base_axes=show_robot_base_axes,
+        use_skill_color=use_skill_color,
     )
     height, width = sample.shape[:2]
     encoder = _open_encoder(output_path, width, height, fps)
@@ -268,6 +273,7 @@ def render_skill_annotation_video(
                 observation,
                 camera_info,
                 show_robot_base_axes=show_robot_base_axes,
+                use_skill_color=use_skill_color,
             )
             skill = str(observation.get("skill", "none"))
             skill_counts[skill] = skill_counts.get(skill, 0) + 1
@@ -297,7 +303,7 @@ def render_skill_annotation_video(
         "fps": fps,
         "layout": [WRIST_IMAGE_KEY, FRONT_IMAGE_KEY],
         "front_annotations": ["guidance_point", "skill"],
-        "guidance_point_colored": False,
+        "guidance_point_colored": use_skill_color,
         "guidance_frame": data.get("guidance_frame"),
         "robot_base_axes": show_robot_base_axes,
         "image_channel_order": "RGB",
@@ -323,6 +329,11 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
     parser.add_argument("--show-robot-base-axes", action="store_true")
+    parser.add_argument(
+        "--guidance-point-colored",
+        action="store_true",
+        help="Use the skill-dependent guidance-point colors from image_annotations.",
+    )
     return parser.parse_args(argv)
 
 
@@ -333,6 +344,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         args.output.resolve(),
         fps=args.fps,
         show_robot_base_axes=args.show_robot_base_axes,
+        use_skill_color=args.guidance_point_colored,
     )
     print(json.dumps(report, indent=2))
     return 0

@@ -237,6 +237,7 @@ def save_raw_rollout(
     policy_eepose_frame: str = ROBOT_BASE,
     guidance_frame: str = ROBOT_BASE,
     collection_metadata: dict = None,
+    preserve_full_frame_images: bool = False,
 ):
     source_shapes = {
         "color_image1": tuple(np.asarray(imgs1).shape[1:3]),
@@ -244,13 +245,44 @@ def save_raw_rollout(
     }
     depth_image1 = normalize_depth_meters(depth_image1)
     depth_image2 = normalize_depth_meters(depth_image2)
-    imgs1, imgs2, depth_image1, depth_image2 = center_crop_observation_images(
-        imgs1,
-        imgs2,
-        depth_image1,
-        depth_image2,
-        CANONICAL_IMAGE_SIZE,
-    )
+    if preserve_full_frame_images:
+        expected_shape = (240, 320)
+        arrays = {
+            "color_image1": np.asarray(imgs1),
+            "color_image2": np.asarray(imgs2),
+            "depth_image1": np.asarray(depth_image1),
+            "depth_image2": np.asarray(depth_image2),
+        }
+        for camera_idx in (1, 2):
+            color = arrays[f"color_image{camera_idx}"]
+            depth = arrays[f"depth_image{camera_idx}"]
+            if color.ndim != 4 or color.shape[1:] != (*expected_shape, 3):
+                raise ValueError(
+                    f"color_image{camera_idx} must have shape "
+                    f"(T, 240, 320, 3), got {color.shape}."
+                )
+            if depth.ndim != 3 or depth.shape[1:] != expected_shape:
+                raise ValueError(
+                    f"depth_image{camera_idx} must have shape "
+                    f"(T, 240, 320), got {depth.shape}."
+                )
+            if color.shape[:3] != depth.shape:
+                raise ValueError(
+                    f"color_image{camera_idx} and depth_image{camera_idx} "
+                    "must have matching T/H/W dimensions."
+                )
+        imgs1 = np.ascontiguousarray(arrays["color_image1"])
+        imgs2 = np.ascontiguousarray(arrays["color_image2"])
+        depth_image1 = np.ascontiguousarray(arrays["depth_image1"])
+        depth_image2 = np.ascontiguousarray(arrays["depth_image2"])
+    else:
+        imgs1, imgs2, depth_image1, depth_image2 = center_crop_observation_images(
+            imgs1,
+            imgs2,
+            depth_image1,
+            depth_image2,
+            CANONICAL_IMAGE_SIZE,
+        )
 
     observations: List[Observation] = list()
     include_vlm_metadata = any(
@@ -296,18 +328,19 @@ def save_raw_rollout(
     if vlm_annotations is None:
         vlm_annotations = [None] * len(robot_states)
 
-    guidance_points_2d = [
-        center_crop_point_mapping(value, source_shapes, CANONICAL_IMAGE_SIZE)
-        for value in guidance_points_2d
-    ]
-    grasp_annotations_2d = [
-        center_crop_grasp_mapping(value, source_shapes, CANONICAL_IMAGE_SIZE)
-        for value in grasp_annotations_2d
-    ]
-    oracle_guidance_points_2d = [
-        center_crop_point_mapping(value, source_shapes, CANONICAL_IMAGE_SIZE)
-        for value in oracle_guidance_points_2d
-    ]
+    if not preserve_full_frame_images:
+        guidance_points_2d = [
+            center_crop_point_mapping(value, source_shapes, CANONICAL_IMAGE_SIZE)
+            for value in guidance_points_2d
+        ]
+        grasp_annotations_2d = [
+            center_crop_grasp_mapping(value, source_shapes, CANONICAL_IMAGE_SIZE)
+            for value in grasp_annotations_2d
+        ]
+        oracle_guidance_points_2d = [
+            center_crop_point_mapping(value, source_shapes, CANONICAL_IMAGE_SIZE)
+            for value in oracle_guidance_points_2d
+        ]
     error_by_step = {
         int(record["step_idx"]): record
         for record in (vlm_point_error_records or [])
@@ -420,9 +453,11 @@ def save_raw_rollout(
             continue
 
         if front_camera_info is None and "color_image2" in camera_info:
-            front_camera_info = center_crop_camera_calibration(
-                camera_info["color_image2"], CANONICAL_IMAGE_SIZE
-            )
+            front_camera_info = dict(camera_info["color_image2"])
+            if not preserve_full_frame_images:
+                front_camera_info = center_crop_camera_calibration(
+                    front_camera_info, CANONICAL_IMAGE_SIZE
+                )
             front_camera_info = camera_calibration_to_robot_base(
                 front_camera_info, robot_states[0]
             )
@@ -470,6 +505,18 @@ def save_raw_rollout(
         observations, actions, rewards
     )
 
+    resolved_collection_metadata = dict(collection_metadata or {})
+    resolved_collection_metadata.update(
+        {
+            "image_storage_mode": (
+                "full_frame_240x320"
+                if preserve_full_frame_images
+                else f"center_crop_{CANONICAL_IMAGE_SIZE}x{CANONICAL_IMAGE_SIZE}"
+            ),
+            "image_storage_size": [int(imgs1.shape[2]), int(imgs1.shape[1])],
+        }
+    )
+
     data: Trajectory = {
         "env": "FurnitureBench",
         "observations": observations,
@@ -492,7 +539,7 @@ def save_raw_rollout(
         "eepose_schema_version": 2,
         "guidance_frame": guidance_frame,
         "guidance_schema_version": GUIDANCE_SCHEMA_VERSION,
-        "collection_metadata": dict(collection_metadata or {}),
+        "collection_metadata": resolved_collection_metadata,
     }
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S.%f")

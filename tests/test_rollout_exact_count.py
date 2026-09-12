@@ -1,4 +1,8 @@
-from src.eval.rollout import _accepted_env_count, _saved_media_env_count_for_round
+from src.eval.rollout import (
+    _accepted_env_count,
+    _saved_media_env_count_for_round,
+    _tracking_guidance_for_annotation_source,
+)
 
 
 def test_nondivisible_final_batch_accepts_only_remaining_rollouts():
@@ -65,3 +69,19 @@ def test_media_collection_is_disabled_when_round_is_not_saved():
         max_saved_rollouts=10,
         saved_rollouts_count=10,
     ) == 0
+
+
+def test_scripted_noise_tracking_uses_the_target_shown_to_the_policy():
+    noisy = ["noisy"]
+    clean = ["clean"]
+
+    assert _tracking_guidance_for_annotation_source(
+        annotation_source="scripted",
+        noisy_guidance_poses=noisy,
+        clean_guidance_poses=clean,
+    ) is noisy
+    assert _tracking_guidance_for_annotation_source(
+        annotation_source="vlm",
+        noisy_guidance_poses=noisy,
+        clean_guidance_poses=clean,
+    ) is clean

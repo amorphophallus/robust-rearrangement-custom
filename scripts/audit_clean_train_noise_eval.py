@@ -6,17 +6,232 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.run_clean_train_noise_eval import (
-    CONDITIONS,
-    _manifest_lookup,
-    _noise_levels_for_family,
-    _read_jsonl,
-    _rollout_group_dirs,
-    _validate_summary,
-)
+try:
+    from scripts.run_clean_train_noise_eval import (
+        CONDITIONS,
+        FIXED_R180,
+        MANIFEST_DEFAULT,
+        ReplicateConfig,
+        SHUFFLED_GUIDANCE,
+        VLM_COVER_MANIFEST_DEFAULT,
+        _manifest_lookup,
+        _manifest_key,
+        _noise_levels_for_family,
+        _read_jsonl,
+        _rollout_group_dirs,
+        _validate_summary,
+    )
+except ModuleNotFoundError:  # Allow `python scripts/audit_clean_train_noise_eval.py`.
+    from run_clean_train_noise_eval import (
+        CONDITIONS,
+        FIXED_R180,
+        MANIFEST_DEFAULT,
+        ReplicateConfig,
+        SHUFFLED_GUIDANCE,
+        VLM_COVER_MANIFEST_DEFAULT,
+        _manifest_lookup,
+        _manifest_key,
+        _noise_levels_for_family,
+        _read_jsonl,
+        _rollout_group_dirs,
+        _validate_summary,
+    )
 
 
 VIDEO_SUFFIXES = ("_cam1", "_cam2", "_dep1", "_dep2")
+
+
+def _condition_by_id():
+    return {condition.condition_id: condition for condition in CONDITIONS}
+
+
+def _noise_by_id(condition):
+    levels = _noise_levels_for_family(condition.family, legacy_only=False)
+    levels.extend([SHUFFLED_GUIDANCE])
+    if condition.family == "grasp-part":
+        levels.append(FIXED_R180)
+    return {level.noise_id: level for level in levels}
+
+
+def _expected_cover_new_keys() -> set[tuple[str, str, int, int, int]]:
+    keys = set()
+    for condition in CONDITIONS:
+        for noise_id in ("n5", "n6", "n7"):
+            keys.add((condition.condition_id, noise_id, 0, 0, 0))
+        for seed in (1, 2):
+            for noise_id in ("n0", "n1", "n2", "n3", "n4", "n5", "n6", "n7"):
+                keys.add((condition.condition_id, noise_id, seed, seed, seed))
+            keys.add((condition.condition_id, "shuffle", seed, seed, seed))
+        if condition.family == "grasp-part":
+            for seed in (0, 1, 2):
+                keys.add((condition.condition_id, "r180", seed, seed, seed))
+    return keys
+
+
+def audit_vlm_cover_108(
+    *,
+    manifest_path: Path,
+    legacy_manifest_path: Path,
+    require_complete: bool,
+    n_rollouts: int = 36,
+) -> tuple[dict[str, Any], int]:
+    """Strictly validate new replicates and pooled legacy+new 108-rollout cells."""
+    new_rows = _read_jsonl(manifest_path)
+    legacy_rows = _read_jsonl(legacy_manifest_path)
+    expected_new = _expected_cover_new_keys()
+    issues: list[str] = []
+    missing: list[str] = []
+
+    counts: dict[tuple[str, str, int, int, int], int] = {}
+    for row in new_rows:
+        key = _manifest_key(row)
+        counts[key] = counts.get(key, 0) + 1
+    for key, count in counts.items():
+        if count != 1:
+            issues.append(f"duplicate manifest key {key}: count={count}")
+        if key not in expected_new:
+            issues.append(f"unexpected manifest key {key}")
+
+    new_index = _manifest_lookup(new_rows, replicate_aware=True)
+    conditions = _condition_by_id()
+    for key in sorted(expected_new):
+        row = new_index.get(key)
+        key_text = "/".join(map(str, key))
+        if row is None or row.get("status") != "ok":
+            missing.append(key_text)
+            continue
+        condition = conditions[key[0]]
+        noise = _noise_by_id(condition)[key[1]]
+        for field, expected in {
+            "profile": "vlm-cover-108",
+            "n_envs": 3,
+            "n_rollouts": n_rollouts,
+            "tracking_rollouts_per_task": n_rollouts,
+            "randomness": "low",
+            "save_rollouts_count": 0,
+            "resolved_annotation_source": "scripted",
+        }.items():
+            if row.get(field) != expected:
+                issues.append(
+                    f"{key_text}: manifest.{field}={row.get(field)!r} expected={expected!r}"
+                )
+        checkpoint_hash = str(row.get("checkpoint_sha256", ""))
+        if len(checkpoint_hash) != 64:
+            issues.append(f"{key_text}: invalid checkpoint_sha256")
+        replicate = ReplicateConfig(key[2], key[3], key[4])
+        summary_value = str(row.get("summary_json", "") or "")
+        summary_path = Path(summary_value) if summary_value else None
+        for issue in _validate_summary(
+            summary_path=summary_path,
+            condition=condition,
+            noise=noise,
+            task_group="one_leg+round_table+lamp",
+            n_envs=3,
+            n_rollouts=n_rollouts,
+            randomness="low",
+            replicate=replicate,
+            expected_saved_rollouts=0,
+            require_noise_stats=True,
+        ):
+            issues.append(f"{key_text}: {issue}")
+
+    # No two completed replicates may point at the same output or summary.
+    for field in ("summary_json", "group_log"):
+        seen: dict[str, tuple[str, str, int, int, int]] = {}
+        for row in new_rows:
+            value = str(row.get(field, "") or "")
+            if not value:
+                continue
+            key = _manifest_key(row)
+            if value in seen and seen[value] != key:
+                issues.append(f"{field} collision: {seen[value]} and {key}: {value}")
+            seen[value] = key
+    suffix_seen: dict[str, tuple[str, str, int, int, int]] = {}
+    for row in new_rows:
+        command = list(row.get("command") or [])
+        try:
+            suffix = str(command[command.index("--rollout-suffix-model-name") + 1])
+        except (ValueError, IndexError):
+            issues.append(f"{_manifest_key(row)}: command has no rollout suffix")
+            continue
+        key = _manifest_key(row)
+        if suffix in suffix_seen and suffix_seen[suffix] != key:
+            issues.append(
+                f"rollout suffix collision: {suffix_seen[suffix]} and {key}: {suffix}"
+            )
+        suffix_seen[suffix] = key
+
+    legacy_index = _manifest_lookup(legacy_rows)
+    pooled_cells: list[dict[str, Any]] = []
+    for condition in CONDITIONS:
+        noise_ids = [f"n{idx}" for idx in range(8)] + ["shuffle"]
+        if condition.family == "grasp-part":
+            noise_ids.append("r180")
+        for noise_id in noise_ids:
+            replicate_rows = []
+            for seed in (0, 1, 2):
+                if seed == 0 and noise_id in {"n0", "n1", "n2", "n3", "n4", "shuffle"}:
+                    row = legacy_index.get((condition.condition_id, noise_id))
+                    if row is None or row.get("status") != "ok":
+                        legacy_key = f"legacy/{condition.condition_id}/{noise_id}/0"
+                        if legacy_key not in missing:
+                            missing.append(legacy_key)
+                else:
+                    row = new_index.get(
+                        (condition.condition_id, noise_id, seed, seed, seed)
+                    )
+                if row is not None and row.get("status") == "ok":
+                    replicate_rows.append(row)
+            for task in ("one_leg", "round_table", "lamp"):
+                rollout_count = 0
+                for row in replicate_rows:
+                    summary_value = str(row.get("summary_json", "") or "")
+                    if not summary_value or not Path(summary_value).exists():
+                        continue
+                    summary = json.loads(Path(summary_value).read_text())
+                    task_payload = (summary.get("per_task") or {}).get(task, {})
+                    rollout_count += int(task_payload.get("n_rollouts", 0))
+                expected_tracking_n = (
+                    72
+                    if noise_id in {"n0", "n1", "n2", "n3", "n4", "shuffle"}
+                    else 108
+                )
+                pooled_cells.append(
+                    {
+                        "condition_id": condition.condition_id,
+                        "noise_id": noise_id,
+                        "task": task,
+                        "replicate_count": len(replicate_rows),
+                        "rollout_count": rollout_count,
+                        "tracking_n": expected_tracking_n,
+                    }
+                )
+                if len(replicate_rows) == 3 and rollout_count != 3 * n_rollouts:
+                    issues.append(
+                        f"pooled {condition.condition_id}/{noise_id}/{task}: "
+                        f"rollout_count={rollout_count} expected={3 * n_rollouts}"
+                    )
+
+    payload = {
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+        "profile": "vlm-cover-108",
+        "manifest": str(manifest_path),
+        "legacy_manifest": str(legacy_manifest_path),
+        "expected_new_invocations": len(expected_new),
+        "completed_new_invocations": sum(
+            key in new_index and new_index[key].get("status") == "ok"
+            for key in expected_new
+        ),
+        "missing": missing,
+        "issues": issues,
+        "pooled_cells": pooled_cells,
+        "complete": not missing and not issues,
+    }
+    if issues:
+        return payload, 1
+    if require_complete and missing:
+        return payload, 2
+    return payload, 0
 
 
 def _saved_rollout_count(rollout_dir: Path) -> int:
@@ -178,7 +393,13 @@ def _limit_reported_issues(payload: dict[str, Any], limit: int) -> dict[str, Any
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument(
+        "--profile",
+        choices=["legacy-fresh36", "vlm-cover-108"],
+        default="legacy-fresh36",
+    )
+    parser.add_argument("--manifest", type=Path, default=None)
+    parser.add_argument("--legacy-manifest", type=Path, default=MANIFEST_DEFAULT)
     parser.add_argument("--state", type=Path, default=None)
     parser.add_argument("--require-complete", action="store_true")
     parser.add_argument("--n-rollouts", type=int, default=36)
@@ -192,14 +413,24 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    payload, returncode = audit(
-        manifest_path=args.manifest,
-        state_path=args.state,
-        require_complete=args.require_complete,
-        n_rollouts=args.n_rollouts,
-        include_shuffled=args.include_shuffled,
-        shuffled_rollouts=args.shuffled_rollouts,
-    )
+    if args.profile == "vlm-cover-108":
+        payload, returncode = audit_vlm_cover_108(
+            manifest_path=args.manifest or VLM_COVER_MANIFEST_DEFAULT,
+            legacy_manifest_path=args.legacy_manifest,
+            require_complete=args.require_complete,
+            n_rollouts=args.n_rollouts,
+        )
+    else:
+        if args.manifest is None:
+            parser.error("--manifest is required for legacy-fresh36")
+        payload, returncode = audit(
+            manifest_path=args.manifest,
+            state_path=args.state,
+            require_complete=args.require_complete,
+            n_rollouts=args.n_rollouts,
+            include_shuffled=args.include_shuffled,
+            shuffled_rollouts=args.shuffled_rollouts,
+        )
     print(
         json.dumps(
             _limit_reported_issues(payload, args.max_reported_issues),

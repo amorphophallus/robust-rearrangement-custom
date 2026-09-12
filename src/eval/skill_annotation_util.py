@@ -364,6 +364,46 @@ def _build_camera_info(
     return camera_info
 
 
+def _add_annotation_noise_diagnostics(
+    noise_info: dict,
+    *,
+    guidance_point: Optional[np.ndarray],
+    guidance_pose: Optional[np.ndarray],
+    guidance_point_2d: dict,
+    camera_info: dict,
+) -> dict:
+    """Attach phase-level validity and front-camera visibility diagnostics."""
+    output = dict(noise_info)
+    target = guidance_point
+    if target is None and guidance_pose is not None:
+        target = np.asarray(guidance_pose)[:3, 3]
+    finite = target is not None and bool(np.all(np.isfinite(target)))
+    output["target_finite"] = finite
+    if finite:
+        point = np.asarray(target, dtype=np.float64).reshape(3)
+        output["workspace_valid"] = bool(
+            0.300 <= point[0] <= 0.800
+            and -0.550 <= point[1] <= 0.550
+            and 0.000 <= point[2] <= 0.400
+        )
+    else:
+        output["workspace_valid"] = False
+
+    uv = guidance_point_2d.get("color_image2")
+    front = camera_info.get("color_image2") or {}
+    image_size = np.asarray(front.get("image_size", []), dtype=np.float64).reshape(-1)
+    uv_array = np.asarray(uv, dtype=np.float64).reshape(-1) if uv is not None else np.array([])
+    output["front_projection_visible"] = bool(
+        finite
+        and uv_array.size >= 2
+        and image_size.size >= 2
+        and np.all(np.isfinite(uv_array[:2]))
+        and 0.0 <= uv_array[0] < image_size[0]
+        and 0.0 <= uv_array[1] < image_size[1]
+    )
+    return output
+
+
 def _get_env_offset(env, env_idx: int, base_pos_global: torch.Tensor) -> torch.Tensor:
     franka_origin = _to_torch(
         np.asarray(env.franka_from_origin_mat, dtype=np.float32)[:3, 3],
@@ -885,8 +925,6 @@ class SkillAnnotator:
         self.previous_guidance_pose_clean = (
             None if guidance_pose_clean is None else guidance_pose_clean.copy()
         )
-        self.previous_annotation_noise = dict(noise_info)
-
         guidance_point_2d = {}
         grasp_annotation_2d = {}
         if guidance_point is not None:
@@ -906,6 +944,15 @@ class SkillAnnotator:
         else:
             for image_key in camera_info.keys():
                 grasp_annotation_2d[image_key] = None
+
+        noise_info = _add_annotation_noise_diagnostics(
+            noise_info,
+            guidance_point=guidance_point,
+            guidance_pose=guidance_pose,
+            guidance_point_2d=guidance_point_2d,
+            camera_info=camera_info,
+        )
+        self.previous_annotation_noise = dict(noise_info)
 
         return {
             "skill": skill,

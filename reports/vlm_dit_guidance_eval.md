@@ -16,7 +16,7 @@
 | round_table | 100 | 100.0 | 100/100 | 75.0 | 12.31 | 25.30 | 3.16 | 42.26 | 3.00 | 0.986 | 0.221 |
 | lamp | 100 | 100.0 | 100/100 | 68.0 | 12.42 | 26.49 | 4.30 | 31.68 | 0.58 | 0.958 | 0.559 |
 
-Gate 结果：有效点 `300/300`，即该 300 样本中没有 null point；完整输出 parse 成功率 `99.7%`。整体 spread `1.008`、R² `0.579`，没有再次出现预测整体收缩到全局均值的旧式 collapse；task/skill 局部质量仍须结合下方真实 rollout 的 fresh-query 表判断。
+Gate 结果：有效点 `300/300`，即该 300 样本中没有 null point；完整输出 parse 成功率 `99.7%`。整体 spread `1.008`、R² `0.579`，说明 VLM 保留了跨样本区分目标的能力；task/skill 局部质量以及这些点能否被下游动作策略转化为完整任务，仍须结合下方真实 rollout 的 fresh-query 表判断。
 原始诊断：`/data/hy/robust-rearrangement/data/raw/vlm_diagnostics/vlm_ckpt_new_9d36062_20260822/grounding_300_current_images_cross_skill.json`；耗时 `485.30` s。
 
 ### 新 27-rollout smoke
@@ -448,7 +448,7 @@ same-depth mm 是把 VLM 像素在 GT 深度处反投影后的横向位移。它
 
 ## 8. 当前结论
 
-- 跨三个 task，成功率最高的是 **rgbd+colored GP**：59.3%（64/108）。
+- 在 point-family 的 formal VLM guidance evaluation 中，VLM 生成的点被下游 action expert 转化为 **181/324=55.9% 的完整任务成功**；其中 **rgbd+colored GP** 最高，为 59.3%（64/108）。这说明 VLM–DiT 接口已经能够产生可执行的端到端行为，而不只是输出可解析的坐标。
 - clean-GT pose tracking total 最低的是 **rgbd+GP**：9.78。
 - step-weighted 打点 RMSE 最低的是 **rgbd+colored GP**：40.91 px。
 - 三组 Wilson 95% CI 有重叠，因此“rgbd+colored GP 数值最高”应解释为当前 108-rollout/condition 下的最好观测值，而不是对所有 condition 差异都作显著性声明。
