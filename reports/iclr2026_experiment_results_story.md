@@ -156,16 +156,7 @@ Formal VLM guidance evaluation 中，Point family 完成 `181/324=55.9%` 个 rol
 
 在真实 VLM 条件下，colored GP 是 point family 中最有说服力的稳健接口，但优势依赖 task 和 skill；`GP+skill` 提供了显式语义信息的参考上限。Grasp 在 clean 条件下带来额外收益，尤其体现在 place/screw，但需要同时承受位置与旋转误差，因此强噪声下相对优势收窄。总体上，二维 guidance point 为 VLM visual-semantic grounding 与连续 action generation 提供了可测的外部空间参考：当点的语义仍指向当前 subtask 时，action expert 能在显著空间偏移下继续完成任务，并在 Shuffle 下对被置换 guidance 作出响应。该结论的边界是当前 benchmark 覆盖的 RMS-equivalent 典型误差；skill-specific p95 长尾、failure/OOD 状态和更严格的 paired-reset 机制仍需单独验证。
 
-#### 历史 seed-0 结论（仅作对照，已由上述正式结果取代）
-
-- **`rgbd+colored GP` 是数值噪声下最稳定的 condition。** n0-n4 overall range/std 为 `3.7/1.4 pp`，略优于 `rgbd+GP` 的 `4.6/1.6 pp`；one_leg 与 round_table 的 task 内 range 分别为 `5.6/8.3 pp`，明显小于 GP 的 `19.4/16.7 pp`，lamp 均为 `11.1 pp`。两者 n4 overall 都是 `55.6%`，因此结论为“colored GP 最稳定，GP 在总体上仍稳定但对 task/reset randomization 更敏感”。
-- **现有 tracking 不支持推断 GP 与 colored GP 使用了不同机制。** 排除 workspace 外的 guidance target 后，两者 position tracking 与噪声均保持正相关：GP `r=0.945`，colored GP `r=0.921`。原 colored GP round_table n2 极值来自单个部件飞出工作空间的仿真失败，并非噪声响应。由于两个 checkpoint 不同且 tracking 只有 saved-8，当前只能比较经验稳定性，不能据此解释内部机制。
-- **`rgbd+GP` 在 round_table 上随噪声上升的现象集中在第一段 screw，并非所有 skill 都受益。** task success 从 `10/36 = 27.8%` 增至 `16/36 = 44.4%`。但 `leg-top-pick` 完成数保持 `33/36 -> 33/36`，`leg-top-place` 反而从 `27/33` 降为 `26/33`；主要变化是 `leg-top-screw` 条件完成率按 n0-n4 呈 `53.8% -> 68.0% -> 78.6% -> 84.6% -> 84.6%`，完成数从 `14/26` 增至 `22/26`。其他 condition 的同一 step 不呈现一致单调提升，因此不是 round_table 对噪声的普遍收益。所有幅度共用 annotation noise seed 0，在相同 env/phase 上相当于将同一噪声方向按 std 放大，可能恰好补偿该 checkpoint 在 screw 上的局部动作偏差；同时各 setting 的 reset 未配对。n0/n4 的 95% Wilson 区间分别为 `[15.8, 44.0]%` 与 `[29.5, 60.4]%`，明显重叠，所以该曲线应解释为 seed/checkpoint-specific 局部补偿加抽样波动，而不是更大噪声能提高成功率。要验证是否存在真实的有益偏移，需要固定一组 paired reset seeds，并对多个 annotation noise seeds 汇总均值。
-- **`rgbd+GP+skill` 对连续数值噪声不稳定，但可能更容易拒绝明显错误的 guidance。** 它的 n0-n4 range 为 `13.9 pp`，n4 overall 为 `47.2%`，低于 GP/colored GP；但它是唯一从 n4 到 Shuffle 回升的模型：`47.2% -> 52.8%` (`+5.6 pp`, `51 -> 57`/108)。回升几乎全部来自 one_leg (`72.2% -> 88.9%`)；round_table/lamp 仅变化 `-2.8/+2.8 pp`。一种解释是 n4 仍是“可信但偏移”的点，模型会被误导；Shuffle 与 one-hot skill/场景明显冲突，触发对 guidance 的 gating，退回 RGBD+skill 路径。由于两组 reset 未配对且只差 6 次成功，这不是统计显著性证据。
-- **Grasp annotation 总体可容忍噪声，但单 task 波动更大。** grasp-part 与 colored grasp-part 的 n0-n4 overall range 为 `9.3/13.0 pp`；最大 task range 都达到 `27.8 pp`（分别出现在 round_table/lamp）。同时 position/orientation tracking 与噪声保持正相关，更符合“仍围绕视觉语义完成动作，但对零件初始随机化较敏感”的解释。
-- **Strong Shuffle 表明语义正确的 guidance 仍然有用，policy 并非只依赖 RGBD。** 五个 condition 合计从 n4 的 `300/540 = 55.6%` 到 Shuffle 的 `284/540 = 52.6%`，只变化 `-3.0 pp`；其中 `4/5` 个 condition 下降：rgbd+GP `-4.6 pp`、rgbd+colored GP `-3.7 pp`、rgbd+grasp-part `-7.4 pp`、rgbd+grasp-part-colored `-4.6 pp`，只有 rgbd+GP+skill 回升 `+5.6 pp`。图像与深度保持不变而 semantic-state guidance 被置乱后，大多数模型同向下降，支持正确 guidance 确实参与决策；Shuffle 后成功率仍约为一半，则说明模型同时保留了视觉/低维 fallback，而不是 guidance 是唯一输入。由于每组只有 108 rollout 且 reset 未配对，单个 condition 的 3.7-7.4 pp 降幅仍应视为趋势证据。
-
-#### 整理意见（不属于原报告结论）
+**整理意见（不属于原报告结论）**
 
 > 下列历史条目解释早期单 seed 曲线，不再作为论文的正式噪声结论。正式数字、图和数据口径均以 `annotation_noise_vlm_cover_108.md` 及 `reports/data/vlm_cover_108/` 为准。
 
@@ -293,10 +284,63 @@ RGB-D Place 的原始组成分解继续保留在[主报告 §3.7 的复核记录
 来源与核对：base 上八条 run 的 24 份 task JSON，精确路径与节点核验记录见[主报告 A.4–A.5](./multi_task_condition_eval_0610.md#a4-查证路径)。本表 90 个单元格与更新后的 §3.5 完全一致；按 task 加总 C、R 后，对应正文表 3 中六种非 grasp 主实验 condition 的 30 项。保留原有 hood 聚合计数；其标签覆盖与 Insert 解释边界沿用 §2.4 的局限性说明。
 
 
+### 2.5 VLM 引导下的端到端评测
+
+来源：[VLM + DiT guidance point 评测报告 §2.2](./vlm_dit_guidance_eval.md#22-真实-vlm-引导误差及其下游影响)。
+
+完全无噪声的 oracle 评测将上游定位误差排除在实验之外，因而无法回答真实部署中的核心问题：当 VLM 根据视觉观察提出的目标点或抓取姿态并不完全准确时，下游 DiT policy 是否仍能把这份引导转化为可执行的长时程行为。为此，我们同时测量完整任务成功率与 VLM 目标点误差，并利用 §2.3 的受控噪声评测确定真实 VLM 误差相对于下游容忍范围的位置。
+
+#### 实验设计与评测协议
+
+我们比较 point-based 与 grasp-based 两类引导接口，并在 `one_leg`、`round_table` 和 `lamp` 三个任务上采用一致的轨迹评测协议。VLM 每 8 个环境步更新一次引导，其间沿用缓存结果。每个 condition/task 包含 36 条完整 rollout，成功仅在完整家具装配完成时计入。
+
+**跨任务双头微调（cross-task dual-head fine-tuning）。** 我们从三个任务的 scripted rollouts 构建统一标注集，并分别微调两个 VLM。Ver1 输出 skill 与二维目标点，对应 point guidance；Ver2 进一步输出 `target_rotation_6d`，对应 grasp guidance。Rotation6D 由 scripted guidance pose 的旋转矩阵前两行构成，并通过逐行 Gram--Schmidt 正交化解码为合法的 `SO(3)` 姿态。
+
+**VLM 目标点误差建模（VLM point-error modelling）。** 对正式评测轨迹中的每个有效控制步，我们记录脚本生成的几何真值点投影 `p_gt` 与实际送入 policy 的 VLM point `p_vlm`，并定义二维误差向量
+
+`e_vlm = p_vlm - p_gt`。
+
+我们以 `F_vlm` 表示这些误差向量的经验分布。均值反映系统偏置，协方差特征值比反映方向性，径向误差 `||e_vlm||₂` 反映幅度，P90/P95 则刻画长尾。由于不同下游 condition 共享同一个 VLM，模型层面的误差在任务和 skill 层面合并计算。
+
+**相机匹配的投影尺度对齐（camera-matched projection alignment）。** VLM 输出位于图像平面，而 §2.3 的噪声实验在三维目标上施加扰动。固定的 pixel-to-mm 比例无法同时反映深度和透视，因此我们使用同一相机模型将三维噪声投影到图像平面，再与 `F_vlm` 比较。对每个有效控制步及每个噪声尺度 `σ_n`，从裁剪至 `[-2,2]` 的标准三维高斯中采样 200 个扰动，并计算
+
+`e_nj = π(P_gt + σ_n z_j) - π(P_gt)`。
+
+在相邻噪声等级之间对 projected RMSE 线性插值，即可得到 VLM 目标点误差的等效三维扰动尺度。该尺度表示在相同相机、深度和投影模型下产生相同二维 RMSE 的 `mm/axis` 噪声，用于连接 VLM 评测与 §2.3 的噪声响应曲线。
+
+#### 端到端结果
+
+表 5 | 真实 VLM 引导下的完整任务成功率。每个 condition/task 包含 36 条 rollout；Overall 汇总三个任务。Point 与 grasp condition 在同一张表中比较。
+
+| Condition | one_leg | round_table | lamp | Overall |
+| --- | ---: | ---: | ---: | ---: |
+| RGB-D+GP | 86.1% (31/36) | 44.4% (16/36) | 44.4% (16/36) | 58.3% (63/108) |
+| RGB-D+colored GP | 86.1% (31/36) | 41.7% (15/36) | 50.0% (18/36) | 59.3% (64/108) |
+| RGB-D+GP+skill | 83.3% (30/36) | 27.8% (10/36) | 38.9% (14/36) | 50.0% (54/108) |
+| RGB-D+grasp-part | 88.9% (32/36) | 38.9% (14/36) | 61.1% (22/36) | **63.0% (68/108)** |
+| RGB-D+grasp-part-colored | 72.2% (26/36) | 38.9% (14/36) | 41.7% (15/36) | 50.9% (55/108) |
+
+**不完美的 VLM 引导仍能形成端到端行为。** 三个 point condition 在 324 条 rollout 中完成 181 次完整任务（55.9%），其整体成功率为 50.0–59.3%；两个 grasp condition 分别达到 63.0% 和 50.9%。其中，colored GP 是 point interface 中表现最好的 condition，grasp-part 则取得五个 condition 中最高的整体成功率。结合附录 A.2 中 Point VLM 的 3-task 等效位置噪声 `63.44 mm/axis`，这些结果表明下游 action expert 能够在真实 VLM 目标点误差下保持完整任务执行。
+
+**显式姿态通道为 grasp guidance 提供了额外表达能力。** `RGB-D+grasp-part` 的整体成功率为 63.0%，在 lamp 上达到 61.1%，相对三个 point condition 提高 11.1–22.2 个百分点。这一任务依赖的优势与 Ver2 增加旋转输出的设计一致：当接触方向和末端姿态更关键时，grasp guidance 可以提供仅有位置点时缺失的约束。`grasp-part-colored` 的整体成功率为 50.9%，说明旋转信息的收益并不在所有接口组合与任务上稳定出现；同时，旋转预测也增加了上游模型需要拟合的误差维度。
+
+**VLM 误差呈现结构化分布。** Point 与 Grasp VLM 的 task-level 等效 `σ` 分别跨越 `36.15–72.86` 和 `96.26–170.09 mm/axis`，而 n4 在三个任务上固定为 `24 mm/axis`。跨任务差异与非零 bias 表明误差具有任务相关的系统偏置；大于 1 的 anisotropy 显示方向性，相对 n4 非零的 centered SWD 和 radial W1 则显示非高斯形状（表 6）。因此，等效 `σ` 只对齐误差幅度，不代表两者具有相同分布。
+
+表 6 | Point VLM、Grasp VLM 与 n4 受控噪声的分布摘要。Equivalent `σ` 为三个任务的范围，`Δ` 为跨任务跨度；bias norm 与 anisotropy 分别衡量平均偏移和方向性；centered SWD 与 radial W1 分别比较中心化后的二维形状和误差半径。VLM 数值为同一 family 内各 condition 的范围，分布距离均以 n4 为参照。
+
+| Error source | Task-level equivalent σ (mm/axis) | Bias norm (px) | Anisotropy | n4 centered SWD (px) | n4 radial W1 (px) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Point VLM | 36.15–72.86 (Δ36.71) | 7.27–8.78 | 3.91–5.73 | 11.00–11.85 | 16.80–17.03 |
+| Grasp VLM | 96.26–170.09 (Δ73.83) | 26.41–26.50 | 2.27–2.30 | 24.64–26.03 | 44.15–46.41 |
+| Controlled noise (n4) | 24.00 (Δ0) | 零均值设定 | 三维各向同性设定 | 0（自参照） | 0（自参照） |
+
+综合表 5、表 6、§2.3 的受控噪声响应和附录 A.2 的等效尺度，下游策略覆盖了 Point VLM 的典型目标点误差范围，并在真实 VLM 引导下完成了相当比例的长时程任务。由此得到的系统级结论是，二维目标点可以作为视觉语义理解与连续动作生成之间的有效接口；等效 `σ` 仅用于对齐误差幅度，而不意味着 VLM 误差与受控噪声具有相同分布。结论范围限于当前三个 FurnitureBench 任务及其观测到的 VLM 误差分布。
+
+
 ## 3. 仍在进行或计划中的实验
 
 1. 真机实验：形成与表 1 对齐的 condition 对比表，并提供代表性 demo。
-2. VLM 接入：报告 VLM 打点误差、按误差区间分桶的 action-expert 成功率，以及完整 pipeline 的端到端成功率。
+2. VLM 误差分层分析：按目标点误差区间统计 action-expert 成功率，并进一步分解 skill-specific p95 长尾与 failure/OOD 状态。
 3. Med-train → high-eval：high randomness 加入零件初始位姿排列组合，预期成功率较低；需要多 seed 和足够 rollout 才能比较 condition。
 4. 任务扩展：加入 ManiSkill3 与 Isaac Lab / Isaac Gym 的新任务和数据，验证 guidance point 作为跨任务接口的可扩展性。
 
@@ -307,6 +351,7 @@ RGB-D Place 的原始组成分解继续保留在[主报告 §3.7 的复核记录
 - Clean-train → noisy-eval 正式结果：[`annotation_noise_vlm_cover_108.md`](./annotation_noise_vlm_cover_108.md)；早期 seed-0 对照：[`annotation_noise_clean_train_fresh36.md`](./annotation_noise_clean_train_fresh36.md#1-结果图)。
 - 主文图 1：`figures/vlm_cover_108/vlm_cover_108_success_numeric.png`（task-level SR；仅 Point/Grasp 两条 position-equivalent σ 线）。
 - 主文图 2：`figures/vlm_cover_108/vlm_cover_108_tracking_error.png`（pooled position/orientation/total tracking；不再使用单独 endpoint 图）。
+- VLM 端到端评测：[`vlm_dit_guidance_eval.md`](./vlm_dit_guidance_eval.md#22-真实-vlm-引导误差及其下游影响)。
 
 ### 附录 A.1：108 实验补充图
 
@@ -329,10 +374,6 @@ Skill-level 图中的第三条参考线是 Grasp VLM 的 point-error p95 stress 
 ![Skill-level orientation tracking](figures/vlm_cover_108/vlm_cover_108_skill_tracking_orientation.png)
 
 ![Skill-level total tracking](figures/vlm_cover_108/vlm_cover_108_skill_tracking_total.png)
-
-VLM 极端误差 montage（仅用于展示长尾形态，不作为新的 σ 或成功率估计）：
-
-![Largest VLM point errors](../logs/vlm_extreme_error_20260910/generated/vlm_largest_errors_global.png)
 
 ### 附录 A.2：VLM position-equivalent σ anchor table
 

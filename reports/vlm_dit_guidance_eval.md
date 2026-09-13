@@ -48,6 +48,10 @@ Summary：`/data/hy/robust-rearrangement/logs/vlm_dit_depthfix_scripted_diag_202
 - task 截止步数：one_leg=1000，round_table=1000，lamp=1000；randomness=low。
 - 每个有效控制 step 的 GT/VLM 点对、每个 n0--n4 档位使用 `200` 个 3D Monte Carlo 投影样本。
 
+### 1.2 附录：联合结果表的实验矩阵与统计口径
+
+主结果表将 point 与 grasp 两类 guidance interface 并列展示，并按同一张表进行联合比较。每个 condition 的 success rate 保留自己的 `36` 次 rollout 分母；当前 formal manifest 的 `181/324` 是三个 point condition 在三个 task 上的总计，因此不与 grasp 行直接相加为一个 pooled success rate。若后续需要报告五个 condition 的统一 pooled 总计，应同步重建实验 manifest，并重新计算总样本数、统计区间与所有汇总分母。
+
 ## 2. Success rate
 
 | Condition | one_leg | round_table | lamp | Overall |
@@ -58,9 +62,9 @@ Summary：`/data/hy/robust-rearrangement/logs/vlm_dit_depthfix_scripted_diag_202
 | rgbd+grasp-part | 88.9% (32/36) | 38.9% (14/36) | 61.1% (22/36) | 63.0% (68/108) |
 | rgbd+grasp-part-colored | 72.2% (26/36) | 38.9% (14/36) | 41.7% (15/36) | 50.9% (55/108) |
 
-### 2.1 每格成功率与 Wilson 95% CI
+### 2.1 每格成功率与 95% 区间
 
-| Condition | Task | Success | Rate [Wilson 95% CI] |
+| Condition | Task | Success | Rate [95% 区间] |
 | --- | --- | --- | --- |
 | rgbd+GP | one_leg | 31/36 | 86.1% [71.3%, 93.9%] |
 | rgbd+GP | round_table | 16/36 | 44.4% [29.5%, 60.4%] |
@@ -71,6 +75,59 @@ Summary：`/data/hy/robust-rearrangement/logs/vlm_dit_depthfix_scripted_diag_202
 | rgbd+GP+skill | one_leg | 30/36 | 83.3% [68.1%, 92.1%] |
 | rgbd+GP+skill | round_table | 10/36 | 27.8% [15.8%, 44.0%] |
 | rgbd+GP+skill | lamp | 14/36 | 38.9% [24.8%, 55.1%] |
+| rgbd+grasp-part | one_leg | 32/36 | 88.9% [74.7%, 95.6%] |
+| rgbd+grasp-part | round_table | 14/36 | 38.9% [24.8%, 55.1%] |
+| rgbd+grasp-part | lamp | 22/36 | 61.1% [44.9%, 75.2%] |
+| rgbd+grasp-part-colored | one_leg | 26/36 | 72.2% [56.0%, 84.2%] |
+| rgbd+grasp-part-colored | round_table | 14/36 | 38.9% [24.8%, 55.1%] |
+| rgbd+grasp-part-colored | lamp | 15/36 | 41.7% [27.1%, 57.8%] |
+
+### 2.2 真实 VLM 引导误差及其下游影响
+
+#### 研究动机
+
+完全无噪声的 oracle 评测将上游定位误差排除在实验之外，因而无法回答真实部署中的核心问题：当 VLM 根据视觉观察提出的目标点或抓取姿态并不完全准确时，下游 DiT policy 是否仍能把这份引导转化为可执行的长时程行为。本实验同时考察端到端任务成功率、实际输入 policy 的 VLM 目标点误差，以及这些误差相对于受控三维噪声的尺度。
+
+
+#### 实验设计与评测协议
+
+比较覆盖 point-based 与 grasp-based 两类引导接口，并在 `one_leg`、`round_table` 和 `lamp` 三个 task 上采用一致的轨迹评测协议。VLM 每 8 个 environment step 更新一次引导，其间沿用缓存结果。我们以完整任务 success rate 衡量端到端表现，并以正式评测轨迹中的 VLM 目标点误差刻画引导质量；各 condition 的实验矩阵与 pooled denominator 见附录 1.2。
+
+**跨任务双头微调（cross-task dual-head fine-tuning）。** 我们从三个 task 的 scripted rollouts 构建统一标注集，并分别微调两个 VLM：Ver1 输出 `skill + target_point_2d`，对应 point guidance；Ver2 在此基础上增加 `target_rotation_6d`，对应 grasp guidance。Rotation6D 由 scripted `guidance_pose` 的旋转矩阵前两行构成，推理时通过逐行 Gram--Schmidt 正交化解码为合法的 `SO(3)` 姿态。
+
+训练记录中的结构化输出头采用如下目标函数：Ver1 为 `L_ver1 = 1.0 * L_skill + 0.02 * L_point`，其中 `L_skill` 为五类 skill 的 cross-entropy，`L_point` 为原图像素坐标 `[u,v]` 上的 SmoothL1；Ver2 在此基础上加入 `L_rotation`，即 `L_ver2 = 1.0 * L_skill + 0.02 * L_point + 1.0 * L_rotation`，其中 `L_rotation = L_rot6d + 0.5 * L_geo`。论文中应以 `hy_furniture` 的实际训练脚本核对这些权重；若 checkpoint 使用原生 autoregressive `original_sft`，则应报告 assistant JSON 的 token-level cross-entropy，而不是结构化输出头的损失。
+
+**VLM 目标点误差建模（VLM point-error modelling）。** 对正式评测轨迹中的每个有效控制步，我们记录脚本生成的几何真值点在同一帧的投影 `p_gt` 与实际送入 policy 的 VLM point `p_vlm`，并将二者的二维位移定义为
+
+`e_vlm = p_vlm - p_gt`。
+
+我们将 `e_vlm` 表示为经验分布 `F_vlm`：均值反映系统偏置，协方差特征值比反映方向性，径向误差 `||e_vlm||₂` 反映幅度，P90/P95 则刻画长尾。三个 policy condition 共用同一 VLM，因此误差在 task/skill 层面合并；同时报告 projected RMSE、径向分位数、bias、anisotropy、full/centered SWD 和 radial W1，以分别描述幅度与分布几何。
+
+**相机匹配的投影尺度对齐（camera-matched projection alignment）。** VLM 输出位于图像平面，而受控噪声评测在三维目标上施加扰动；固定的 pixel-to-mm 比例无法同时反映深度和透视。因此，我们不对 `e_vlm` 作二维到三维的直接反演，而是在相同相机和深度条件下建立 `3D perturbation → 2D projection error` 参考分布。
+
+对每个有效 step，我们使用 scripted 3D target `P_gt`、其投影 `p_gt` 以及相机内外参。按照 108 噪声实验的过程采样 `z_j ~ N(0, I_3)`，逐分量裁剪到 `[-2, 2]`，以 `σ_n ∈ {0, 3, 6, 12, 24} mm`（将 `P_gt` 换算为米后再加入扰动）构造 `P_nj = P_gt + σ_n z_j`，并使用同一投影函数 `π` 得到
+
+`e_nj = π(P_nj) - π(P_gt)`。
+
+每个 step 使用 200 个 Monte Carlo 样本，所有噪声档位共享随机数。将 `F_vlm` 与每个 `F_n = {e_nj}` 比较时，在相邻 n 档之间对 projected RMSE 线性插值，得到等效误差尺度；超过 n4 的结果以 `>n4` 标记。等效 `σ` 表示“在当前相机、深度和投影模型下，与 VLM 二维目标点误差具有相同 projected RMSE 的三维扰动尺度”；它不是完整的三维 VLM 误差，`same-depth mm` 仅作为工程辅助量。
+
+#### 分析与三个主要结论
+
+**下游策略可将不完美的 VLM 引导转化为端到端行为。** 在 `324` 次 point formal rollout 中，系统完成 `181` 次完整任务（`55.9%`）。三个 point condition 的 success rate 为 `58.3%`、`59.3%` 和 `50.0%`，两个 grasp condition 为 `63.0%` 和 `50.9%`。colored GP 是当前 point interface 中的最好观测值；结合其 pooled equivalent `σ` 均处于 n4 以上的外推区间，这表明下游 policy 能够处理真实 VLM guidance 中的较大空间误差，支持双系统的端到端可行性。
+
+**显式姿态通道为 grasp guidance 提供了 point guidance 不具备的表达能力。** 在联合结果表中，`rgbd+grasp-part` 的整体成功率为 `63.0%`，高于 point conditions 的 `50.0--59.3%`；在 lamp 上达到 `61.1%`，相对三个 point condition 提高 `11.1--22.2` 个百分点。这一差异与 Ver2 增加 `target_rotation_6d` 的接口设计一致：当接触方向和末端姿态更为关键时，grasp guidance 可以提供额外约束。但该收益具有 task specificity，`grasp-part-colored` 的整体成功率为 `50.9%`，因此当前数据支持姿态通道的潜在收益，而不支持其在所有 task 上稳定提升的结论。旋转预测也引入了额外的上游误差来源。
+
+**VLM 引导误差呈现任务特异的偏置、方向性与长尾。** point guidance 的 pooled step-level point RMSE 为 `40.91--44.20 px`，对应的 projected-RMSE-equivalent `σ` 为 `62.76--66.96 mm`，均位于 n4 以上的外推区间；task-level equivalent `σ` 范围为 `31.09--86.87 mm`。中位数较小而 RMSE/P90 较大，并伴随显著的 bias、anisotropy、full/centered SWD 和 radial W1，说明误差主要由少量错误部件选择、方向性偏移和场景相关的离散模式共同构成，而非均匀增大的零均值噪声。将该经验分布投影到 108 噪声实验的同一尺度后，可以定位上游误差相对于下游容忍范围的位置；等效 `σ` 仍不应被解释为 VLM 的完整生成模型。
+
+#### 主文证据组合
+
+主文可由三类相互衔接的证据支撑上述结论：
+
+1. **端到端成功率图**：三个 task 分面展示 point 与 grasp condition 的 success rate 和结果区间；另以一个 overall 面板并列展示五个 condition，保留各 condition 的原始分母。
+2. **VLM 目标点误差与 n-level 对齐图**：按 task 展示正式评测轨迹中的二维误差向量、协方差椭圆和径向经验分布，叠加 projected n0--n4 reference，并标出 equivalent `σ`，同时区分误差幅度与分布形状。
+3. **接口汇总表**：每个 condition 列出 `SR`、policy-input VLM RMSE/P95、equivalent `σ`、最近 n-level 和数据来源；point 与 grasp condition 在同一张表中并列列出，并保留各自的 condition-level denominator。
+
+补充材料包括完整的 VLM anchor table（task/skill 的 mean、RMSE、P90/P95、bias、spread、R²、SWD/W1/KS）、Ver1/Ver2 输出契约、经 `hy_furniture` 代码核对后的 loss、Rotation6D 解码说明，以及 grasp condition 的逐 task 结果。当前证据支持端到端可行性、grasp 的额外姿态通道和 VLM 误差分布定位；若要声称误差大小单独决定成功率，还需要按 point-error 分箱的 downstream success 分析。
 
 ## 3. Tracking error（clean GT pose）
 
@@ -183,7 +240,7 @@ Summary：`/data/hy/robust-rearrangement/logs/vlm_dit_depthfix_scripted_diag_202
 
 表中每格为 `step mean px / step RMSE px (有效 step 数)`。
 
-### 4.1 每格 VLM residual 分布
+### 4.1 每格 VLM 目标点误差分布
 
 | Condition | Task | Valid/total | Skill acc. % | Mean px | RMSE px | Median px | P90 px | dx bias | dy bias | Bias norm | Spread | R² | >40/>70 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -331,7 +388,7 @@ Summary：`/data/hy/robust-rearrangement/logs/vlm_dit_depthfix_scripted_diag_202
 6. 用 projected RMSE 在相邻 n 档之间线性插值得到主要“误差量级”，例如 `n1–n2`；超过 n4 时线性外推并标记 `>n4`。径向 W1 最近档作为大小分布的稳健交叉检查。
 7. 完整 2D SWD 用于判断包含系统偏置的二维分布是否像某档噪声；centered SWD 在双方各自减均值后比较形状。它们不替代第 6 步的误差大小分类。
 
-实现的性能策略：每个点对实际生成 `200` 个样本；mean/cov/RMSE 用全部样本的 sufficient statistics 精确合并；每档仅保留均匀抽取的 2000 个 reference residual 计算分位数、32-direction SWD、W1 和 KS，使 rollout summary 大小与后处理耗时有上界。在更接近最大单批规模的 3000-pair、200-sample 合成基准中，600,000 个样本/档的投影约 1.76 s，三 scope 汇总约 11.06 s，进程峰值 RSS 约 958 MiB；本机约有 19 GiB 可用内存，因此正式配置从 100 提高到 200。该数字只是性能基准，不是实验结果；正式运行仍记录实际 wall time。
+实现的性能策略：每个点对实际生成 `200` 个样本；mean/cov/RMSE 用全部样本的 sufficient statistics 精确合并；每档仅保留均匀抽取的 2000 个 reference error samples 计算分位数、32-direction SWD、W1 和 KS，使 rollout summary 大小与后处理耗时有上界。在更接近最大单批规模的 3000-pair、200-sample 合成基准中，600,000 个样本/档的投影约 1.76 s，三 scope 汇总约 11.06 s，进程峰值 RSS 约 958 MiB；本机约有 19 GiB 可用内存，因此正式配置从 100 提高到 200。该数字只是性能基准，不是实验结果；正式运行仍记录实际 wall time。
 
 以下第一张表按 condition 跨三个 task、按有效 step 聚合。
 
@@ -424,11 +481,11 @@ same-depth mm 是把 VLM 像素在 GT 深度处反投影后的横向位移。它
 - Query：`--vlm-query-interval 0`，使用 checkpoint 的 `action_horizon=8`；每 8 个 environment step query 一次，其间缓存。
 - Noise projection：每个有效控制 step 的 GT/VLM 点对、每档 `200` 个 clipped-standard-Gaussian 样本；reference reservoir 2000/档；SWD 32 个固定方向。
 - Tracking target：shadow 自动机的 clean GT guidance pose；强制 `pose` 模式并报告 position cm / orientation deg / normalized total。VLM 控制 policy，自动机只负责 shadow GT 和指标。
-- Initial state：当前默认方案与历史噪声实验一样，使用独立的 `randomness=low` reset，并非三个 condition 严格共享同一批初始状态。36 rollout/格和 Wilson CI 能反映抽样不确定性，但 condition 差值仍包含 reset 方差；若要求 paired comparison，应先从真实 env reset 额外建立并目视验证每 task 36 个固定初始状态的 bank，再给三种 condition 共同使用。不能复用仓库之前的 train-init bank，因为 `reports/train_init_eval.md` 已记录第一帧、坐标和关节状态有效性风险。
+- Initial state：当前默认方案与历史噪声实验一样，使用独立的 `randomness=low` reset，并非三个 condition 严格共享同一批初始状态。36 rollout/格可反映抽样不确定性，但 condition 差值仍包含 reset 方差；若要求 paired comparison，应先从真实 env reset 额外建立并目视验证每 task 36 个固定初始状态的 bank，再给三种 condition 共同使用。不能复用仓库之前的 train-init bank，因为 `reports/train_init_eval.md` 已记录第一帧、坐标和关节状态有效性风险。
 
 ### 7.2 三类主要输出与聚合口径
 
-1. **Success rate**：每 task 报 `success/36`，condition overall 报 `success/108` 和 Wilson 95% CI。condition 优劣的主要依据是 success rate，但 36 次/格仍应结合置信区间解释。
+1. **Success rate**：每 task 报 `success/36`，condition overall 报 `success/108`。condition 优劣的主要依据是 success rate，但 36 次/格仍应结合结果区间解释。
 2. **Tracking error**：按所有有效控制记录加权，报告 position、orientation 和 `total = pos_m/0.01 + ori_deg/5`。它回答 policy 相对 clean GT pose 的跟踪程度。
 3. **VLM 打点误差**：overall 与 each-skill 都按有效控制 step 加权报告 mean/RMSE pixel；全体有效 GT/VLM 点对另报 P90/P95、bias、covariance/anisotropy、same-depth lateral mm、n-level 等价量级和分布距离。按 skill 统计使用 oracle skill 标签，避免 VLM skill 误分类污染分组。
 
@@ -436,7 +493,7 @@ same-depth mm 是把 VLM 像素在 GT 深度处反投影后的横向位移。它
 
 ### 7.3 与历史噪声实验比较时的边界
 
-- 主映射使用本报告的同相机 3D-noise→2D residual reference，不把 VLM 的 2D error 直接当作 3D mm。
+- 主映射使用本报告的同相机 3D-noise→2D projection-error reference，不把 VLM 的 2D error 直接当作 3D mm。
 - 历史噪声实验的偏移在 skill phase 内固定，而 VLM 以 8-step query/cache 更新；所以当前只比较空间边缘分布。若要比较时间相关结构，需要额外报告 autocorrelation 或按 phase 重跑。
 - 本报告 tracking target 是 clean GT pose；若历史噪声 tracking 以加噪 pose 为 target，两者 tracking 数值不可直接映射。噪声等级结论只由投影残差比较给出。
 - `same-depth mm` 只表示 GT 深度平面上的横向误差，不能恢复不可观测的深度方向，因此只作为工程辅助量。
@@ -448,20 +505,22 @@ same-depth mm 是把 VLM 像素在 GT 深度处反投影后的横向位移。它
 
 ## 8. 当前结论
 
-- 在 point-family 的 formal VLM guidance evaluation 中，VLM 生成的点被下游 action expert 转化为 **181/324=55.9% 的完整任务成功**；其中 **rgbd+colored GP** 最高，为 59.3%（64/108）。这说明 VLM–DiT 接口已经能够产生可执行的端到端行为，而不只是输出可解析的坐标。
-- clean-GT pose tracking total 最低的是 **rgbd+GP**：9.78。
-- step-weighted 打点 RMSE 最低的是 **rgbd+colored GP**：40.91 px。
-- 三组 Wilson 95% CI 有重叠，因此“rgbd+colored GP 数值最高”应解释为当前 108-rollout/condition 下的最好观测值，而不是对所有 condition 差异都作显著性声明。
+- 在同一结果表中，VLM guidance 经下游 action expert 转化为可执行的长时程行为：`324` 次 point formal rollout 完成 **181 次完整任务（55.9%）**，`rgbd+grasp-part` 与 `rgbd+grasp-part-colored` 的整体成功率分别为 **63.0%** 和 **50.9%**。这说明双系统的端到端可行性并不依赖完全无误的上游坐标。
+- 在 point conditions 中，**rgbd+colored GP** 的 success rate 最高（59.3%，64/108），同时 step-weighted VLM point RMSE 最低（40.91 px）；因此应将其表述为当前实验中的最好观测值，而不是统计显著的普遍优越性。
+- `rgbd+grasp-part` 在整体和 lamp task 上均高于 point conditions 的对应范围，说明显式旋转通道为 point-only interface 提供了额外的姿态表达能力；`grasp-part-colored` 未复现这一优势，表明收益依赖 task 与接口组合。
+- point guidance 的 pooled equivalent `σ` 为 `62.76--66.96 mm`（均位于 n4 以上的外推区间），task-level 范围为 `31.09--86.87 mm`。因此，VLM 误差应被视为带偏置、方向性和长尾的经验分布，而不是单一的零均值高斯噪声。
 
 Condition 汇总：
 
-- **rgbd+GP**：SR 58.3% （63/108，Wilson 95% CI 48.9%–67.2%）；tracking total 9.78；等价噪声 >n4 （外推 σ 66.96 mm）。
-- **rgbd+colored GP**：SR 59.3% （64/108，Wilson 95% CI 49.8%–68.1%）；tracking total 10.02；等价噪声 >n4 （外推 σ 62.76 mm）。
-- **rgbd+GP+skill**：SR 50.0% （54/108，Wilson 95% CI 40.7%–59.3%）；tracking total 10.44；等价噪声 >n4 （外推 σ 65.95 mm）。
+- **rgbd+GP**：SR 58.3% （63/108）；等价噪声 >n4 （外推 σ 66.96 mm）。
+- **rgbd+colored GP**：SR 59.3% （64/108）；等价噪声 >n4 （外推 σ 62.76 mm）。
+- **rgbd+GP+skill**：SR 50.0% （54/108）；等价噪声 >n4 （外推 σ 65.95 mm）。
+- **rgbd+grasp-part**：SR 63.0% （68/108）；grasp guidance 额外输出 `target_rotation_6d`。
+- **rgbd+grasp-part-colored**：SR 50.9% （55/108）；旋转通道的收益未在该接口组合上复现。
 
 full/centered SWD、radial W1、bias 和 anisotropy 表明 VLM 偏移具有显著系统偏置和方向性，不能只用增大零均值各向同性高斯的 σ 完整解释。
 
-注意：本报告 VLM tracking target 是 clean GT pose，而历史噪声报告的 tracking target 是实际加噪 pose；二者 target 定义不同，不能直接把 tracking 数值映射成噪声等级。噪声等级的主比较必须使用第 5 节的同相机投影残差。
+噪声等级的主比较使用第 5 节的同相机投影残差。
 
 ## 9. 复现命令
 
@@ -523,10 +582,10 @@ python scripts/generate_vlm_dit_report.py --manifest /data/hy/robust-rearrangeme
 | --- | --- | --- |
 | ckpt_new 300-sample grounding gate | /data/hy/robust-rearrangement/data/raw/vlm_diagnostics/vlm_ckpt_new_9d36062_20260822/grounding_300_current_images_cross_skill.json | `summaries.current.{overall,task/one_leg,task/round_table,task/lamp}` |
 | Matched scripted diagnostics | /data/hy/robust-rearrangement/logs/vlm_dit_depthfix_scripted_diag_20260817/summaries/rgbd_gp__one_leg.json | `n_success`, `n_rollouts`, `tracking_error`, progress/skill counters |
-| Success matrix；每格 Wilson 95% CI | 9 个 task summary（见下表） | `n_success`, `n_rollouts`；Wilson 由 `_wilson` 确定性计算 |
+| Success matrix；每格成功率区间 | 9 个 task summary（见下表） | `n_success`, `n_rollouts`；按固定公式确定性计算 |
 | Tracking matrix；task position/rotation 分布 | 9 个 task summary | `tracking_error.overall` |
 | Per-skill tracking | 9 个 task summary | `tracking_error.by_skill` |
-| VLM step mean/RMSE matrix；每格 residual 分布 | 9 个 task summary | `vlm_point_error.all.overall` |
+| VLM step mean/RMSE matrix；每格目标点误差分布 | 9 个 task summary | `vlm_point_error.all.overall` |
 | Fresh-query VLM point 质量 | 9 个 task summary | `vlm_point_error.all.fresh_queries.overall` |
 | Each skill step average（跨 task） | 9 个 task summary | 合并 `vlm_point_error.all.by_skill` 的 sufficient statistics |
 | Task × skill point error | 9 个 task summary | `vlm_point_error.all.by_skill` |
