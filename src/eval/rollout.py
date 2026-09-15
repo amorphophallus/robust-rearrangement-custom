@@ -1168,10 +1168,6 @@ def rollout(
     current_oracle_annotations = oracle_initial_annotations
     current_annotations = initial_annotations
     active_skill_states = initial_skill_states
-    require_scripted_fsm_completion = (
-        annotation_source == "scripted" and annotate_skill
-    )
-
     # Verify history for summary at end of rollout
     from src.eval.skill_annotation_verify import VerifyHistory, verify_and_record
     _verify_history = VerifyHistory(furniture_name=getattr(env, "furniture_name", ""))
@@ -1516,12 +1512,7 @@ def rollout(
         reward_success = (
             rewards[:, :step_idx].sum(dim=1, keepdim=True) >= n_parts_assemble
         ).to(done.device)
-        current_success = _gate_success_with_scripted_fsm(
-            reward_success,
-            _transpose_step_env_annotations(skill_states, env.num_envs),
-            getattr(env, "furniture_name", ""),
-            enabled=require_scripted_fsm_completion,
-        )
+        current_success = reward_success
         if pbar is not None:
             pbar.set_postfix(step=step_idx)
             n_success = current_success.sum().item()
@@ -1835,12 +1826,7 @@ def calculate_success_rate(
 
         # Calculate the success rate
         reward_success_flags = rollout_data.rewards.sum(dim=1) == n_parts_assemble
-        success_flags = _gate_success_with_scripted_fsm(
-            reward_success_flags,
-            rollout_data.skill_states,
-            getattr(env, "furniture_name", ""),
-            enabled=annotation_source == "scripted" and annotate_skill,
-        )
+        success_flags = reward_success_flags
         accepted_env_count = _accepted_env_count(
             num_envs=env.num_envs,
             completed_rollouts=n_total_rollouts,

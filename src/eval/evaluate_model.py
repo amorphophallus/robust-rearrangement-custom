@@ -35,6 +35,10 @@ from src.behavior.base import (
 )
 from src.behavior.diffusion import DiffusionPolicy  # noqa
 from src.eval.rollout import calculate_success_rate
+from src.common.vision import (
+    CENTER_CROP_224_SPATIAL_TRANSFORM,
+    LEGACY_224_SPATIAL_TRANSFORM,
+)
 from src.common.eepose import EEPPOSE_FRAME_HELP, ROBOT_BASE, SIM_LOCAL, resolve_eepose_frame
 from src.behavior import get_actor
 from src.common.tasks import task2idx, task_timeout
@@ -759,6 +763,12 @@ if __name__ == "__main__":
         default=None,
         help="Simulation front-camera preset, e.g. original or locked_20260910.",
     )
+    parser.add_argument(
+        "--wrist-image-transform",
+        choices=("checkpoint", "legacy-resize", "center-crop-224"),
+        default="checkpoint",
+        help="Policy-facing wrist spatial transform for checkpoint compatibility.",
+    )
 
     parser.add_argument(
         "--observation-space", choices=["image", "state"], default="state"
@@ -1300,6 +1310,16 @@ if __name__ == "__main__":
                 uses_grasp_part = model_uses_grasp_part(cfg)
                 resolved_eval_annotations = _resolve_eval_annotation_settings(cfg, args)
                 actor_name = cfg.actor_name if "actor_name" in cfg else cfg.actor.name
+                cfg_observation_type = str(cfg.get("observation_type", ""))
+                cfg_vision_model = str(
+                    cfg.get("vision_encoder", {}).get("model", "")
+                    if isinstance(cfg.get("vision_encoder", {}), (dict, DictConfig))
+                    else ""
+                )
+                depth_positive_meters = (
+                    cfg_observation_type.lower() == "rgbd"
+                    or cfg_vision_model.lower() == "resnet18_rgbd"
+                )
                 print(
                     "Skill input requirement: "
                     f"{requires_skill_input} "
@@ -1320,6 +1340,26 @@ if __name__ == "__main__":
                     print(f"Overriding action_horizon to {args.action_horizon}")
 
                 actor: Actor = get_actor(cfg=cfg, device=device)
+
+                if args.wrist_image_transform == "center-crop-224":
+                    actor.camera1_transform.spatial_transform = (
+                        CENTER_CROP_224_SPATIAL_TRANSFORM
+                    )
+                elif args.wrist_image_transform == "legacy-resize":
+                    actor.camera1_transform.spatial_transform = (
+                        LEGACY_224_SPATIAL_TRANSFORM
+                    )
+                resolved_wrist_image_transform = actor.camera1_transform.spatial_transform
+                resolved_wrist_policy_size = (
+                    [240, 320]
+                    if resolved_wrist_image_transform == "none"
+                    else [224, 224]
+                )
+                print(
+                    "Resolved wrist image transform: "
+                    f"requested={args.wrist_image_transform} "
+                    f"actor={resolved_wrist_image_transform}"
+                )
 
                 if isinstance(actor, DiffusionPolicy):
                     actor.inference_steps = 4
@@ -1480,6 +1520,7 @@ if __name__ == "__main__":
                             args.save_pc_for_dp3
                             or args.save_depth_image
                             or actor_name == "dp3"
+                            or depth_positive_meters
                         ):
                             from src.gym import FULL_OBS
 
@@ -1510,6 +1551,7 @@ if __name__ == "__main__":
                             debug=args.debug,
                             headless=not args.visualize,
                             obs_keys=env_obs_keys,
+                            depth_positive_meters=depth_positive_meters,
                             randomize_obstacle=not args.disable_obstacle_randomization,
                             sim_front_camera_preset=args.sim_front_camera_preset,
                         )
@@ -1690,10 +1732,19 @@ if __name__ == "__main__":
                         "simulator_seed": args.seed,
                         "n_envs": args.n_envs,
                         "observation_space": args.observation_space,
+                        "wrist_image_transform_requested": args.wrist_image_transform,
+                        "wrist_image_transform": resolved_wrist_image_transform,
+                        "wrist_image_input_size": [240, 320],
+                        "wrist_image_policy_size": resolved_wrist_policy_size,
+                        "eval_depth_positive_meters": depth_positive_meters,
+                        "eval_depth_contract": (
+                            "positive_meters" if depth_positive_meters else "not_applicable"
+                        ),
                         "action_type": args.action_type,
                         "annotation_source": args.annotation_source,
                         "eval_command": sys.argv,
                         "n_success": rollout_stats.n_success,
+                        "success_criterion": "physics_reward",
                         "n_rollouts": rollout_stats.n_rollouts,
                         "n_saved_rollouts": rollout_stats.n_saved_rollouts,
                         "max_saved_rollouts": (
@@ -1917,10 +1968,19 @@ if __name__ == "__main__":
                         "simulator_seed": args.seed,
                         "n_envs": args.n_envs,
                         "observation_space": args.observation_space,
+                        "wrist_image_transform_requested": args.wrist_image_transform,
+                        "wrist_image_transform": resolved_wrist_image_transform,
+                        "wrist_image_input_size": [240, 320],
+                        "wrist_image_policy_size": resolved_wrist_policy_size,
+                        "eval_depth_positive_meters": depth_positive_meters,
+                        "eval_depth_contract": (
+                            "positive_meters" if depth_positive_meters else "not_applicable"
+                        ),
                         "action_type": args.action_type,
                         "annotation_source": args.annotation_source,
                         "eval_command": sys.argv,
                         "n_success": summary_total_success,
+                        "success_criterion": "physics_reward",
                         "n_rollouts": summary_total_rollouts,
                         "n_saved_rollouts": summary_saved_rollouts,
                         "max_saved_rollouts": (

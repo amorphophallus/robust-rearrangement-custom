@@ -31,6 +31,7 @@ def get_env(
     april_tags=True,
     verbose=False,
     headless=True,
+    depth_positive_meters: bool = False,
     **kwargs,
 ):
     import furniture_bench  # noqa: F401
@@ -76,6 +77,7 @@ def get_env(
             act_rot_repr=act_rot_repr,  # Representation of rotation for action space. Options are 'quat' and 'axis'.
             ctrl_mode=ctrl_mode,  # Control mode for the robot. Options are 'osc' and 'diffik'.
             action_type=action_type,  # Action type for the robot. Options are 'delta' and 'pos'.
+            depth_positive_meters=depth_positive_meters,
             verbose=verbose,  # If true, prints debug information.
             **kwargs,
         )
@@ -111,6 +113,7 @@ def get_rl_env(
     concat_robot_state=False,
     ctrl_mode="diffik",
     obs_keys=None,
+    depth_positive_meters: bool = False,
     **kwargs,
 ):
 
@@ -173,6 +176,7 @@ def get_rl_env(
                 act_rot_repr=act_rot_repr,  # Representation of rotation for action space. Options are 'quat' and 'axis'.
                 ctrl_mode="diffik",  # Control mode for the robot. Options are 'osc' and 'diffik'.
                 action_type=action_type,  # Action type for the robot. Options are 'delta' and 'pos'.
+                depth_positive_meters=depth_positive_meters,
                 verbose=verbose,  # If true, prints debug information.
                 april_tags=april_tags,
                 debug=debug,

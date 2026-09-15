@@ -12,7 +12,7 @@ from src.behavior.base import Actor
 from src.models import get_diffusion_backbone
 
 from ipdb import set_trace as bp  # noqa
-from typing import Tuple, Union
+from typing import Optional, Sequence, Tuple, Union
 
 
 class DiffusionPolicy(Actor):
@@ -52,11 +52,80 @@ class DiffusionPolicy(Actor):
         self.eta = 0.0
 
     # === Inference ===
+    def _warmstart_seed(
+        self,
+        batch_size: int,
+        dtype: torch.dtype,
+        *,
+        use_warmstart: bool,
+        warmstart_shift_steps: Optional[int],
+        warmstart_nactions: Optional[torch.Tensor],
+        warmstart_indices: Optional[Sequence[int]],
+    ) -> torch.Tensor:
+        """Build the normalized seed without mutating the prior prediction."""
+
+        warmstart_shape = (batch_size, self.pred_horizon, self.action_dim)
+        seed = torch.zeros(
+            warmstart_shape,
+            device=self.device,
+            dtype=dtype,
+        )
+        if not use_warmstart:
+            return seed
+
+        shift = (
+            self.action_horizon
+            if warmstart_shift_steps is None
+            else int(warmstart_shift_steps)
+        )
+        if shift < 0:
+            raise ValueError("warmstart_shift_steps must be non-negative")
+        if (
+            self.prev_naction is not None
+            and self.prev_naction.shape == warmstart_shape
+            and shift < self.pred_horizon
+        ):
+            previous = self.prev_naction.to(
+                device=self.device,
+                dtype=dtype,
+            )
+            seed[:, : self.pred_horizon - shift, :] = previous[:, shift:, :]
+
+        if warmstart_nactions is None:
+            return seed
+        if warmstart_indices is None:
+            raise ValueError(
+                "warmstart_indices are required with warmstart_nactions"
+            )
+        indices = tuple(int(index) for index in warmstart_indices)
+        overrides = warmstart_nactions.to(
+            device=self.device,
+            dtype=dtype,
+        )
+        if overrides.ndim == 2:
+            overrides = overrides.unsqueeze(0)
+        expected_shape = (batch_size, len(indices), self.action_dim)
+        if tuple(overrides.shape) != expected_shape:
+            raise ValueError(
+                "warmstart_nactions must have shape "
+                f"{expected_shape}, got {tuple(overrides.shape)}"
+            )
+        if any(index < 0 or index >= self.pred_horizon for index in indices):
+            raise ValueError("warmstart index is outside the prediction horizon")
+        if len(set(indices)) != len(indices):
+            raise ValueError("warmstart indices must be unique")
+        if indices:
+            seed[:, list(indices), :] = overrides
+        return seed
+
     def _normalized_action(
         self,
         nobs: torch.Tensor,
         *,
         use_warmstart: bool = True,
+        warmstart_shift_steps: Optional[int] = None,
+        warmstart_nactions: Optional[torch.Tensor] = None,
+        warmstart_indices: Optional[Sequence[int]] = None,
     ) -> torch.Tensor:
         """
         Sample a normalized action chunk.
@@ -70,22 +139,14 @@ class DiffusionPolicy(Actor):
             # If the observation is not flattened, we need to reshape it to (B, obs_horizon, obs_dim)
             nobs = nobs.reshape(B, self.obs_horizon, self.obs_dim)
 
-        warmstart_shape = (B, self.pred_horizon, self.action_dim)
-        if (
-            use_warmstart
-            and self.prev_naction is not None
-            and self.prev_naction.shape == warmstart_shape
-        ):
-            warmstart_naction = self.prev_naction.to(
-                device=self.device,
-                dtype=nobs.dtype,
-            )
-        else:
-            warmstart_naction = torch.zeros(
-                warmstart_shape,
-                device=self.device,
-                dtype=nobs.dtype,
-            )
+        warmstart_naction = self._warmstart_seed(
+            B,
+            nobs.dtype,
+            use_warmstart=use_warmstart,
+            warmstart_shift_steps=warmstart_shift_steps,
+            warmstart_nactions=warmstart_nactions,
+            warmstart_indices=warmstart_indices,
+        )
 
         noise = torch.randn(
             (B, self.pred_horizon, self.action_dim),
@@ -118,15 +179,10 @@ class DiffusionPolicy(Actor):
             ).prev_sample
 
         if use_warmstart:
-            # Only the overlap can belong to the next chunk. Zeroing the tail
-            # prevents stale actions from another batch or rollout from leaking in.
-            next_prev_naction = torch.zeros_like(naction.detach())
-            overlap = self.pred_horizon - self.action_horizon
-            if overlap > 0:
-                next_prev_naction[:, :overlap, :] = naction[
-                    :, self.action_horizon :, :
-                ].detach()
-            self.prev_naction = next_prev_naction
+            # Keep the unshifted trajectory.  Ordinary online callers shift it
+            # by action_horizon on their next call; timestamped real evaluation
+            # supplies the actual elapsed step count instead.
+            self.prev_naction = naction.detach().clone()
 
         return naction
 

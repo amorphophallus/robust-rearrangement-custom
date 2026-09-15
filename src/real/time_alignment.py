@@ -374,84 +374,189 @@ class TimestampedActionBuffer:
         return len(self._slots)
 
 
-@dataclass
-class CoordinatedScheduledAction:
-    """One policy action shared by arm and gripper dispatch channels."""
+@dataclass(frozen=True)
+class ActionAdmissionPlan:
+    """Immutable suffix of one query that may be appended to the timeline."""
 
-    target_time_ns: int
-    action: np.ndarray
-    query_id: int
-    chunk_index: int
-    robot_dispatched: bool = False
-    gripper_dispatched: bool = False
-
-    @property
-    def complete(self) -> bool:
-        return self.robot_dispatched and self.gripper_dispatched
+    candidates: Tuple[ScheduledAction, ...]
+    stale: int
+    occupied: int
 
 
-class CoordinatedActionBuffer:
-    """One UMI target-time queue with common arm/gripper admission semantics."""
+@dataclass(frozen=True)
+class ChannelDispatch:
+    """The next arm or gripper command in machine-time deadline order."""
 
-    def __init__(self, period_ns: int):
+    channel: str
+    scheduled: ScheduledAction
+    command_deadline_ns: int
+
+
+class IndependentActionQueues:
+    """Append-only action timeline with independent arm/gripper queues.
+
+    Admission remains coordinated: every reserved action is timely for both
+    channels.  Dispatch is independent so a long gripper lead cannot block the
+    following arm waypoints.  Reservations outlive command dispatch until their
+    target time, preventing a later receding-horizon query from replacing a
+    timestep that has already been committed.
+    """
+
+    _CHANNELS = ("arm", "gripper")
+
+    def __init__(
+        self,
+        period_ns: int,
+        *,
+        arm_latency_ns: int,
+        gripper_latency_ns: int,
+    ):
         if period_ns <= 0:
             raise ValueError("period_ns must be positive")
+        if arm_latency_ns < 0 or gripper_latency_ns < 0:
+            raise ValueError("channel latencies must be non-negative")
         self.period_ns = int(period_ns)
-        self._slots: Dict[int, CoordinatedScheduledAction] = {}
+        self._latency_ns = {
+            "arm": int(arm_latency_ns),
+            "gripper": int(gripper_latency_ns),
+        }
+        self._queues: Dict[str, Dict[int, ScheduledAction]] = {
+            channel: {} for channel in self._CHANNELS
+        }
+        self._reservations: Dict[int, ScheduledAction] = {}
+        self._reservation_tail_ns: Optional[int] = None
 
-    def update(
+    def plan_update(
         self,
         actions: Sequence[Sequence[float]],
         target_times_ns: Sequence[int],
         *,
         query_id: int,
         admission_cutoff_ns: int,
-    ) -> Tuple[int, int]:
+    ) -> ActionAdmissionPlan:
+        """Return the timely, unoccupied suffix without mutating either queue."""
+
         action_array = np.asarray(actions)
         times = np.asarray(target_times_ns, dtype=np.int64).reshape(-1)
         if action_array.shape[0] != times.size:
             raise ValueError("actions and target_times_ns must have equal length")
         if times.size and np.any(np.diff(times) <= 0):
             raise ValueError("target_times_ns must increase strictly")
-        stale = int(
-            np.searchsorted(times, int(admission_cutoff_ns), side="right")
-        )
-        if stale < times.size:
-            overwrite_from = int(times[stale]) - self.period_ns // 2
-            for old_time in [time for time in self._slots if time >= overwrite_from]:
-                del self._slots[old_time]
-        for chunk_index in range(stale, times.size):
+
+        stale = 0
+        occupied = 0
+        candidates = []
+        preview_tail = self._reservation_tail_ns
+        half_period = self.period_ns // 2
+        reservation_times = tuple(self._reservations)
+        for chunk_index in range(times.size):
             target = int(times[chunk_index])
-            self._slots[target] = CoordinatedScheduledAction(
+            if any(
+                abs(target - reserved_target) <= half_period
+                for reserved_target in reservation_times
+            ):
+                occupied += 1
+                continue
+            if target <= int(admission_cutoff_ns):
+                stale += 1
+                continue
+            if preview_tail is not None and target <= preview_tail + half_period:
+                occupied += 1
+                continue
+            scheduled = ScheduledAction(
                 target_time_ns=target,
                 action=np.asarray(action_array[chunk_index]).copy(),
                 query_id=int(query_id),
                 chunk_index=chunk_index,
             )
-        return times.size - stale, stale
+            candidates.append(scheduled)
+            preview_tail = target
+        return ActionAdmissionPlan(tuple(candidates), stale, occupied)
 
-    def next(self) -> Optional[CoordinatedScheduledAction]:
-        if not self._slots:
+    def reserve(self, actions: Sequence[ScheduledAction]) -> None:
+        """Atomically append a validated action prefix to both channel queues."""
+
+        actions = tuple(actions)
+        preview_tail = self._reservation_tail_ns
+        half_period = self.period_ns // 2
+        for scheduled in actions:
+            target = int(scheduled.target_time_ns)
+            if preview_tail is not None and target <= preview_tail + half_period:
+                raise ValueError("reserved actions must append after the timeline tail")
+            preview_tail = target
+        for scheduled in actions:
+            target = int(scheduled.target_time_ns)
+            self._reservations[target] = scheduled
+            for channel in self._CHANNELS:
+                self._queues[channel][target] = scheduled
+            self._reservation_tail_ns = target
+
+    def next_dispatch(self) -> Optional[ChannelDispatch]:
+        candidates = []
+        for priority, channel in enumerate(self._CHANNELS):
+            queue = self._queues[channel]
+            if not queue:
+                continue
+            target = min(queue)
+            deadline = target - self._latency_ns[channel]
+            candidates.append((deadline, priority, channel, queue[target]))
+        if not candidates:
             return None
-        return self._slots[min(self._slots)]
+        deadline, _, channel, scheduled = min(candidates)
+        return ChannelDispatch(channel, scheduled, deadline)
 
-    def mark_dispatched(self, target_time_ns: int, channel: str) -> None:
-        scheduled = self._slots[int(target_time_ns)]
-        if channel == "robot":
-            scheduled.robot_dispatched = True
-        elif channel == "gripper":
-            scheduled.gripper_dispatched = True
-        else:
+    def consume(self, channel: str, target_time_ns: int) -> bool:
+        """Consume one channel event and return whether its timestep is complete."""
+
+        if channel not in self._queues:
             raise ValueError(f"unsupported action channel {channel!r}")
+        target = int(target_time_ns)
+        self._queues[channel].pop(target)
+        return all(target not in queue for queue in self._queues.values())
 
-    def remove(self, target_time_ns: int) -> CoordinatedScheduledAction:
-        return self._slots.pop(int(target_time_ns))
+    def future_reservations(self, now_ns: int) -> Tuple[ScheduledAction, ...]:
+        self.prune_reservations(now_ns)
+        return tuple(
+            self._reservations[target]
+            for target in sorted(self._reservations)
+            if target > int(now_ns)
+        )
 
-    def coverage_end_ns(self) -> Optional[int]:
-        return max(self._slots) if self._slots else None
+    def prune_reservations(self, now_ns: int) -> int:
+        removable = [
+            target
+            for target in self._reservations
+            if target <= int(now_ns)
+            and all(target not in queue for queue in self._queues.values())
+        ]
+        for target in removable:
+            del self._reservations[target]
+        return len(removable)
+
+    def coverage_end_ns(self, now_ns: int) -> Optional[int]:
+        future = self.future_reservations(now_ns)
+        return future[-1].target_time_ns if future else None
+
+    def pending_count(self, channel: str) -> int:
+        if channel not in self._queues:
+            raise ValueError(f"unsupported action channel {channel!r}")
+        return len(self._queues[channel])
+
+    @property
+    def reservation_tail_ns(self) -> Optional[int]:
+        return self._reservation_tail_ns
+
+    @property
+    def last_reserved_action(self) -> Optional[ScheduledAction]:
+        if self._reservation_tail_ns is None:
+            return None
+        return self._reservations.get(self._reservation_tail_ns)
 
     def clear(self) -> None:
-        self._slots.clear()
+        for queue in self._queues.values():
+            queue.clear()
+        self._reservations.clear()
+        self._reservation_tail_ns = None
 
     def __len__(self) -> int:
-        return len(self._slots)
+        return len(set(self._queues["arm"]) | set(self._queues["gripper"]))

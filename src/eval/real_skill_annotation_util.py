@@ -1038,6 +1038,10 @@ class RealSkillAnnotator(SkillAnnotator):
                 # leg was dropped. Missing real contact forces must not
                 # reset the state before the width transition is checked.
                 state_annotation_inputs["part_contact_forces"][part2.name] = None
+            if (
+                part_state_before_update in {"insert", "screw"}
+                or self._current_gripper_event == "opened"
+            ):
                 gripper_threshold = float(
                     furniture_bench_config["robot"]["max_gripper_width"][
                         part2._gripper_width_key

@@ -12,9 +12,11 @@ from ipdb import set_trace as bp  # noqa
 
 
 LEGACY_224_SPATIAL_TRANSFORM = "legacy-224"
+CENTER_CROP_224_SPATIAL_TRANSFORM = "center-crop-224"
 NO_SPATIAL_TRANSFORM = "none"
 SUPPORTED_IMAGE_SPATIAL_TRANSFORMS = (
     LEGACY_224_SPATIAL_TRANSFORM,
+    CENTER_CROP_224_SPATIAL_TRANSFORM,
     NO_SPATIAL_TRANSFORM,
 )
 NATIVE_RGBD_SIZE = (240, 320)
@@ -142,6 +144,11 @@ class WristCameraTransform(nn.Module):
                 _validate_native_size(x, "Wrist")
                 return torch.cat([rgb, depth], dim=1)
 
+            if self.spatial_transform == CENTER_CROP_224_SPATIAL_TRANSFORM:
+                rgb = F.center_crop(rgb, self.target_size)
+                depth = F.center_crop(depth, self.target_size)
+                return torch.cat([rgb, depth], dim=1)
+
             # 关键：必须分开 Resize 保持深度精度
             rgb = F.resize(
                 rgb,
@@ -161,6 +168,8 @@ class WristCameraTransform(nn.Module):
             if self.spatial_transform == NO_SPATIAL_TRANSFORM:
                 _validate_native_size(x, "Wrist")
                 return x
+            if self.spatial_transform == CENTER_CROP_224_SPATIAL_TRANSFORM:
+                return F.center_crop(x, self.target_size)
             return F.resize(
                 x,
                 self.target_size,

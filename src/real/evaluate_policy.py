@@ -17,12 +17,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import select
 import signal
 import sys
 import termios
+import threading
 import time
 import tty
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
@@ -37,7 +40,7 @@ from src.real.deoxys_runtime import (
     interpolate_robot_state,
     robot_sample_from_record,
 )
-from src.real.time_alignment import CoordinatedActionBuffer, LatencyProfile
+from src.real.time_alignment import IndependentActionQueues, LatencyProfile
 
 
 # Keep this target identical to
@@ -119,6 +122,234 @@ class EvalEventLog:
 
     def close(self) -> None:
         self.file.close()
+
+
+@dataclass(frozen=True)
+class PolicyInferenceRequest:
+    rollout_generation: int
+    query_id: int
+    observation: Mapping[str, Any]
+    timing: Mapping[str, Any]
+    period_ns: int
+    warmstart_indices: Tuple[int, ...]
+    warmstart_actions: np.ndarray
+
+
+@dataclass(frozen=True)
+class PolicyInferenceResult:
+    request: PolicyInferenceRequest
+    inference_start_ns: int
+    inference_end_ns: int
+    chunk: Optional[np.ndarray] = None
+    error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class PolicyInferenceReset:
+    reason: str
+
+
+class AsyncPolicyInference:
+    """Run policy inference off the hardware dispatch thread."""
+
+    _STOP = object()
+
+    def __init__(self, actor, *, device: str, binary_gripper: bool):
+        from src.behavior.diffusion import DiffusionPolicy
+
+        self.actor = actor
+        self.device = device
+        self.binary_gripper = bool(binary_gripper)
+        self.is_diffusion = isinstance(actor, DiffusionPolicy)
+        self._requests = queue.Queue()
+        self._results = queue.SimpleQueue()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="rr-policy-inference",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def submit(self, request: PolicyInferenceRequest) -> bool:
+        try:
+            self._requests.put_nowait(request)
+        except queue.Full:
+            return False
+        return True
+
+    def poll(self) -> Optional[PolicyInferenceResult]:
+        try:
+            return self._results.get_nowait()
+        except queue.Empty:
+            return None
+
+    def reset(self, reason: str) -> None:
+        """Reset actor queues and warm-start state on the worker thread."""
+
+        self._requests.put_nowait(PolicyInferenceReset(reason=str(reason)))
+
+    def stop(self) -> None:
+        if not self._thread.is_alive():
+            return
+        self._requests.put(self._STOP)
+        self._thread.join(timeout=5.0)
+
+    def _run(self) -> None:
+        active_generation = None
+        previous_observation_time_ns = None
+        while True:
+            request = self._requests.get()
+            if request is self._STOP:
+                return
+            if isinstance(request, PolicyInferenceReset):
+                self.actor.reset()
+                active_generation = None
+                previous_observation_time_ns = None
+                continue
+            if request.rollout_generation != active_generation:
+                self.actor.reset()
+                active_generation = request.rollout_generation
+                previous_observation_time_ns = None
+
+            inference_start_ns = time.time_ns()
+            try:
+                policy_obs = _policy_observation(
+                    request.observation,
+                    actor=self.actor,
+                    device=self.device,
+                    binary_gripper=self.binary_gripper,
+                )
+                sampling_kwargs = {}
+                if self.is_diffusion:
+                    shift_steps = _prediction_shift_steps(
+                        current_observation_time_ns=int(
+                            request.timing["observation_time_ns"]
+                        ),
+                        previous_observation_time_ns=previous_observation_time_ns,
+                        period_ns=request.period_ns,
+                        default_steps=self.actor.action_horizon,
+                    )
+                    sampling_kwargs["warmstart_shift_steps"] = shift_steps
+                    if request.warmstart_indices:
+                        import torch
+
+                        warm_actions = torch.as_tensor(
+                            request.warmstart_actions,
+                            device=self.device,
+                            dtype=torch.float32,
+                        ).unsqueeze(0)
+                        sampling_kwargs["warmstart_nactions"] = self.actor.normalizer(
+                            warm_actions, "action", forward=True
+                        )
+                        sampling_kwargs["warmstart_indices"] = (
+                            request.warmstart_indices
+                        )
+                chunk_tensor = self.actor.action_chunk(
+                    policy_obs,
+                    **sampling_kwargs,
+                )
+                if chunk_tensor.shape[0] != 1:
+                    raise ValueError("real evaluation requires policy batch size 1")
+                chunk = chunk_tensor[0].detach().cpu().numpy()
+                inference_end_ns = time.time_ns()
+                previous_observation_time_ns = int(
+                    request.timing["observation_time_ns"]
+                )
+                result = PolicyInferenceResult(
+                    request=request,
+                    inference_start_ns=inference_start_ns,
+                    inference_end_ns=inference_end_ns,
+                    chunk=chunk,
+                )
+            except Exception as exc:
+                inference_end_ns = time.time_ns()
+                result = PolicyInferenceResult(
+                    request=request,
+                    inference_start_ns=inference_start_ns,
+                    inference_end_ns=inference_end_ns,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            self._results.put(result)
+
+
+def _prediction_shift_steps(
+    *,
+    current_observation_time_ns: int,
+    previous_observation_time_ns: Optional[int],
+    period_ns: int,
+    default_steps: int,
+) -> int:
+    """Convert actual observation elapsed time to a prediction-grid shift."""
+
+    if previous_observation_time_ns is None:
+        return int(default_steps)
+    elapsed_ns = int(current_observation_time_ns) - int(
+        previous_observation_time_ns
+    )
+    return max(0, int(round(elapsed_ns / int(period_ns))))
+
+
+def _channel_action_expired(
+    *,
+    command_start_ns: int,
+    target_time_ns: int,
+    command_deadline_ns: int,
+    max_lateness_ms: float,
+) -> bool:
+    return bool(
+        int(command_start_ns) >= int(target_time_ns)
+        or int(command_start_ns) - int(command_deadline_ns)
+        > float(max_lateness_ms) * 1e6
+    )
+
+
+def _gripper_dispatch_decision(
+    *,
+    desired_sign: float,
+    last_sign: Optional[float],
+    command_start_ns: int,
+    target_time_ns: int,
+    command_deadline_ns: int,
+    max_lateness_ms: float,
+) -> Tuple[bool, bool]:
+    """Return ``(changed, expired)``; same-sign no-ops never expire."""
+
+    changed = last_sign is None or float(desired_sign) != float(last_sign)
+    expired = changed and _channel_action_expired(
+        command_start_ns=command_start_ns,
+        target_time_ns=target_time_ns,
+        command_deadline_ns=command_deadline_ns,
+        max_lateness_ms=max_lateness_ms,
+    )
+    return changed, expired
+
+
+def _queue_warmstart(
+    action_queues: IndependentActionQueues,
+    *,
+    observation_time_ns: int,
+    period_ns: int,
+    pred_horizon: int,
+    action_dim: int,
+) -> Tuple[Tuple[int, ...], np.ndarray]:
+    """Map immutable future reservations onto one policy prediction grid."""
+
+    indices = []
+    actions = []
+    for scheduled in action_queues.future_reservations(observation_time_ns):
+        delta_ns = scheduled.target_time_ns - int(observation_time_ns)
+        index = int(round(delta_ns / period_ns))
+        if index < 0 or index >= pred_horizon:
+            continue
+        if abs(delta_ns - index * period_ns) > period_ns // 2:
+            continue
+        if index in indices:
+            continue
+        indices.append(index)
+        actions.append(np.asarray(scheduled.action).copy())
+    if not actions:
+        return (), np.empty((0, action_dim), dtype=np.float32)
+    return tuple(indices), np.asarray(actions, dtype=np.float32)
 
 
 def _load_actor(checkpoint_path: Path, config_path: Optional[Path], device: str):
@@ -469,6 +700,22 @@ def _parse_args(argv=None):
     parser.add_argument("--prompt-depth-model", choices=("vits", "vitl", "vits-transparent"), default="vitl")
     parser.add_argument("--prompt-depth-device", default="cuda")
     parser.add_argument("--prompt-depth-max-size", type=int, default=448)
+    parser.add_argument(
+        "--show-input-dashboard",
+        action="store_true",
+        help=(
+            "show one OpenCV page with every RGB-D, annotation, proprioceptive "
+            "and action value used by each policy query"
+        ),
+    )
+    parser.add_argument(
+        "--save-input-video",
+        action="store_true",
+        help=(
+            "save every successful query's front/wrist RGB-D inputs as one "
+            "2x2 MP4 from rollout begin to end"
+        ),
+    )
     parser.add_argument("--log-path", type=Path, default=None)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument(
@@ -561,6 +808,9 @@ def _initialize_policy_runtime(args):
             "mode": "execute" if args.execute else "dry_run",
             "checkpoint": str(args.checkpoint.expanduser().resolve()),
             "task": args.task,
+            "annotation_mode": _annotation_mode(cfg),
+            "input_dashboard_enabled": args.show_input_dashboard,
+            "input_video_enabled": args.save_input_video,
             "frequency": args.frequency,
             "execution_frequency_hz": args.frequency,
             "action_period_ms": period_ns / 1e6,
@@ -620,12 +870,16 @@ def main(argv=None) -> int:
     )
     from src.data_processing.offline_image_annotations import annotate_observation_image
     from src.eval.real_skill_annotation_util import RealSkillAnnotationSession
+    from src.real.input_dashboard import EvalInputDashboard, EvalInputVideoRecorder
 
     camera = None
     worker = None
     robot = None
     event_log = None
     command_reader = None
+    dashboard = None
+    video_recorder = None
+    inference_worker = None
     try:
         # librealsense and CUDA allocator initialization conflict on this host
         # when CUDA wins the ordering race.  Start both pipelines first and keep
@@ -663,14 +917,36 @@ def main(argv=None) -> int:
     period_s = period_ns / 1e9
     print(f"mode={'EXECUTE' if args.execute else 'DRY-RUN'} log={event_log.path}")
 
-    action_buffer = CoordinatedActionBuffer(period_ns)
+    robot_latency_ns = int(round(latency.robot_action_ms * 1e6))
+    gripper_latency_ns = int(round(latency.gripper_action_ms * 1e6))
+    stale_guard_ns = int(round(latency.action_stale_guard_ms * 1e6))
+    common_lead_ns = max(robot_latency_ns, gripper_latency_ns) + stale_guard_ns
+    action_queues = IndependentActionQueues(
+        period_ns,
+        arm_latency_ns=robot_latency_ns,
+        gripper_latency_ns=gripper_latency_ns,
+    )
     validated_actions = {}
+    failed_channels = {}
     annotation_mode = _annotation_mode(cfg)
+    dashboard = EvalInputDashboard(
+        enabled=args.show_input_dashboard,
+        checkpoint=args.checkpoint.expanduser().resolve(),
+        actor=actor,
+    )
+    video_recorder = EvalInputVideoRecorder(
+        enabled=args.save_input_video,
+        fps=args.frequency / args.query_interval_steps,
+    )
     annotation_session = None
     last_prompt_token = None
     last_target_pose = None
+    last_reserved_pose = None
     last_gripper_sign = None
     query_id = 0
+    rollout_generation = 0
+    inference_inflight = False
+    pending_dashboard = None
     executed_steps = 0
     rollout_executed_steps = 0
     rollout_index = 0
@@ -708,6 +984,13 @@ def main(argv=None) -> int:
             has_gripper=True,
             use_visualizer=False,
             automatic_gripper_reset=False,
+        )
+        inference_worker = AsyncPolicyInference(
+            actor,
+            device=args.device,
+            binary_gripper=normalizer_expects_binary_gripper_width(
+                actor.normalizer
+            ),
         )
         kinematics = PandaKinematics()
         if model_requires_skill_input(cfg) or annotation_mode != "none":
@@ -782,20 +1065,46 @@ def main(argv=None) -> int:
             nonlocal rollout_executed_steps, rollout_index
             nonlocal consecutive_rejections, next_query_ns, next_hold_ns
             nonlocal last_prompt_token, last_target_pose, last_hold_status_ns
+            nonlocal last_reserved_pose, rollout_generation, pending_dashboard
             if rollout_active:
                 print("BEGIN ignored: rollout is already active", flush=True)
                 return
-            action_buffer.clear()
+            action_queues.clear()
             validated_actions.clear()
+            failed_channels.clear()
+            inference_worker.reset("operator_begin")
             reset_annotation("operator_begin")
             rollout_index += 1
+            rollout_generation += 1
             rollout_executed_steps = 0
             consecutive_rejections = 0
             next_query_ns = 0
             last_prompt_token = None
             last_hold_status_ns = 0
+            pending_dashboard = None
+            video_path = event_log.path.with_name(
+                f"{event_log.path.stem}-rollout-{rollout_index:03d}-rgbd-grid.mp4"
+            )
+            try:
+                started_video_path = video_recorder.start(video_path)
+                if started_video_path is not None:
+                    event_log.write(
+                        "input_video_started",
+                        rollout_index=rollout_index,
+                        path=started_video_path,
+                        fps=video_recorder.fps,
+                    )
+            except Exception as exc:
+                video_recorder.close()
+                event_log.write(
+                    "input_video_failed",
+                    rollout_index=rollout_index,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                print(f"INPUT VIDEO disabled for this rollout: {exc}", flush=True)
             warm_pose = np.asarray(robot.last_eef_pose, dtype=np.float64)
             last_target_pose = warm_pose.copy()
+            last_reserved_pose = warm_pose.copy()
             if args.execute:
                 warm_action = np.r_[
                     warm_pose[:3, 3],
@@ -838,10 +1147,18 @@ def main(argv=None) -> int:
 
         def end_rollout(reason):
             nonlocal rollout_active, rollout_started_monotonic
-            nonlocal last_target_pose, next_hold_ns
+            nonlocal last_target_pose, last_reserved_pose, next_hold_ns
             nonlocal quit_requested
-            action_buffer.clear()
+            if video_recorder.path is not None:
+                event_log.write(
+                    "input_video_stopped",
+                    rollout_index=rollout_index,
+                    **video_recorder.close(),
+                )
+            action_queues.clear()
             validated_actions.clear()
+            failed_channels.clear()
+            inference_worker.reset(reason)
             if rollout_active and args.execute:
                 measured_pose = np.asarray(robot.last_eef_pose, dtype=np.float64)
                 hold = np.r_[
@@ -857,6 +1174,7 @@ def main(argv=None) -> int:
                     enforce_control_frequency=False,
                 )
                 last_target_pose = measured_pose.copy()
+                last_reserved_pose = measured_pose.copy()
                 next_hold_ns = time.time_ns() + period_ns
             event_log.write(
                 "rollout_ended",
@@ -922,6 +1240,7 @@ def main(argv=None) -> int:
                         ),
                     )
                     last_target_pose = None
+                    inference_worker.reset("operator_reset")
                     if reset_ok:
                         last_gripper_sign = (
                             1.0
@@ -980,10 +1299,427 @@ def main(argv=None) -> int:
             if prompt_result is not None and prompt_result.get("camera_sample") is not None:
                 prompt_token = prompt_result["camera_sample"].get("front_frame_number")
 
+            dispatch_failed = False
+            while True:
+                dispatch = action_queues.next_dispatch()
+                if dispatch is None:
+                    break
+                command_start_ns = time.time_ns()
+                if command_start_ns < dispatch.command_deadline_ns:
+                    break
+                scheduled_action = dispatch.scheduled
+                target_time_ns = scheduled_action.target_time_ns
+                lateness_ns = command_start_ns - dispatch.command_deadline_ns
+                try:
+                    validated = validated_actions[target_time_ns]
+                    if dispatch.channel == "gripper":
+                        sign = validated.gripper_sign
+                        changed, expired = _gripper_dispatch_decision(
+                            desired_sign=sign,
+                            last_sign=last_gripper_sign,
+                            command_start_ns=command_start_ns,
+                            target_time_ns=target_time_ns,
+                            command_deadline_ns=dispatch.command_deadline_ns,
+                            max_lateness_ms=args.max_action_lateness_ms,
+                        )
+                        # A repeated gripper state is a timeline no-op.  It is
+                        # consumed even when its theoretical send deadline has
+                        # passed, and therefore cannot poison later arm events.
+                        if expired:
+                            failed_channels.setdefault(target_time_ns, set()).add(
+                                "gripper"
+                            )
+                            complete = action_queues.consume(
+                                "gripper", target_time_ns
+                            )
+                            consecutive_rejections += 1
+                            next_query_ns = min(
+                                next_query_ns, time.time_ns() + period_ns
+                            )
+                            event_log.write(
+                                "stale_channel_action_discarded",
+                                channel="gripper",
+                                target_time_ns=target_time_ns,
+                                command_deadline_ns=dispatch.command_deadline_ns,
+                                lateness_ms=lateness_ns / 1e6,
+                                query_id=scheduled_action.query_id,
+                                chunk_index=scheduled_action.chunk_index,
+                                arm_queue_pending=action_queues.pending_count("arm"),
+                                gripper_queue_pending=action_queues.pending_count(
+                                    "gripper"
+                                ),
+                            )
+                        else:
+                            send_ns = command_start_ns
+                            if changed and args.execute:
+                                robot.gripper_control(sign)
+                                send_ns = robot.last_gripper_command_wall_time_ns
+                            if changed:
+                                last_gripper_sign = sign
+                            complete = action_queues.consume(
+                                "gripper", target_time_ns
+                            )
+                            event_log.write(
+                                "gripper_action",
+                                target_time_ns=target_time_ns,
+                                command_deadline_ns=dispatch.command_deadline_ns,
+                                send_wall_time_ns=send_ns,
+                                dispatch_lateness_ms=(
+                                    send_ns - dispatch.command_deadline_ns
+                                )
+                                / 1e6,
+                                target_residual_ms=(send_ns - target_time_ns) / 1e6,
+                                query_id=scheduled_action.query_id,
+                                chunk_index=scheduled_action.chunk_index,
+                                gripper_sign=sign,
+                                sign_changed=changed,
+                                no_op=not changed,
+                                executed=bool(args.execute and changed),
+                                arm_queue_pending=action_queues.pending_count("arm"),
+                                gripper_queue_pending=action_queues.pending_count(
+                                    "gripper"
+                                ),
+                            )
+                    else:
+                        expired = _channel_action_expired(
+                            command_start_ns=command_start_ns,
+                            target_time_ns=target_time_ns,
+                            command_deadline_ns=dispatch.command_deadline_ns,
+                            max_lateness_ms=args.max_action_lateness_ms,
+                        )
+                        if expired:
+                            failed_channels.setdefault(target_time_ns, set()).add(
+                                "arm"
+                            )
+                            complete = action_queues.consume("arm", target_time_ns)
+                            consecutive_rejections += 1
+                            next_query_ns = min(
+                                next_query_ns, time.time_ns() + period_ns
+                            )
+                            event_log.write(
+                                "stale_channel_action_discarded",
+                                channel="arm",
+                                target_time_ns=target_time_ns,
+                                command_deadline_ns=dispatch.command_deadline_ns,
+                                lateness_ms=lateness_ns / 1e6,
+                                query_id=scheduled_action.query_id,
+                                chunk_index=scheduled_action.chunk_index,
+                                arm_queue_pending=action_queues.pending_count("arm"),
+                                gripper_queue_pending=action_queues.pending_count(
+                                    "gripper"
+                                ),
+                            )
+                        else:
+                            target_pose = np.eye(4)
+                            target_pose[:3, :3] = validated.rotation_matrix
+                            target_pose[:3, 3] = validated.position
+                            send_ns = command_start_ns
+                            if args.execute:
+                                command_result = robot.control(
+                                    controller_type="OSC_POSE",
+                                    action=validated.deoxys_action(),
+                                    controller_cfg=controller_cfg,
+                                    control_gripper=False,
+                                    enforce_control_frequency=False,
+                                )
+                                send_ns = command_result[
+                                    "robot_command_wall_time_ns"
+                                ]
+                            last_target_pose = target_pose
+                            complete = action_queues.consume("arm", target_time_ns)
+                            event_log.write(
+                                "robot_action",
+                                target_time_ns=target_time_ns,
+                                command_deadline_ns=dispatch.command_deadline_ns,
+                                send_wall_time_ns=send_ns,
+                                dispatch_lateness_ms=(
+                                    send_ns - dispatch.command_deadline_ns
+                                )
+                                / 1e6,
+                                target_residual_ms=(send_ns - target_time_ns) / 1e6,
+                                query_id=scheduled_action.query_id,
+                                chunk_index=scheduled_action.chunk_index,
+                                policy_action=scheduled_action.action,
+                                deoxys_action=validated.deoxys_action(),
+                                executed=args.execute,
+                                arm_queue_pending=action_queues.pending_count("arm"),
+                                gripper_queue_pending=action_queues.pending_count(
+                                    "gripper"
+                                ),
+                            )
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
+                    event_log.write(
+                        "action_dispatch_failed",
+                        channel=dispatch.channel,
+                        target_time_ns=target_time_ns,
+                        query_id=scheduled_action.query_id,
+                        chunk_index=scheduled_action.chunk_index,
+                        error=error,
+                    )
+                    print(
+                        f"ERROR dispatch channel={dispatch.channel}: {error}",
+                        flush=True,
+                    )
+                    dispatch_failed = True
+                    break
+
+                if complete:
+                    failures = sorted(failed_channels.pop(target_time_ns, set()))
+                    validated_actions.pop(target_time_ns, None)
+                    next_hold_ns = target_time_ns + period_ns
+                    if failures:
+                        event_log.write(
+                            "coordinated_action_incomplete",
+                            target_time_ns=target_time_ns,
+                            query_id=scheduled_action.query_id,
+                            chunk_index=scheduled_action.chunk_index,
+                            failed_channels=failures,
+                        )
+                    else:
+                        executed_steps += 1
+                        rollout_executed_steps += 1
+                        consecutive_rejections = 0
+                        event_log.write(
+                            "coordinated_action_complete",
+                            target_time_ns=target_time_ns,
+                            query_id=scheduled_action.query_id,
+                            chunk_index=scheduled_action.chunk_index,
+                            arm_queue_pending=action_queues.pending_count("arm"),
+                            gripper_queue_pending=action_queues.pending_count(
+                                "gripper"
+                            ),
+                        )
+                        print(
+                            f"STEP rollout={rollout_index} "
+                            f"step={rollout_executed_steps}/{args.max_steps} "
+                            f"total={executed_steps} query={scheduled_action.query_id} "
+                            f"chunk={scheduled_action.chunk_index} "
+                            f"xyz={last_target_pose[:3, 3].round(4).tolist()}",
+                            flush=True,
+                        )
+
+            if dispatch_failed:
+                end_rollout("action_dispatch_failed")
+                continue
+
+            next_dispatch = action_queues.next_dispatch()
+            result_slack_ns = (
+                None
+                if next_dispatch is None
+                else next_dispatch.command_deadline_ns - time.time_ns()
+            )
+            inference_result = (
+                inference_worker.poll()
+                if result_slack_ns is None or result_slack_ns > 20_000_000
+                else None
+            )
+            if inference_result is not None:
+                inference_inflight = False
+                request = inference_result.request
+                if (
+                    rollout_active
+                    and request.rollout_generation == rollout_generation
+                ):
+                    if inference_result.error is not None:
+                        consecutive_rejections += 1
+                        next_query_ns = min(
+                            next_query_ns, time.time_ns() + period_ns
+                        )
+                        event_log.write(
+                            "policy_query_completed",
+                            query_id=request.query_id,
+                            succeeded=False,
+                            error=inference_result.error,
+                            inference_latency_ms=(
+                                inference_result.inference_end_ns
+                                - inference_result.inference_start_ns
+                            )
+                            / 1e6,
+                        )
+                    else:
+                        chunk = inference_result.chunk
+                        target_times = int(
+                            request.timing["observation_time_ns"]
+                        ) + np.arange(len(chunk), dtype=np.int64) * period_ns
+                        plan = action_queues.plan_update(
+                            chunk,
+                            target_times,
+                            query_id=request.query_id,
+                            admission_cutoff_ns=(
+                                inference_result.inference_end_ns + common_lead_ns
+                            ),
+                        )
+                        valid_prefix = []
+                        reference = (
+                            last_reserved_pose
+                            if last_reserved_pose is not None
+                            else np.asarray(robot.last_eef_pose, dtype=np.float64)
+                        )
+                        validation_error = None
+                        for scheduled in plan.candidates:
+                            try:
+                                validated = validate_absolute_action(
+                                    scheduled.action,
+                                    reference_pose=reference,
+                                    period_s=period_s,
+                                    limits=limits,
+                                )
+                            except Exception as exc:
+                                validation_error = f"{type(exc).__name__}: {exc}"
+                                consecutive_rejections += 1
+                                event_log.write(
+                                    "action_rejected",
+                                    target_time_ns=scheduled.target_time_ns,
+                                    query_id=scheduled.query_id,
+                                    chunk_index=scheduled.chunk_index,
+                                    error=validation_error,
+                                )
+                                break
+                            valid_prefix.append(scheduled)
+                            validated_actions[scheduled.target_time_ns] = validated
+                            reference = np.eye(4)
+                            reference[:3, :3] = validated.rotation_matrix
+                            reference[:3, 3] = validated.position
+
+                        action_queues.reserve(valid_prefix)
+                        if valid_prefix:
+                            last_reserved_pose = reference
+                        coverage_end = action_queues.coverage_end_ns(
+                            inference_result.inference_end_ns
+                        )
+                        minimum_coverage = (
+                            inference_result.inference_end_ns
+                            + common_lead_ns
+                            + args.min_future_actions * period_ns
+                        )
+                        scheduled = bool(
+                            coverage_end is not None
+                            and coverage_end >= minimum_coverage
+                        )
+                        if not scheduled or validation_error is not None:
+                            next_query_ns = min(
+                                next_query_ns, time.time_ns() + period_ns
+                            )
+                        observation = request.observation
+                        video_recorder.submit(observation)
+                        skill = observation.get("skill")
+                        gripper_prediction = np.sign(chunk[:, -1])
+                        near_gripper_prediction = gripper_prediction[
+                            plan.stale : min(
+                                plan.stale + args.query_interval_steps,
+                                len(gripper_prediction),
+                            )
+                        ]
+                        event_log.write(
+                            "policy_query_completed",
+                            query_id=request.query_id,
+                            succeeded=True,
+                            **request.timing,
+                            inference_start_wall_time_ns=(
+                                inference_result.inference_start_ns
+                            ),
+                            inference_end_wall_time_ns=(
+                                inference_result.inference_end_ns
+                            ),
+                            inference_latency_ms=(
+                                inference_result.inference_end_ns
+                                - inference_result.inference_start_ns
+                            )
+                            / 1e6,
+                            target_times_ns=target_times,
+                            action_chunk=chunk,
+                            actions_accepted=len(valid_prefix),
+                            common_stale_prefix=plan.stale,
+                            occupied_preserved=plan.occupied,
+                            common_admission_lead_ms=common_lead_ns / 1e6,
+                            scheduled=scheduled,
+                            validation_error=validation_error,
+                            arm_queue_pending=action_queues.pending_count("arm"),
+                            gripper_queue_pending=action_queues.pending_count(
+                                "gripper"
+                            ),
+                            immutable_coverage_end_ns=coverage_end,
+                            warmstart_mapped_count=len(request.warmstart_indices),
+                            robot_state=observation["robot_state"],
+                            skill=skill,
+                            skill_state=observation.get("skill_state"),
+                            assembly_step=observation.get("assembly_step"),
+                            guidance_point=observation.get("guidance_point"),
+                            guidance_point_2d=observation.get("guidance_point_2d"),
+                            parts_poses=observation.get("parts_poses"),
+                            parts_founds=observation.get("parts_founds"),
+                            parts_pose_valid=observation.get("parts_pose_valid"),
+                            real_annotation_debug=observation.get(
+                                "real_annotation_debug"
+                            ),
+                            annotation_mode=annotation_mode,
+                            gripper_open_predictions=int(
+                                np.count_nonzero(gripper_prediction < 0)
+                            ),
+                            gripper_closed_predictions=int(
+                                np.count_nonzero(gripper_prediction > 0)
+                            ),
+                            gripper_close_prediction_count=int(
+                                np.sum(gripper_prediction >= 0)
+                            ),
+                            gripper_close_near_window_count=int(
+                                np.sum(near_gripper_prediction >= 0)
+                            ),
+                        )
+                        print(
+                            f"QUERY rollout={rollout_index} q={request.query_id} "
+                            f"accepted={len(valid_prefix)} stale={plan.stale} "
+                            f"occupied={plan.occupied} scheduled={scheduled} "
+                            f"arm_q={action_queues.pending_count('arm')} "
+                            f"gripper_q={action_queues.pending_count('gripper')} "
+                            "close(all/next-window)="
+                            f"{int(np.sum(gripper_prediction >= 0))}/"
+                            f"{int(np.sum(near_gripper_prediction >= 0))} "
+                            f"inference={(inference_result.inference_end_ns - inference_result.inference_start_ns) / 1e6:.1f}ms",
+                            flush=True,
+                        )
+                        pending_dashboard = {
+                            "query_id": request.query_id,
+                            "observation": observation,
+                            "action_chunk": chunk,
+                            "timing": request.timing,
+                            "inference_latency_ms": (
+                                inference_result.inference_end_ns
+                                - inference_result.inference_start_ns
+                            )
+                            / 1e6,
+                            "actions_accepted": len(valid_prefix),
+                            "common_stale_prefix": plan.stale,
+                            "query_interval_steps": args.query_interval_steps,
+                            "scheduled": scheduled,
+                            "annotation_mode": annotation_mode,
+                            "occupied_preserved": plan.occupied,
+                            "warmstart_mapped_count": len(
+                                request.warmstart_indices
+                            ),
+                        }
+                else:
+                    event_log.write(
+                        "policy_query_result_discarded",
+                        query_id=request.query_id,
+                        result_rollout_generation=request.rollout_generation,
+                        active_rollout_generation=rollout_generation,
+                    )
+
+            now_ns = time.time_ns()
+            next_dispatch = action_queues.next_dispatch()
+            query_slack_ns = (
+                None
+                if next_dispatch is None
+                else next_dispatch.command_deadline_ns - now_ns
+            )
             if (
                 prompt_result is not None
                 and prompt_token != last_prompt_token
                 and now_ns >= next_query_ns
+                and not inference_inflight
+                and (query_slack_ns is None or query_slack_ns > 50_000_000)
             ):
                 try:
                     observation, timing = _build_aligned_observation(
@@ -1001,88 +1737,44 @@ def main(argv=None) -> int:
                             annotation_mode,
                             trajectory_camera_info=camera_info,
                         )
-                    policy_obs = _policy_observation(
-                        observation,
-                        actor=actor,
-                        device=args.device,
-                        binary_gripper=normalizer_expects_binary_gripper_width(
-                            actor.normalizer
-                        ),
+                    warmstart_indices, warmstart_actions = _queue_warmstart(
+                        action_queues,
+                        observation_time_ns=timing["observation_time_ns"],
+                        period_ns=period_ns,
+                        pred_horizon=actor.pred_horizon,
+                        action_dim=actor.action_dim,
                     )
-                    inference_start_ns = time.time_ns()
-                    chunk_tensor = actor.action_chunk(policy_obs)
-                    if chunk_tensor.shape[0] != 1:
-                        raise ValueError("real evaluation requires policy batch size 1")
-                    chunk = chunk_tensor[0].detach().cpu().numpy()
-                    inference_end_ns = time.time_ns()
-                    target_times = timing["observation_time_ns"] + np.arange(
-                        len(chunk), dtype=np.int64
-                    ) * period_ns
-                    robot_latency_ns = int(round(latency.robot_action_ms * 1e6))
-                    gripper_latency_ns = int(round(latency.gripper_action_ms * 1e6))
-                    stale_guard_ns = int(
-                        round(latency.action_stale_guard_ms * 1e6)
-                    )
-                    common_lead_ns = (
-                        max(robot_latency_ns, gripper_latency_ns)
-                        + stale_guard_ns
-                    )
-                    accepted, stale = action_buffer.update(
-                        chunk,
-                        target_times,
+                    request = PolicyInferenceRequest(
+                        rollout_generation=rollout_generation,
                         query_id=query_id,
-                        admission_cutoff_ns=inference_end_ns + common_lead_ns,
+                        observation=observation,
+                        timing=timing,
+                        period_ns=period_ns,
+                        warmstart_indices=warmstart_indices,
+                        warmstart_actions=warmstart_actions,
                     )
-                    validated_actions.clear()
-                    coverage_end = action_buffer.coverage_end_ns()
-                    minimum_coverage = (
-                        inference_end_ns
-                        + common_lead_ns
-                        + args.min_future_actions * period_ns
-                    )
-                    scheduled = (
-                        accepted > 0
-                        and coverage_end is not None
-                        and coverage_end >= minimum_coverage
-                    )
-                    if not scheduled:
-                        action_buffer.clear()
-                        validated_actions.clear()
-                        consecutive_rejections += 1
-                        next_query_ns = time.time_ns() + period_ns
+                    if not inference_worker.submit(request):
+                        raise RuntimeError("inference worker request queue is full")
+                    inference_inflight = True
+                    submitted_ns = time.time_ns()
                     event_log.write(
-                        "policy_query",
+                        "policy_query_submitted",
                         query_id=query_id,
-                        **timing,
-                        inference_start_wall_time_ns=inference_start_ns,
-                        inference_end_wall_time_ns=inference_end_ns,
-                        inference_latency_ms=(inference_end_ns - inference_start_ns) / 1e6,
-                        target_times_ns=target_times,
-                        action_chunk=chunk,
-                        actions_accepted=accepted,
-                        common_stale_prefix=stale,
-                        common_admission_lead_ms=common_lead_ns / 1e6,
-                        scheduled=scheduled,
-                        robot_state=observation["robot_state"],
-                        skill=observation.get("skill"),
-                    )
-                    print(
-                        f"QUERY rollout={rollout_index} q={query_id} "
-                        f"accepted={accepted} stale={stale} "
-                        f"scheduled={scheduled} "
-                        f"obs_age={timing['front_age_ms_at_build']:.1f}ms "
-                        f"inference={(inference_end_ns - inference_start_ns) / 1e6:.1f}ms",
-                        flush=True,
+                        rollout_generation=rollout_generation,
+                        observation_time_ns=timing["observation_time_ns"],
+                        submitted_wall_time_ns=submitted_ns,
+                        query_interval_steps=args.query_interval_steps,
+                        arm_queue_pending=action_queues.pending_count("arm"),
+                        gripper_queue_pending=action_queues.pending_count(
+                            "gripper"
+                        ),
+                        warmstart_mapped_count=len(warmstart_indices),
                     )
                     query_id += 1
                     next_query_ns = (
-                        now_ns + args.query_interval_steps * period_ns
-                        if scheduled
-                        else time.time_ns() + period_ns
+                        submitted_ns + args.query_interval_steps * period_ns
                     )
                 except Exception as exc:
-                    action_buffer.clear()
-                    validated_actions.clear()
                     consecutive_rejections += 1
                     next_query_ns = time.time_ns() + period_ns
                     error = f"{type(exc).__name__}: {exc}"
@@ -1101,236 +1793,53 @@ def main(argv=None) -> int:
                         )
                 last_prompt_token = prompt_token
 
-            scheduled_action = action_buffer.next()
-            if scheduled_action is not None:
-                target_time_ns = scheduled_action.target_time_ns
-                validated = validated_actions.get(target_time_ns)
-                if validated is None:
-                    reference = (
-                        last_target_pose
-                        if last_target_pose is not None
-                        else np.asarray(robot.last_eef_pose, dtype=np.float64)
-                    )
+            action_queues.prune_reservations(time.time_ns())
+
+            if pending_dashboard is not None:
+                next_dispatch = action_queues.next_dispatch()
+                dashboard_slack_ns = (
+                    None
+                    if next_dispatch is None
+                    else next_dispatch.command_deadline_ns - time.time_ns()
+                )
+                if dashboard_slack_ns is None or dashboard_slack_ns > 50_000_000:
                     try:
-                        validated = validate_absolute_action(
-                            scheduled_action.action,
-                            reference_pose=reference,
-                            period_s=period_s,
-                            limits=limits,
+                        coverage_end = action_queues.coverage_end_ns(
+                            time.time_ns()
                         )
-                        validated_actions[target_time_ns] = validated
-                    except Exception as exc:
-                        action_buffer.clear()
-                        validated_actions.clear()
-                        consecutive_rejections += 1
-                        next_query_ns = time.time_ns() + period_ns
-                        error = f"{type(exc).__name__}: {exc}"
-                        event_log.write(
-                            "action_rejected",
-                            target_time_ns=target_time_ns,
-                            error=error,
+                        dashboard_error = dashboard.show(
+                            **pending_dashboard,
+                            arm_queue_pending=action_queues.pending_count("arm"),
+                            gripper_queue_pending=action_queues.pending_count(
+                                "gripper"
+                            ),
+                            immutable_coverage_ms=(
+                                0.0
+                                if coverage_end is None
+                                else max(0.0, (coverage_end - time.time_ns()) / 1e6)
+                            ),
                         )
-                        if (
-                            consecutive_rejections == 1
-                            or consecutive_rejections % 5 == 0
-                        ):
+                        if dashboard_error is not None:
+                            event_log.write(
+                                "input_dashboard_failed",
+                                error=dashboard_error,
+                            )
                             print(
-                                f"REJECT action count={consecutive_rejections}/"
-                                f"{args.max_consecutive_rejections}: {error}",
+                                f"INPUT DASHBOARD disabled: {dashboard_error}",
                                 flush=True,
                             )
-                        scheduled_action = None
-
-            if scheduled_action is not None:
-                robot_latency_ns = int(round(latency.robot_action_ms * 1e6))
-                gripper_latency_ns = int(round(latency.gripper_action_ms * 1e6))
-                channels = sorted(
-                    (
-                        ("robot", robot_latency_ns),
-                        ("gripper", gripper_latency_ns),
-                    ),
-                    key=lambda item: scheduled_action.target_time_ns - item[1],
-                )
-                dispatch_failed = False
-                for channel, channel_latency_ns in channels:
-                    if (
-                        channel == "robot"
-                        and scheduled_action.robot_dispatched
-                    ) or (
-                        channel == "gripper"
-                        and scheduled_action.gripper_dispatched
-                    ):
-                        continue
-                    command_deadline_ns = (
-                        scheduled_action.target_time_ns - channel_latency_ns
-                    )
-                    command_start_ns = time.time_ns()
-                    if command_start_ns < command_deadline_ns:
-                        continue
-                    lateness_ns = command_start_ns - command_deadline_ns
-                    expired = (
-                        command_start_ns >= scheduled_action.target_time_ns
-                        or lateness_ns > args.max_action_lateness_ms * 1e6
-                    )
-                    if expired:
-                        partial = bool(
-                            scheduled_action.robot_dispatched
-                            or scheduled_action.gripper_dispatched
-                        )
-                        action_buffer.clear()
-                        validated_actions.clear()
-                        consecutive_rejections += 1
-                        next_query_ns = time.time_ns() + period_ns
-                        event_log.write(
-                            "stale_coordinated_action_discarded",
-                            channel=channel,
-                            partial_dispatch=partial,
-                            target_time_ns=scheduled_action.target_time_ns,
-                            command_deadline_ns=command_deadline_ns,
-                            lateness_ms=lateness_ns / 1e6,
-                        )
-                        print(
-                            f"DROP stale action channel={channel} "
-                            f"lateness={lateness_ns / 1e6:.1f}ms "
-                            f"count={consecutive_rejections}/"
-                            f"{args.max_consecutive_rejections}",
-                            flush=True,
-                        )
-                        dispatch_failed = True
-                        break
-                    try:
-                        if channel == "robot":
-                            target_pose = np.eye(4)
-                            target_pose[:3, :3] = validated.rotation_matrix
-                            target_pose[:3, 3] = validated.position
-                            send_ns = command_start_ns
-                            if args.execute:
-                                command_result = robot.control(
-                                    controller_type="OSC_POSE",
-                                    action=validated.deoxys_action(),
-                                    controller_cfg=controller_cfg,
-                                    control_gripper=False,
-                                    enforce_control_frequency=False,
-                                )
-                                send_ns = command_result[
-                                    "robot_command_wall_time_ns"
-                                ]
-                            last_target_pose = target_pose
-                            action_buffer.mark_dispatched(
-                                scheduled_action.target_time_ns, "robot"
-                            )
-                            event_log.write(
-                                "robot_action",
-                                target_time_ns=scheduled_action.target_time_ns,
-                                command_deadline_ns=command_deadline_ns,
-                                send_wall_time_ns=send_ns,
-                                deadline_residual_ms=(
-                                    send_ns - command_deadline_ns
-                                )
-                                / 1e6,
-                                target_residual_ms=(
-                                    send_ns - scheduled_action.target_time_ns
-                                )
-                                / 1e6,
-                                query_id=scheduled_action.query_id,
-                                chunk_index=scheduled_action.chunk_index,
-                                policy_action=scheduled_action.action,
-                                deoxys_action=validated.deoxys_action(),
-                                executed=args.execute,
-                            )
-                        else:
-                            sign = float(
-                                np.sign(scheduled_action.action[-1]) or -1.0
-                            )
-                            changed = (
-                                last_gripper_sign is None
-                                or sign != last_gripper_sign
-                            )
-                            send_ns = command_start_ns
-                            if changed and args.execute:
-                                robot.gripper_control(sign)
-                                send_ns = (
-                                    robot.last_gripper_command_wall_time_ns
-                                )
-                            if changed:
-                                last_gripper_sign = sign
-                            action_buffer.mark_dispatched(
-                                scheduled_action.target_time_ns, "gripper"
-                            )
-                            event_log.write(
-                                "gripper_action",
-                                target_time_ns=scheduled_action.target_time_ns,
-                                command_deadline_ns=command_deadline_ns,
-                                send_wall_time_ns=send_ns,
-                                deadline_residual_ms=(
-                                    send_ns - command_deadline_ns
-                                )
-                                / 1e6,
-                                target_residual_ms=(
-                                    send_ns - scheduled_action.target_time_ns
-                                )
-                                / 1e6,
-                                gripper_sign=sign,
-                                sign_changed=changed,
-                                executed=bool(args.execute and changed),
-                            )
                     except Exception as exc:
-                        partial = bool(
-                            scheduled_action.robot_dispatched
-                            or scheduled_action.gripper_dispatched
-                        )
-                        action_buffer.clear()
-                        validated_actions.clear()
-                        consecutive_rejections += 1
-                        next_query_ns = time.time_ns() + period_ns
-                        error = f"{type(exc).__name__}: {exc}"
                         event_log.write(
-                            "action_dispatch_failed",
-                            channel=channel,
-                            partial_dispatch=partial,
-                            target_time_ns=scheduled_action.target_time_ns,
-                            error=error,
+                            "input_dashboard_failed",
+                            error=f"{type(exc).__name__}: {exc}",
                         )
-                        print(
-                            f"ERROR dispatch channel={channel}: {error}",
-                            flush=True,
-                        )
-                        dispatch_failed = True
-                        break
-
-                if not dispatch_failed:
-                    refreshed = action_buffer.next()
-                    if (
-                        refreshed is not None
-                        and refreshed.target_time_ns
-                        == scheduled_action.target_time_ns
-                        and refreshed.complete
-                    ):
-                        action_buffer.remove(refreshed.target_time_ns)
-                        validated_actions.pop(refreshed.target_time_ns, None)
-                        executed_steps += 1
-                        rollout_executed_steps += 1
-                        consecutive_rejections = 0
-                        next_hold_ns = refreshed.target_time_ns + period_ns
-                        event_log.write(
-                            "coordinated_action_complete",
-                            target_time_ns=refreshed.target_time_ns,
-                            query_id=refreshed.query_id,
-                            chunk_index=refreshed.chunk_index,
-                        )
-                        print(
-                            f"STEP rollout={rollout_index} "
-                            f"step={rollout_executed_steps}/{args.max_steps} "
-                            f"total={executed_steps} query={refreshed.query_id} "
-                            f"chunk={refreshed.chunk_index} "
-                            f"xyz={last_target_pose[:3, 3].round(4).tolist()}",
-                            flush=True,
-                        )
+                        dashboard.close()
+                    pending_dashboard = None
 
             if (
                 args.execute
                 and last_target_pose is not None
-                and len(action_buffer) == 0
+                and len(action_queues) == 0
                 and time.time_ns() >= next_hold_ns
             ):
                 hold = np.concatenate(
@@ -1368,6 +1877,14 @@ def main(argv=None) -> int:
         event_log.write("rollout_stopped", executed_steps=executed_steps)
         if command_reader is not None:
             command_reader.close()
+        if inference_worker is not None:
+            inference_worker.stop()
+        if dashboard is not None:
+            dashboard.close()
+        if video_recorder is not None:
+            video_result = video_recorder.close()
+            if video_result["path"] is not None:
+                event_log.write("input_video_finalized", **video_result)
         if robot is not None:
             try:
                 if args.execute and last_target_pose is not None:

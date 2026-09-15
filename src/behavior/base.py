@@ -721,10 +721,10 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
         """
         raise NotImplementedError
 
-    def _sample_action_pred(self, nobs):
+    def _sample_action_pred(self, nobs, **sampling_kwargs):
         # Predict normalized action
         # (B, candidates, pred_horizon, action_dim)
-        naction = self._normalized_action(nobs)
+        naction = self._normalized_action(nobs, **sampling_kwargs)
 
         # unnormalize action
         # (B, pred_horizon, action_dim)
@@ -890,7 +890,11 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
         return self.actions.popleft()
 
     @torch.no_grad()
-    def action_chunk(self, obs: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def action_chunk(
+        self,
+        obs: Dict[str, torch.Tensor],
+        **sampling_kwargs,
+    ) -> torch.Tensor:
         """Predict and return a fresh timestampable action chunk.
 
         Real-world inference needs all future actions at once so they can be
@@ -907,7 +911,7 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
         while len(self.observations) < self.obs_horizon:
             self.observations.append(obs)
         nobs = self._normalized_obs(self.observations, flatten=self.flatten_obs)
-        predicted = self._sample_action_pred(nobs)
+        predicted = self._sample_action_pred(nobs, **sampling_kwargs)
         self.actions.clear()
         if not predicted:
             raise RuntimeError("Policy returned an empty action chunk")

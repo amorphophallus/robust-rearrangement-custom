@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from src.real.time_alignment import (
-    CoordinatedActionBuffer,
+    IndependentActionQueues,
     LatencyProfile,
     TimestampedActionBuffer,
     contiguous_segments,
@@ -166,25 +166,108 @@ class RealTimeAlignmentTest(unittest.TestCase):
         self.assertEqual(profile.common_action_lead_ms, 20)
         self.assertEqual(profile.latency_source, "estimated")
 
-    def test_coordinated_buffer_uses_one_common_stale_prefix(self):
-        buffer = CoordinatedActionBuffer(period_ns=100)
-
-        accepted, stale = buffer.update(
-            [[1, -1], [2, 1], [3, 1]],
-            [100, 200, 300],
+    def test_independent_queues_dispatch_gripper_5_6_7_before_arm_5_6_7(self):
+        queues = IndependentActionQueues(
+            period_ns=200,
+            arm_latency_ns=120,
+            gripper_latency_ns=642,
+        )
+        plan = queues.plan_update(
+            np.arange(16).reshape(8, 2),
+            np.arange(8) * 200,
             query_id=4,
-            admission_cutoff_ns=150,
+            admission_cutoff_ns=900,
+        )
+        self.assertEqual(plan.stale, 5)
+        self.assertEqual([item.chunk_index for item in plan.candidates], [5, 6, 7])
+        queues.reserve(plan.candidates)
+
+        order = []
+        while len(queues):
+            dispatch = queues.next_dispatch()
+            order.append((dispatch.channel, dispatch.scheduled.chunk_index))
+            queues.consume(dispatch.channel, dispatch.scheduled.target_time_ns)
+
+        self.assertEqual(
+            order,
+            [
+                ("gripper", 5),
+                ("gripper", 6),
+                ("gripper", 7),
+                ("arm", 5),
+                ("arm", 6),
+                ("arm", 7),
+            ],
         )
 
-        self.assertEqual((accepted, stale), (2, 1))
-        scheduled = buffer.next()
-        self.assertEqual(scheduled.target_time_ns, 200)
-        buffer.mark_dispatched(200, "gripper")
-        self.assertFalse(buffer.next().complete)
-        buffer.mark_dispatched(200, "robot")
-        self.assertTrue(buffer.next().complete)
-        buffer.remove(200)
-        self.assertEqual(buffer.next().target_time_ns, 300)
+    def test_overlap_preserves_occupied_timeline_and_only_appends_tail(self):
+        queues = IndependentActionQueues(
+            period_ns=200,
+            arm_latency_ns=120,
+            gripper_latency_ns=642,
+        )
+        initial = queues.plan_update(
+            [[1], [2], [3]],
+            [1000, 1200, 1400],
+            query_id=1,
+            admission_cutoff_ns=0,
+        )
+        queues.reserve(initial.candidates)
+
+        overlap = queues.plan_update(
+            [[10], [20], [30], [40]],
+            [1005, 1205, 1405, 1605],
+            query_id=2,
+            admission_cutoff_ns=0,
+        )
+
+        self.assertEqual(overlap.occupied, 3)
+        self.assertEqual(len(overlap.candidates), 1)
+        self.assertEqual(overlap.candidates[0].target_time_ns, 1605)
+        queues.reserve(overlap.candidates)
+        np.testing.assert_array_equal(
+            queues.future_reservations(0)[0].action,
+            [1],
+        )
+        self.assertEqual(queues.reservation_tail_ns, 1605)
+
+    def test_one_channel_consumption_does_not_clear_later_actions(self):
+        queues = IndependentActionQueues(
+            period_ns=200,
+            arm_latency_ns=120,
+            gripper_latency_ns=642,
+        )
+        plan = queues.plan_update(
+            [[1], [2]],
+            [1000, 1200],
+            query_id=1,
+            admission_cutoff_ns=0,
+        )
+        queues.reserve(plan.candidates)
+
+        self.assertFalse(queues.consume("gripper", 1000))
+        self.assertEqual(queues.pending_count("gripper"), 1)
+        self.assertEqual(queues.pending_count("arm"), 2)
+
+    def test_sent_reservation_remains_occupied_until_target_passes(self):
+        queues = IndependentActionQueues(
+            period_ns=200,
+            arm_latency_ns=120,
+            gripper_latency_ns=642,
+        )
+        plan = queues.plan_update(
+            [[1]], [1000], query_id=1, admission_cutoff_ns=0
+        )
+        queues.reserve(plan.candidates)
+        queues.consume("arm", 1000)
+        queues.consume("gripper", 1000)
+
+        self.assertEqual(len(queues.future_reservations(999)), 1)
+        self.assertEqual(len(queues.future_reservations(1000)), 0)
+        overlap = queues.plan_update(
+            [[2]], [1005], query_id=2, admission_cutoff_ns=0
+        )
+        self.assertEqual(overlap.occupied, 1)
 
 
 if __name__ == "__main__":
