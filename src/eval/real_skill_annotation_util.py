@@ -46,13 +46,16 @@ from src.common.guidance import GUIDANCE_SCHEMA_VERSION
 
 
 ANNOTATION_SOURCE = "real_skill_annotation_util"
-ANNOTATION_VERSION = 13
+ANNOTATION_VERSION = 15
 ANNOTATION_STATUS_KEY = "annotation_status"
 ANNOTATION_STATUS_ANNOTATED = "annotated"
 ANNOTATION_STATUS_UNANNOTATED = "unannotated"
 DEFAULT_POSE_TRACKING_POLICY = "april_tag_then_ee_rigid"
-SUPPORTED_FURNITURE = {"one_leg"}
+SUPPORTED_FURNITURE = {"one_leg", "round_table", "lamp"}
 _OBSTACLE_NAMES = ("obstacle_front", "obstacle_right", "obstacle_left")
+_DEFAULT_OBSTACLE_FRONT_POSE = np.array(
+    [0.0069, 0.3629, -0.0150, -1.0, 0.0, 0.0, 0.0], dtype=np.float32
+)
 PLACE_TARGET_POLICY_TABLETOP = "tabletop_max_xy_socket_aligned"
 _TABLETOP_SOCKET_SIGNS = (
     (1, 1.0, 1.0),
@@ -242,6 +245,7 @@ class RealSkillAnnotator(SkillAnnotator):
         self._place_rigid_reference_ee_pose_robot: Optional[np.ndarray] = None
         self._place_rigid_reference_part_pose_robot: Optional[np.ndarray] = None
         self._place_rigid_reference_frame: Optional[int] = None
+        self._obstacle_pose_source = "pickle_appended"
         self._frame_idx = -1
         self.stats = RealAnnotationStats()
 
@@ -259,6 +263,7 @@ class RealSkillAnnotator(SkillAnnotator):
         self._place_rigid_reference_ee_pose_robot = None
         self._place_rigid_reference_part_pose_robot = None
         self._place_rigid_reference_frame = None
+        self._obstacle_pose_source = "pickle_appended"
         self._frame_idx = -1
         self.stats = RealAnnotationStats()
 
@@ -518,14 +523,44 @@ class RealSkillAnnotator(SkillAnnotator):
             "guidance_robot": guidance_robot,
         }
 
+    def _round_table_leg_place_target_details(
+        self,
+        operated_part,
+        assemble_to: str,
+        annotation_inputs: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """Return a top-derived place point independent of the tracked leg pose."""
+        top_pose_robot = self._part_pose_robot_from_inputs(
+            assemble_to, annotation_inputs
+        )
+        target_leg_pose_robot = top_pose_robot @ torch.as_tensor(
+            operated_part.default_assembled_pose,
+            device=top_pose_robot.device,
+            dtype=top_pose_robot.dtype,
+        )
+        leg_length_m = self._longest_part_length(operated_part)
+        guidance_robot = target_leg_pose_robot[:3, 3].clone()
+        guidance_robot[2] += 0.25 * leg_length_m
+        return {
+            "target_leg_pose_robot": target_leg_pose_robot,
+            "leg_length_m": leg_length_m,
+            "z_offset_m": 0.25 * leg_length_m,
+            "guidance_robot": guidance_robot,
+        }
+
     def _obstacle_poses(self, observation: Mapping[str, Any]) -> Dict[str, np.ndarray]:
         poses = np.asarray(observation.get("parts_poses"), dtype=np.float32).reshape(-1)
         furniture_pose_size = len(self.furniture.parts) * 7
-        if poses.size < furniture_pose_size + 7:
+        if poses.size >= furniture_pose_size + 7:
+            front = poses[furniture_pose_size : furniture_pose_size + 7].copy()
+            self._obstacle_pose_source = "pickle_appended"
+        elif self.furniture_name == "one_leg":
             raise ValueError(
                 "one_leg real annotation requires the appended obstacle-front pose"
             )
-        front = poses[furniture_pose_size : furniture_pose_size + 7].copy()
+        else:
+            front = _DEFAULT_OBSTACLE_FRONT_POSE.copy()
+            self._obstacle_pose_source = "configured_default"
         if not np.isfinite(front).all() or np.linalg.norm(front[3:]) < 1e-6:
             raise ValueError("Invalid obstacle-front pose")
 
@@ -904,7 +939,415 @@ class RealSkillAnnotator(SkillAnnotator):
         }
         return fallback_inputs, debug
 
+    def _transition_pose_reliable(self, part_name: str) -> bool:
+        tracker = self._tracked_parts[part_name]
+        return tracker.source in {
+            "detected",
+            "relocalized_detection",
+            "ee_propagated",
+            "rejected_detection_ee",
+        }
+
+    @staticmethod
+    def _part_skill_snapshot(part) -> Dict[str, Any]:
+        names = (
+            "skill_state",
+            "skill_target_ee_pose_robot",
+            "skill_target_part_pose_robot",
+            "skill_target_anchor_pose_robot",
+            "skill_guidance_pose_robot",
+            "skill_target_gripper_width",
+            "skill_guidance_point_robot",
+            "skill_pinched_steps",
+            "skill_reverse_reset_steps",
+        )
+        snapshot = {}
+        for name in names:
+            if hasattr(part, name):
+                value = getattr(part, name)
+                snapshot[name] = value.clone() if torch.is_tensor(value) else value
+        return snapshot
+
+    @staticmethod
+    def _restore_part_skill(part, snapshot: Mapping[str, Any]) -> None:
+        for name, value in snapshot.items():
+            setattr(part, name, value)
+
+    @staticmethod
+    def _rotation_error_ignoring_local_axis(
+        current_rotation: torch.Tensor,
+        target_rotation: torch.Tensor,
+        *,
+        ignored_axis: int,
+    ) -> torch.Tensor:
+        """Compare the local axis direction while ignoring twist around it."""
+        current_axis = current_rotation[:, ignored_axis]
+        target_axis = target_rotation[:, ignored_axis]
+        cosine = torch.clamp(
+            torch.dot(current_axis, target_axis)
+            / (torch.linalg.norm(current_axis) * torch.linalg.norm(target_axis)),
+            -1.0,
+            1.0,
+        )
+        return torch.acos(cosine)
+
+    @staticmethod
+    def _part_pose_robot_from_inputs(
+        part_name: str, annotation_inputs: Mapping[str, Any]
+    ) -> torch.Tensor:
+        rb_states = annotation_inputs["rb_states"]
+        part_state = rb_states[annotation_inputs["part_idxs"][part_name]][0]
+        part_pose = C.to_homogeneous(
+            part_state[:3], C.quat2mat(part_state[3:7])
+        )
+        return (
+            annotation_inputs["april_to_robot_mat"]
+            @ annotation_inputs["sim_to_april_mat"]
+            @ part_pose
+        )
+
+    @staticmethod
+    def _multi_part_place_geometry(
+        part, annotation_inputs: Mapping[str, Any], assemble_to_name: str
+    ) -> Dict[str, Any]:
+        part_pose = RealSkillAnnotator._part_pose_robot_from_inputs(
+            part.name, annotation_inputs
+        )
+        anchor_pose = RealSkillAnnotator._part_pose_robot_from_inputs(
+            assemble_to_name, annotation_inputs
+        )
+        if part.name == "lamp_hood":
+            error = float(
+                part._position_only_place_error_robot(part_pose, anchor_pose).item()
+            )
+            threshold = float(part.skill_place_pos_threshold)
+            return {
+                "place_position_error_m": error,
+                "place_position_threshold_m": threshold,
+                "place_geometry_ok": error < threshold,
+            }
+        top_leg = part.name == "round_table_leg"
+        if top_leg:
+            current_relative = torch.linalg.inv(anchor_pose) @ part_pose
+            target_relative = (
+                torch.linalg.inv(part.skill_target_anchor_pose_robot)
+                @ part.skill_target_part_pose_robot
+            )
+            position_error = (
+                current_relative[:3, 3] - target_relative[:3, 3]
+            )
+            planar_error = position_error[[0, 1]].abs().sum()
+            axial_error = position_error[2].abs()
+            orientation_error = (
+                RealSkillAnnotator._rotation_error_ignoring_local_axis(
+                    current_relative[:3, :3],
+                    target_relative[:3, :3],
+                    ignored_axis=2,
+                )
+            )
+        else:
+            planar_error, axial_error, orientation_error = (
+                part._part_place_errors_robot(
+                    part_pose, anchor_pose, ignore_axis=1
+                )
+            )
+        planar_threshold = float(part.skill_place_part_xz_threshold)
+        axial_threshold = float(part.skill_place_z_threshold)
+        orientation_threshold = float(part.skill_place_part_ori_threshold)
+        planar_error = float(planar_error.item())
+        axial_error = float(axial_error.item())
+        orientation_error = float(orientation_error.item())
+        return {
+            "place_xy_error_m": planar_error,
+            "place_axial_error_m": axial_error,
+            "place_orientation_error_rad": orientation_error,
+            "place_xy_threshold_m": planar_threshold,
+            "place_axial_threshold_m": axial_threshold,
+            "place_orientation_threshold_rad": orientation_threshold,
+            "place_planar_axes": "xy" if top_leg else "xz",
+            "place_axial_axis": "z" if top_leg else "y",
+            "place_ignored_rotation_axis": "z" if top_leg else "y",
+            "place_geometry_ok": (
+                planar_error < planar_threshold
+                and axial_error < axial_threshold
+                and orientation_error < orientation_threshold
+            ),
+        }
+
+    def _step_multi_part_skill_state(
+        self, annotation_inputs: Mapping[str, Any]
+    ) -> Dict[str, Any]:
+        pairs = self.furniture.should_be_assembled
+        if self.assemble_idx >= len(pairs):
+            return {
+                "skill": self.previous_skill,
+                "skill_state": self.previous_skill_state,
+                "assembly_step": self.previous_assembly_step,
+                "guidance_point": self.previous_guidance_point,
+                "guidance_pose": self.previous_guidance_pose,
+                "guidance_gripper_width": self.previous_guidance_gripper_width,
+                "debug": {"phase": "complete", "task_fsm_complete": True},
+            }
+
+        part1_idx, part2_idx = pairs[self.assemble_idx]
+        part1 = self.furniture.parts[part1_idx]
+        part2 = self.furniture.parts[part2_idx]
+        assembly_step = self._assembly_step_label(part1, part2)
+        skill_state = skill = guidance_point_robot = guidance_pose_robot = None
+        guidance_gripper_width = None
+        debug = {
+            "assemble_idx": self.assemble_idx,
+            "assembly_step": assembly_step,
+            "active_part": None,
+            "phase": None,
+        }
+
+        part1_active = (
+            not getattr(part1, "pre_assemble_done", True)
+            and getattr(part1, "skill_state", None) != "done"
+        )
+        if part1_active:
+            (
+                skill_state,
+                skill,
+                guidance_point_robot,
+                guidance_pose_robot,
+                guidance_gripper_width,
+            ) = self._update_part1_skill_state(part1, annotation_inputs)
+            if skill_state == "done" and not self._transition_pose_reliable(part1.name):
+                part1.skill_state = "push"
+                skill_state = skill = "push"
+                debug["blocked_stale_push_transition"] = True
+            if skill_state == "done":
+                part1.pre_assemble_done = True
+            debug.update(active_part=part1.name, phase="pre_assemble")
+
+        assembled = self._assembled(annotation_inputs, part1_idx, part2_idx)
+        part1_complete = getattr(part1, "pre_assemble_done", True) or (
+            getattr(part1, "skill_state", None) == "done"
+        )
+        if part1_complete:
+            before = getattr(part2, "skill_state", None)
+            snapshot = self._part_skill_snapshot(part2)
+            state_inputs = annotation_inputs
+            selected_place_geometry = None
+            if before == "place":
+                live_geometry = self._multi_part_place_geometry(
+                    part2, annotation_inputs, part1.name
+                )
+                selected_place_geometry = live_geometry
+                debug.update({f"place_live_{key}": value for key, value in live_geometry.items()})
+                if not live_geometry["place_geometry_ok"]:
+                    rigid_inputs, rigid_debug = self._place_rigid_fallback_inputs(
+                        part2, annotation_inputs, part1.name
+                    )
+                    debug.update(rigid_debug)
+                    if rigid_inputs is not None:
+                        state_inputs = rigid_inputs
+                        selected_place_geometry = self._multi_part_place_geometry(
+                            part2, state_inputs, part1.name
+                        )
+                        debug.update(
+                            {
+                                f"place_rigid_{key}": value
+                                for key, value in selected_place_geometry.items()
+                            }
+                        )
+                        debug["place_geometry_source"] = "rigid_ee_delta"
+            if before in {"insert", "screw"}:
+                state_inputs["part_contact_forces"][part2.name] = None
+            (
+                skill_state,
+                skill,
+                guidance_point_robot,
+                guidance_pose_robot,
+                guidance_gripper_width,
+            ) = self._update_operated_part(
+                part2, state_inputs, part1.name, assembled
+            )
+            if before == "place" and part2.name == "round_table_leg":
+                real_geometry = selected_place_geometry
+                shared_state = skill_state
+                if real_geometry["place_geometry_ok"]:
+                    part2.skill_state = "insert"
+                    ee_pose_robot = C.to_homogeneous(
+                        state_inputs["ee_pos"], C.quat2mat(state_inputs["ee_quat"])
+                    )
+                    part2.skill_target_ee_pose_robot = (
+                        part2._compute_skill_insert_target(
+                            ee_pose_robot,
+                            state_inputs["rb_states"],
+                            state_inputs["part_idxs"],
+                            state_inputs["sim_to_april_mat"],
+                            state_inputs["april_to_robot_mat"],
+                            part1.name,
+                        )
+                    )
+                    part2.skill_guidance_point_robot = (
+                        part2.skill_target_ee_pose_robot[:3, 3].clone()
+                    )
+                    part2.skill_guidance_pose_robot = (
+                        part2.skill_target_ee_pose_robot.clone()
+                    )
+                    part2.skill_target_gripper_width = part2.half_width * 2
+                    skill_state = "insert"
+                    skill = part2.get_skill_label()
+                    guidance_point_robot = part2.get_guidance_point()
+                    guidance_pose_robot = part2.get_guidance_pose()
+                    guidance_gripper_width = part2.get_guidance_gripper_width()
+                elif shared_state == "insert":
+                    self._restore_part_skill(part2, snapshot)
+                    part2.skill_state = "place"
+                    ee_pose_robot = C.to_homogeneous(
+                        state_inputs["ee_pos"], C.quat2mat(state_inputs["ee_quat"])
+                    )
+                    part2.skill_target_ee_pose_robot = (
+                        part2._compute_skill_place_target(
+                            ee_pose_robot,
+                            state_inputs["rb_states"],
+                            state_inputs["part_idxs"],
+                            state_inputs["sim_to_april_mat"],
+                            state_inputs["april_to_robot_mat"],
+                            part1.name,
+                        )
+                    )
+                    part2.skill_guidance_point_robot = (
+                        part2.skill_target_ee_pose_robot[:3, 3].clone()
+                    )
+                    part2.skill_guidance_pose_robot = (
+                        part2.skill_target_ee_pose_robot.clone()
+                    )
+                    part2.skill_target_gripper_width = part2.half_width * 2
+                    skill_state = "place"
+                    skill = part2.get_skill_label()
+                    guidance_point_robot = part2.get_guidance_point()
+                    guidance_pose_robot = part2.get_guidance_pose()
+                    guidance_gripper_width = part2.get_guidance_gripper_width()
+                debug.update(
+                    {
+                        "real_place_rule": "top_local_xy_z_ignore_z_rotation",
+                        "real_place_shared_state": shared_state,
+                        "real_place_state": skill_state,
+                        **{
+                            f"real_{key}": value
+                            for key, value in real_geometry.items()
+                        },
+                    }
+                )
+            transition_blocked = (
+                skill_state != before
+                and not self._transition_pose_reliable(part2.name)
+            )
+            if (
+                part2.name == "lamp_hood"
+                and before == "place"
+                and skill_state == "done"
+                and (not assembled or self._gripper_closed)
+            ):
+                transition_blocked = True
+                debug["hood_completion_waits_for_release_and_assembly"] = True
+            if transition_blocked:
+                self._restore_part_skill(part2, snapshot)
+                skill_state = before
+                skill = part2.get_skill_label()
+                guidance_point_robot = part2.get_guidance_point()
+                guidance_pose_robot = part2.get_guidance_pose()
+                guidance_gripper_width = part2.get_guidance_gripper_width()
+                debug["blocked_unreliable_transition"] = True
+            elif before == "pick" and skill_state == "place":
+                self._start_place_rigid_reference(part2, annotation_inputs)
+                debug["place_rigid_reference_frame"] = self._place_rigid_reference_frame
+            debug.update(
+                active_part=part2.name,
+                phase="assemble",
+                assembled=assembled,
+                state_before=before,
+                state_after=skill_state,
+            )
+            if skill_state == "done" and assembled:
+                self.assemble_idx += 1
+                self._reset_next_pair(self.assemble_idx)
+
+        if part1_complete and part2.name == "round_table_leg" and skill == "place":
+            place_target = self._round_table_leg_place_target_details(
+                part2, part1.name, annotation_inputs
+            )
+            guidance_point_robot = place_target["guidance_robot"]
+            if guidance_pose_robot is not None:
+                guidance_pose_robot = guidance_pose_robot.clone()
+                guidance_pose_robot[:3, 3] = guidance_point_robot
+            debug.update(
+                {
+                    "place_target_policy": (
+                        "target_leg_pose_plus_world_z_quarter_leg_length"
+                    ),
+                    "place_target_leg_pose_robot": place_target[
+                        "target_leg_pose_robot"
+                    ]
+                    .detach()
+                    .cpu()
+                    .tolist(),
+                    "place_target_leg_length_m": place_target["leg_length_m"],
+                    "place_target_z_offset_m": place_target["z_offset_m"],
+                    "place_target_guidance_robot": guidance_point_robot
+                    .detach()
+                    .cpu()
+                    .tolist(),
+                }
+            )
+
+        skill_state_label = self._skill_state_label(
+            debug["active_part"],
+            part1.name if debug["active_part"] == part2.name else part2.name,
+            skill,
+        )
+        if skill is None or skill_state == "done":
+            skill = self.previous_skill
+            skill_state_label = self.previous_skill_state
+            assembly_step = self.previous_assembly_step
+            guidance_point_robot = self.previous_guidance_point_robot
+            guidance_pose_robot = self.previous_guidance_pose_robot
+            guidance_gripper_width = self.previous_guidance_gripper_width
+        else:
+            self.previous_skill = skill
+            self.previous_skill_state = skill_state_label
+            self.previous_assembly_step = assembly_step
+            if guidance_point_robot is not None:
+                self.previous_guidance_point_robot = _to_numpy(
+                    guidance_point_robot
+                ).astype(np.float32)
+            if guidance_pose_robot is not None:
+                self.previous_guidance_pose_robot = _pose_to_numpy(guidance_pose_robot)
+            self.previous_guidance_gripper_width = guidance_gripper_width
+
+        guidance_point = (
+            None if guidance_point_robot is None else _to_numpy(guidance_point_robot).astype(np.float32)
+        )
+        guidance_pose = (
+            None if guidance_pose_robot is None else _pose_to_numpy(guidance_pose_robot)
+        )
+        self.previous_guidance_point = None if guidance_point is None else guidance_point.copy()
+        self.previous_guidance_point_clean = (
+            None if guidance_point is None else guidance_point.copy()
+        )
+        self.previous_guidance_pose = None if guidance_pose is None else guidance_pose.copy()
+        self.previous_guidance_pose_clean = (
+            None if guidance_pose is None else guidance_pose.copy()
+        )
+        debug["task_fsm_complete"] = self.assemble_idx >= len(pairs)
+        return {
+            "skill": skill,
+            "skill_state": skill_state_label,
+            "assembly_step": assembly_step,
+            "guidance_point": guidance_point,
+            "guidance_pose": guidance_pose,
+            "guidance_gripper_width": guidance_gripper_width,
+            "debug": debug,
+        }
+
     def _step_skill_state(self, annotation_inputs: Mapping[str, Any]) -> Dict[str, Any]:
+        if self.furniture_name != "one_leg":
+            return self._step_multi_part_skill_state(annotation_inputs)
         if self.assemble_idx >= len(self.furniture.should_be_assembled):
             return {
                 "skill": self.previous_skill,
@@ -1430,6 +1873,7 @@ def _apply_annotation_bundle(
 def _real_annotation_metadata(
     stats: RealAnnotationStats,
     *,
+    annotator: RealSkillAnnotator,
     pose_provider: Optional[PartPoseProvider],
     mode: str,
 ) -> Dict[str, Any]:
@@ -1444,29 +1888,48 @@ def _real_annotation_metadata(
         "missing_pose_policy": "parts_founds + ee_rigid_propagation + held_last",
         "pose_tracking_policy": DEFAULT_POSE_TRACKING_POLICY,
         "release_pose_policy": "held_last",
-        "place_transition_policy": (
-            "geometry_only_when_part_pose_is_reliable; otherwise "
-            "latest feasible leg pose propagated by current EE delta and "
-            "the original leg/table geometry thresholds; "
-            "gripper release is evaluated only after insert"
+        "furniture_name": annotator.furniture_name,
+        "obstacle_pose_source": annotator._obstacle_pose_source,
+        "final_assemble_idx": annotator.assemble_idx,
+        "task_fsm_complete": (
+            annotator.assemble_idx
+            >= len(annotator.furniture.should_be_assembled)
         ),
-        "insert_transition_policy": (
-            "gripper_width >= max_gripper_width - 0.001"
-        ),
+        "insert_transition_policy": "gripper_width >= max_gripper_width - 0.001",
         "sam2_override_enabled": pose_provider is not None,
-        "place_target_policy": PLACE_TARGET_POLICY_TABLETOP,
-        "place_target_formula": {
-            "axis": "robot_world_positive_z",
-            "socket_to_leg_center_leg_fraction": 0.5,
-            "leg_center_to_ee_leg_fraction": LEG_TO_EE_LENGTH_FRACTION,
-            "lateral_offset_m": [0.0, 0.0],
-        },
-        "push_target_formula": {
-            "xy": "inherited_obstacle_corner_trailing_edge_center",
-            "z": "tracked_tabletop_center",
-        },
         "stats": stats.as_dict(),
     }
+    if annotator.furniture_name == "one_leg":
+        metadata.update(
+            {
+                "place_transition_policy": (
+                    "geometry_only_when_part_pose_is_reliable; otherwise "
+                    "latest feasible leg pose propagated by current EE delta and "
+                    "the original leg/table geometry thresholds; "
+                    "gripper release is evaluated only after insert"
+                ),
+                "place_target_policy": PLACE_TARGET_POLICY_TABLETOP,
+                "place_target_formula": {
+                    "axis": "robot_world_positive_z",
+                    "socket_to_leg_center_leg_fraction": 0.5,
+                    "leg_center_to_ee_leg_fraction": LEG_TO_EE_LENGTH_FRACTION,
+                    "lateral_offset_m": [0.0, 0.0],
+                },
+                "push_target_formula": {
+                    "xy": "inherited_obstacle_corner_trailing_edge_center",
+                    "z": "tracked_tabletop_center",
+                },
+            }
+        )
+    else:
+        metadata.update(
+            {
+                "push_transition_policy": "furniture_bench_l1_position_error_below_0.05m_no_release_gate",
+                "place_transition_policy": "trusted_apriltag_or_attached_ee_rigid_using_furniture_bench_geometry",
+                "pair_completion_policy": "furniture_bench_assembled_geometry",
+                "place_target_policy": "furniture_bench_part_target",
+            }
+        )
     if pose_provider is not None:
         metadata["pose_provider"] = pose_provider.metadata()
     return metadata
@@ -1543,6 +2006,7 @@ class RealSkillAnnotationSession:
             raise ValueError("Trajectory metadata must be a mapping when present")
         metadata["real_skill_annotation"] = _real_annotation_metadata(
             self.stats,
+            annotator=self.annotator,
             pose_provider=self.pose_provider,
             mode=self.mode,
         )

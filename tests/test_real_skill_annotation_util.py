@@ -1,4 +1,5 @@
 import pickle
+import copy
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,6 +19,8 @@ from src.eval.real_skill_annotation_util import (
     annotate_pickle,
     load_trajectory_pickle,
     PLACE_TARGET_POLICY_TABLETOP,
+    _pose_vector_to_matrix,
+    _matrix_to_pose_vector,
 )
 from src.eval.skill_annotation_util import SkillAnnotator
 from src.eval.real_pose_provider import RecoveredTabletopPoseProvider
@@ -122,7 +125,358 @@ def _trajectory():
     }
 
 
+def _multi_task_observation(annotator, *, width=0.08, ee_pose=None):
+    poses = []
+    for part in annotator.furniture.parts:
+        part_pose = np.eye(4, dtype=np.float32)
+        part_pose[:3, :3] = np.asarray(part.reset_ori[0], dtype=np.float32)[:3, :3]
+        part_pose[:3, 3] = np.asarray(part.reset_pos[0], dtype=np.float32)[:3]
+        poses.append(_matrix_to_pose_vector(part_pose))
+    if ee_pose is None:
+        ee_pose = annotator.april_to_robot @ _pose_vector_to_matrix(poses[0])
+    return {
+        "parts_poses": np.concatenate(poses),
+        "parts_founds": np.ones(len(poses), dtype=bool),
+        "parts_pose_valid": np.ones(len(poses), dtype=bool),
+        "camera_to_april": CAMERA_TO_APRIL.copy(),
+        "robot_state": {
+            "ee_pose": np.asarray(ee_pose, dtype=np.float32).copy(),
+            "wrist_pose": WRIST_POSE.copy(),
+            "gripper_width": width,
+        },
+        "color_image1": np.zeros((8, 8, 3), dtype=np.uint8),
+        "color_image2": np.zeros((8, 8, 3), dtype=np.uint8),
+    }
+
+
+def _begin_operated_part(annotator, pair_idx):
+    annotator.assemble_idx = pair_idx
+    part1_idx, part2_idx = annotator.furniture.should_be_assembled[pair_idx]
+    part1 = annotator.furniture.parts[part1_idx]
+    part2 = annotator.furniture.parts[part2_idx]
+    if hasattr(part1, "pre_assemble_done"):
+        part1.pre_assemble_done = True
+    initial = _multi_task_observation(annotator)
+    part_pose = _pose_vector_to_matrix(
+        initial["parts_poses"][part2_idx * 7 : (part2_idx + 1) * 7]
+    )
+    initial["robot_state"]["ee_pose"] = annotator.april_to_robot @ part_pose
+    annotator.annotate_observation(initial, _camera_info(), frame_idx=0)
+    grasp = copy.deepcopy(initial)
+    grasp["robot_state"]["gripper_width"] = 0.01
+    annotator.annotate_observation(grasp, _camera_info(), frame_idx=1)
+    placed = annotator.annotate_observation(grasp, _camera_info(), frame_idx=2)
+    return grasp, part1, part2, placed
+
+
+def _move_attached_part_to_target(annotator, observation, part):
+    moved = copy.deepcopy(observation)
+    tracker = annotator._tracked_parts[part.name]
+    target_ee = (
+        part.skill_target_part_pose_robot.detach().cpu().numpy()
+        @ np.linalg.inv(tracker.ee_to_part_robot)
+    )
+    moved["robot_state"]["ee_pose"] = target_ee.astype(np.float32)
+    moved["parts_founds"][part.part_idx] = False
+    return moved
+
+
+def _detect_assembled_part(annotator, observation, part1, part2):
+    detected = copy.deepcopy(observation)
+    part1_pose = _pose_vector_to_matrix(
+        detected["parts_poses"][part1.part_idx * 7 : (part1.part_idx + 1) * 7]
+    )
+    assembled = np.asarray(
+        annotator.furniture.assembled_rel_poses[(part1.part_idx, part2.part_idx)][0],
+        dtype=np.float32,
+    )
+    detected["parts_poses"][part2.part_idx * 7 : (part2.part_idx + 1) * 7] = (
+        _matrix_to_pose_vector(part1_pose @ assembled)
+    )
+    detected["parts_founds"][part2.part_idx] = True
+    return detected
+
+
 class RealSkillAnnotationUtilTest(unittest.TestCase):
+    def test_multi_task_push_advances_on_geometry_without_release(self):
+        for task, expected_next in (
+            ("round_table", "leg-top-pick"),
+            ("lamp", "bulb-base-pick"),
+        ):
+            with self.subTest(task=task):
+                annotator = RealSkillAnnotator(task)
+                initial = _multi_task_observation(annotator)
+                first = annotator.annotate_observation(
+                    initial, _camera_info(), frame_idx=0
+                )
+                self.assertEqual(first["skill"], "push")
+                grasp = copy.deepcopy(initial)
+                grasp["robot_state"]["gripper_width"] = 0.01
+                attached = annotator.annotate_observation(
+                    grasp, _camera_info(), frame_idx=1
+                )
+                self.assertTrue(attached["debug"]["attached_on_this_frame"])
+                part = annotator.furniture.parts[0]
+                part_center_robot = (
+                    annotator.april_to_robot
+                    @ _pose_vector_to_matrix(initial["parts_poses"][:7])
+                )[:3, 3]
+                moved = copy.deepcopy(grasp)
+                moved["robot_state"]["ee_pose"][:3, 3] += (
+                    attached["guidance_point"] - part_center_robot
+                )
+                moved["parts_founds"][part.part_idx] = False
+                advanced = annotator.annotate_observation(
+                    moved, _camera_info(), frame_idx=2
+                )
+                self.assertEqual(advanced["skill_state"], expected_next)
+                self.assertTrue(advanced["debug"]["gripper_closed"])
+                self.assertEqual(
+                    advanced["debug"]["part_pose_sources"][part.name],
+                    "ee_propagated",
+                )
+
+    def test_multi_task_held_last_cannot_finish_push(self):
+        for task in ("round_table", "lamp"):
+            with self.subTest(task=task):
+                annotator = RealSkillAnnotator(task)
+                observation = _multi_task_observation(annotator)
+                first = annotator.annotate_observation(
+                    observation, _camera_info(), frame_idx=0
+                )
+                part = annotator.furniture.parts[0]
+                target = (
+                    annotator.april_to_robot
+                    @ _pose_vector_to_matrix(observation["parts_poses"][:7])
+                )
+                target[:3, 3] = first["guidance_point"]
+                annotator._tracked_parts[part.name].pose_april = _matrix_to_pose_vector(
+                    annotator.robot_to_april @ target
+                )
+                stale = copy.deepcopy(observation)
+                stale["parts_founds"][part.part_idx] = False
+                bundle = annotator.annotate_observation(
+                    stale, _camera_info(), frame_idx=1
+                )
+                self.assertEqual(bundle["skill"], "push")
+                self.assertTrue(bundle["debug"]["blocked_stale_push_transition"])
+
+    def test_round_table_and_lamp_insert_screw_and_pair_completion(self):
+        for task, pair_idx, expected_next_idx in (
+            ("round_table", 0, 1),
+            ("round_table", 1, 2),
+            ("lamp", 0, 1),
+        ):
+            with self.subTest(task=task, pair_idx=pair_idx):
+                annotator = RealSkillAnnotator(task)
+                grasp, part1, part2, placed = _begin_operated_part(
+                    annotator, pair_idx
+                )
+                self.assertEqual(placed["skill"], "place")
+                self.assertTrue(annotator._tracked_parts[part2.name].attached)
+                moved = _move_attached_part_to_target(annotator, grasp, part2)
+                inserted = annotator.annotate_observation(
+                    moved, _camera_info(), frame_idx=3
+                )
+                self.assertEqual(inserted["skill"], "insert")
+                self.assertEqual(
+                    inserted["debug"]["part_pose_sources"][part2.name],
+                    "ee_propagated",
+                )
+                opened = copy.deepcopy(moved)
+                opened["robot_state"]["gripper_width"] = 0.08
+                screw = annotator.annotate_observation(
+                    opened, _camera_info(), frame_idx=4
+                )
+                self.assertEqual(screw["skill"], "screw")
+                self.assertEqual(annotator.assemble_idx, pair_idx)
+                detected = _detect_assembled_part(
+                    annotator, opened, part1, part2
+                )
+                annotator.annotate_observation(
+                    detected, _camera_info(), frame_idx=5
+                )
+                self.assertEqual(annotator.assemble_idx, expected_next_idx)
+
+    def test_round_table_aligned_part_can_go_directly_from_pick_to_insert(self):
+        for pair_idx in (0, 1):
+            with self.subTest(pair_idx=pair_idx):
+                annotator = RealSkillAnnotator("round_table")
+                annotator.assemble_idx = pair_idx
+                part1_idx, part2_idx = annotator.furniture.should_be_assembled[pair_idx]
+                part1 = annotator.furniture.parts[part1_idx]
+                part2 = annotator.furniture.parts[part2_idx]
+                if hasattr(part1, "pre_assemble_done"):
+                    part1.pre_assemble_done = True
+                observation = _multi_task_observation(annotator)
+                observation = _detect_assembled_part(
+                    annotator, observation, part1, part2
+                )
+                part_pose = _pose_vector_to_matrix(
+                    observation["parts_poses"][part2_idx * 7 : (part2_idx + 1) * 7]
+                )
+                observation["robot_state"]["ee_pose"] = (
+                    annotator.april_to_robot @ part_pose
+                )
+                bundle = annotator.annotate_observation(
+                    observation, _camera_info(), frame_idx=0
+                )
+                self.assertEqual(bundle["skill"], "insert")
+                self.assertEqual(part2.skill_state, "insert")
+
+    def test_round_table_leg_real_place_uses_top_local_xy_and_z(self):
+        annotator = RealSkillAnnotator("round_table")
+        grasp, top, leg, placed = _begin_operated_part(annotator, 0)
+        self.assertEqual(placed["skill"], "place")
+        top_pose_robot = annotator.april_to_robot @ _pose_vector_to_matrix(
+            annotator._tracked_parts[top.name].pose_april
+        )
+        expected_leg_pose_robot = top_pose_robot @ np.asarray(
+            leg.default_assembled_pose, dtype=np.float32
+        )
+        leg_length_m = max(
+            float(value)
+            for value in (
+                getattr(leg, "reset_x_len", None),
+                getattr(leg, "reset_y_len", None),
+                getattr(leg, "reset_z_len", None),
+            )
+            if value is not None
+        )
+        expected_guidance = expected_leg_pose_robot[:3, 3].copy()
+        expected_guidance[2] += 0.25 * leg_length_m
+        np.testing.assert_allclose(
+            placed["guidance_point"], expected_guidance, atol=1e-6
+        )
+        np.testing.assert_allclose(
+            placed["guidance_pose"][:3, 3], expected_guidance, atol=1e-6
+        )
+        self.assertEqual(
+            placed["debug"]["place_target_policy"],
+            "target_leg_pose_plus_world_z_quarter_leg_length",
+        )
+        self.assertAlmostEqual(
+            placed["debug"]["place_target_z_offset_m"],
+            0.25 * leg_length_m,
+            places=6,
+        )
+
+        moved = _move_attached_part_to_target(annotator, grasp, leg)
+        local_offset = np.array([0.002, 0.002, 0.010], dtype=np.float32)
+        moved["robot_state"]["ee_pose"][:3, 3] += (
+            top_pose_robot[:3, :3] @ local_offset
+        )
+
+        inserted = annotator.annotate_observation(
+            moved, _camera_info(), frame_idx=3
+        )
+        self.assertEqual(inserted["skill"], "insert")
+        self.assertEqual(leg.skill_state, "insert")
+        self.assertEqual(
+            inserted["debug"]["real_place_rule"],
+            "top_local_xy_z_ignore_z_rotation",
+        )
+        self.assertEqual(inserted["debug"]["real_place_planar_axes"], "xy")
+        self.assertEqual(inserted["debug"]["real_place_axial_axis"], "z")
+        self.assertEqual(
+            inserted["debug"]["real_place_ignored_rotation_axis"], "z"
+        )
+        self.assertAlmostEqual(
+            inserted["debug"]["real_place_xy_error_m"], 0.004, places=5
+        )
+        self.assertAlmostEqual(
+            inserted["debug"]["real_place_axial_error_m"], 0.010, places=5
+        )
+
+        yaw = torch.tensor(
+            [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+        )
+        ignored_yaw_error = annotator._rotation_error_ignoring_local_axis(
+            yaw, torch.eye(3), ignored_axis=2
+        )
+        self.assertAlmostEqual(float(ignored_yaw_error), 0.0, places=6)
+
+    def test_unseated_release_returns_from_place_to_pick(self):
+        for task, pair_idx, confirmation_frames in (
+            ("round_table", 0, 1),
+            ("round_table", 1, 1),
+            ("lamp", 0, 4),
+            ("lamp", 1, 4),
+        ):
+            with self.subTest(task=task, pair_idx=pair_idx):
+                annotator = RealSkillAnnotator(task)
+                grasp, _, part, placed = _begin_operated_part(
+                    annotator, pair_idx
+                )
+                self.assertEqual(placed["skill"], "place")
+                released = copy.deepcopy(grasp)
+                released["robot_state"]["gripper_width"] = 0.08
+                result = None
+                for frame_idx in range(3, 3 + confirmation_frames):
+                    result = annotator.annotate_observation(
+                        released, _camera_info(), frame_idx=frame_idx
+                    )
+                self.assertEqual(result["skill"], "pick")
+                self.assertEqual(part.skill_state, "pick")
+
+    def test_stale_part_pose_cannot_enter_insert(self):
+        annotator = RealSkillAnnotator("round_table")
+        grasp, _, leg, _ = _begin_operated_part(annotator, 0)
+        tracker = annotator._tracked_parts[leg.name]
+        tracker.attached = False
+        tracker.pose_april = _matrix_to_pose_vector(
+            annotator.robot_to_april
+            @ leg.skill_target_part_pose_robot.detach().cpu().numpy()
+        )
+        annotator._attached_part_name = None
+        stale = copy.deepcopy(grasp)
+        stale["parts_founds"][leg.part_idx] = False
+        stale["robot_state"]["gripper_width"] = 0.08
+        result = annotator.annotate_observation(
+            stale, _camera_info(), frame_idx=3
+        )
+        self.assertEqual(result["skill_state"], "leg-top-place")
+        self.assertTrue(result["debug"]["blocked_unreliable_transition"])
+
+    def test_lamp_hood_requires_release_and_assembled_geometry(self):
+        annotator = RealSkillAnnotator("lamp")
+        grasp, base, hood, placed = _begin_operated_part(annotator, 1)
+        self.assertEqual(placed["skill_state"], "hood-base-place")
+        target = _move_attached_part_to_target(annotator, grasp, hood)
+        annotator.annotate_observation(target, _camera_info(), frame_idx=3)
+        self.assertEqual(annotator.assemble_idx, 1)
+        at_assembly = _detect_assembled_part(annotator, target, base, hood)
+        still_closed = annotator.annotate_observation(
+            at_assembly, _camera_info(), frame_idx=4
+        )
+        self.assertEqual(still_closed["skill_state"], "hood-base-place")
+        self.assertEqual(annotator.assemble_idx, 1)
+        opened = copy.deepcopy(at_assembly)
+        opened["robot_state"]["gripper_width"] = 0.08
+        annotator.annotate_observation(opened, _camera_info(), frame_idx=5)
+        annotator.annotate_observation(opened, _camera_info(), frame_idx=6)
+        self.assertEqual(annotator.assemble_idx, 2)
+
+    def test_multi_task_metadata_distinguishes_annotation_and_assembly(self):
+        for task in ("round_table", "lamp"):
+            for mode in ("online", "offline"):
+                with self.subTest(task=task, mode=mode):
+                    session = RealSkillAnnotationSession(
+                        task, _camera_info(), mode=mode
+                    )
+                    observation = _multi_task_observation(session.annotator)
+                    session.annotate_observation(observation)
+                    trajectory = {"metadata": {}, "observations": [observation]}
+                    session.update_trajectory_metadata(trajectory)
+                    metadata = trajectory["metadata"]["real_skill_annotation"]
+                    self.assertEqual(metadata["mode"], mode)
+                    self.assertTrue(metadata["complete"])
+                    self.assertFalse(metadata["task_fsm_complete"])
+                    self.assertEqual(
+                        metadata["obstacle_pose_source"], "configured_default"
+                    )
+                    self.assertEqual(trajectory[ANNOTATION_STATUS_KEY], "annotated")
+
     def test_stateful_session_supports_online_annotation_and_metadata(self):
         trajectory = _trajectory()
         session = RealSkillAnnotationSession(
