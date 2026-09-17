@@ -1,0 +1,121 @@
+condition,condition_display,n_train,task,skill_type,reached_count,completed_count,skill_success_rate
+rgb,RGB,2,one_leg,push,71,67,0.9436619718309859
+rgb,RGB,2,one_leg,pick,139,138,0.9928057553956835
+rgb,RGB,2,one_leg,place,67,64,0.9552238805970149
+rgb,RGB,2,one_leg,insert,64,63,0.984375
+rgb,RGB,2,one_leg,screw,63,62,0.9841269841269841
+rgb,RGB,2,round_table,push,72,72,1.0
+rgb,RGB,2,round_table,pick,126,110,0.873015873015873
+rgb,RGB,2,round_table,place,110,96,0.8727272727272727
+rgb,RGB,2,round_table,insert,96,95,0.9895833333333334
+rgb,RGB,2,round_table,screw,94,88,0.9361702127659575
+rgb,RGB,2,lamp,push,72,69,0.9583333333333334
+rgb,RGB,2,lamp,pick,85,81,0.9529411764705882
+rgb,RGB,2,lamp,place,81,41,0.5061728395061729
+rgb,RGB,2,lamp,insert,25,25,1.0
+rgb,RGB,2,lamp,screw,25,18,0.72
+rgbd,RGB-D,2,one_leg,push,72,67,0.9305555555555556
+rgbd,RGB-D,2,one_leg,pick,139,139,1.0
+rgbd,RGB-D,2,one_leg,place,67,64,0.9552238805970149
+rgbd,RGB-D,2,one_leg,insert,64,64,1.0
+rgbd,RGB-D,2,one_leg,screw,64,62,0.96875
+rgbd,RGB-D,2,round_table,push,72,72,1.0
+rgbd,RGB-D,2,round_table,pick,126,120,0.9523809523809523
+rgbd,RGB-D,2,round_table,place,120,100,0.8333333333333334
+rgbd,RGB-D,2,round_table,insert,100,98,0.98
+rgbd,RGB-D,2,round_table,screw,98,94,0.9591836734693877
+rgbd,RGB-D,2,lamp,push,72,72,1.0
+rgbd,RGB-D,2,lamp,pick,89,89,1.0
+rgbd,RGB-D,2,lamp,place,88,49,0.5568181818181818
+rgbd,RGB-D,2,lamp,insert,33,33,1.0
+rgbd,RGB-D,2,lamp,screw,33,21,0.6363636363636364
+rgbd_skill,RGB-D+skill,3,one_leg,push,108,99,0.9166666666666666
+rgbd_skill,RGB-D+skill,3,one_leg,pick,207,207,1.0
+rgbd_skill,RGB-D+skill,3,one_leg,place,99,92,0.9292929292929293
+rgbd_skill,RGB-D+skill,3,one_leg,insert,92,86,0.9347826086956522
+rgbd_skill,RGB-D+skill,3,one_leg,screw,86,84,0.9767441860465116
+rgbd_skill,RGB-D+skill,3,round_table,push,108,108,1.0
+rgbd_skill,RGB-D+skill,3,round_table,pick,178,163,0.9157303370786517
+rgbd_skill,RGB-D+skill,3,round_table,place,163,133,0.8159509202453987
+rgbd_skill,RGB-D+skill,3,round_table,insert,133,130,0.9774436090225563
+rgbd_skill,RGB-D+skill,3,round_table,screw,130,123,0.9461538461538461
+rgbd_skill,RGB-D+skill,3,lamp,push,108,107,0.9907407407407407
+rgbd_skill,RGB-D+skill,3,lamp,pick,132,128,0.9696969696969697
+rgbd_skill,RGB-D+skill,3,lamp,place,127,75,0.5905511811023622
+rgbd_skill,RGB-D+skill,3,lamp,insert,51,51,1.0
+rgbd_skill,RGB-D+skill,3,lamp,screw,51,37,0.7254901960784313
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,one_leg,push,108,100,0.9259259259259259
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,one_leg,pick,208,208,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,one_leg,place,100,96,0.96
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,one_leg,insert,96,95,0.9895833333333334
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,one_leg,screw,95,94,0.9894736842105263
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,round_table,push,108,108,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,round_table,pick,184,176,0.9565217391304348
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,round_table,place,176,147,0.8352272727272727
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,round_table,insert,147,144,0.9795918367346939
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,round_table,screw,144,130,0.9027777777777778
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,lamp,push,108,106,0.9814814814814815
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,lamp,pick,135,133,0.9851851851851852
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,lamp,place,132,84,0.6363636363636364
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,lamp,insert,56,56,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,lamp,screw,56,38,0.6785714285714286
+rgbd_gp,RGB-D+GP,3,one_leg,push,108,106,0.9814814814814815
+rgbd_gp,RGB-D+GP,3,one_leg,pick,213,213,1.0
+rgbd_gp,RGB-D+GP,3,one_leg,place,105,94,0.8952380952380953
+rgbd_gp,RGB-D+GP,3,one_leg,insert,94,94,1.0
+rgbd_gp,RGB-D+GP,3,one_leg,screw,94,88,0.9361702127659575
+rgbd_gp,RGB-D+GP,3,round_table,push,108,108,1.0
+rgbd_gp,RGB-D+GP,3,round_table,pick,177,157,0.8870056497175142
+rgbd_gp,RGB-D+GP,3,round_table,place,157,145,0.9235668789808917
+rgbd_gp,RGB-D+GP,3,round_table,insert,145,144,0.993103448275862
+rgbd_gp,RGB-D+GP,3,round_table,screw,144,114,0.7916666666666666
+rgbd_gp,RGB-D+GP,3,lamp,push,108,108,1.0
+rgbd_gp,RGB-D+GP,3,lamp,pick,135,134,0.9925925925925926
+rgbd_gp,RGB-D+GP,3,lamp,place,134,93,0.6940298507462687
+rgbd_gp,RGB-D+GP,3,lamp,insert,66,66,1.0
+rgbd_gp,RGB-D+GP,3,lamp,screw,66,36,0.5454545454545454
+rgbd_gp_skill,RGB-D+GP+skill,3,one_leg,push,108,101,0.9351851851851852
+rgbd_gp_skill,RGB-D+GP+skill,3,one_leg,pick,208,208,1.0
+rgbd_gp_skill,RGB-D+GP+skill,3,one_leg,place,100,98,0.98
+rgbd_gp_skill,RGB-D+GP+skill,3,one_leg,insert,98,98,1.0
+rgbd_gp_skill,RGB-D+GP+skill,3,one_leg,screw,97,94,0.9690721649484536
+rgbd_gp_skill,RGB-D+GP+skill,3,round_table,push,108,108,1.0
+rgbd_gp_skill,RGB-D+GP+skill,3,round_table,pick,184,171,0.9293478260869565
+rgbd_gp_skill,RGB-D+GP+skill,3,round_table,place,171,153,0.8947368421052632
+rgbd_gp_skill,RGB-D+GP+skill,3,round_table,insert,153,151,0.9869281045751634
+rgbd_gp_skill,RGB-D+GP+skill,3,round_table,screw,151,137,0.9072847682119205
+rgbd_gp_skill,RGB-D+GP+skill,3,lamp,push,108,107,0.9907407407407407
+rgbd_gp_skill,RGB-D+GP+skill,3,lamp,pick,150,146,0.9733333333333334
+rgbd_gp_skill,RGB-D+GP+skill,3,lamp,place,144,110,0.7638888888888888
+rgbd_gp_skill,RGB-D+GP+skill,3,lamp,insert,71,71,1.0
+rgbd_gp_skill,RGB-D+GP+skill,3,lamp,screw,71,50,0.704225352112676
+rgbd_grasp_part,RGB-D+grasp,3,one_leg,push,108,94,0.8703703703703703
+rgbd_grasp_part,RGB-D+grasp,3,one_leg,pick,202,202,1.0
+rgbd_grasp_part,RGB-D+grasp,3,one_leg,place,94,92,0.9787234042553191
+rgbd_grasp_part,RGB-D+grasp,3,one_leg,insert,92,90,0.9782608695652174
+rgbd_grasp_part,RGB-D+grasp,3,one_leg,screw,90,87,0.9666666666666667
+rgbd_grasp_part,RGB-D+grasp,3,round_table,push,108,108,1.0
+rgbd_grasp_part,RGB-D+grasp,3,round_table,pick,175,134,0.7657142857142857
+rgbd_grasp_part,RGB-D+grasp,3,round_table,place,134,91,0.6791044776119403
+rgbd_grasp_part,RGB-D+grasp,3,round_table,insert,91,86,0.945054945054945
+rgbd_grasp_part,RGB-D+grasp,3,round_table,screw,86,79,0.9186046511627907
+rgbd_grasp_part,RGB-D+grasp,3,lamp,push,108,107,0.9907407407407407
+rgbd_grasp_part,RGB-D+grasp,3,lamp,pick,136,131,0.9632352941176471
+rgbd_grasp_part,RGB-D+grasp,3,lamp,place,130,83,0.6384615384615384
+rgbd_grasp_part,RGB-D+grasp,3,lamp,insert,57,57,1.0
+rgbd_grasp_part,RGB-D+grasp,3,lamp,screw,56,43,0.7678571428571429
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,one_leg,push,108,99,0.9166666666666666
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,one_leg,pick,207,207,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,one_leg,place,99,93,0.9393939393939394
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,one_leg,insert,93,92,0.989247311827957
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,one_leg,screw,92,92,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,round_table,push,108,108,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,round_table,pick,175,151,0.8628571428571429
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,round_table,place,151,95,0.6291390728476821
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,round_table,insert,95,91,0.9578947368421052
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,round_table,screw,91,82,0.9010989010989011
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,lamp,push,108,107,0.9907407407407407
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,lamp,pick,140,133,0.95
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,lamp,place,132,78,0.5909090909090909
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,lamp,insert,49,49,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,3,lamp,screw,49,41,0.8367346938775511

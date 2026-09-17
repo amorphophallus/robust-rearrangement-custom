@@ -1,0 +1,17 @@
+stage_label,task,skill_state,condition,condition_display,n_train,reached_count,completed_count,skill_success_rate
+One leg: leg,one_leg,leg-top-place,rgbd_skill,RGB-D+skill,3,99,92,0.9292929292929293
+One leg: leg,one_leg,leg-top-place,rgbd_gp,RGB-D+GP,3,105,94,0.8952380952380953
+One leg: leg,one_leg,leg-top-place,rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,100,96,0.96
+One leg: leg,one_leg,leg-top-place,rgbd_gp_skill,RGB-D+GP+skill,3,100,98,0.98
+Round table: leg,round_table,leg-top-place,rgbd_skill,RGB-D+skill,3,96,76,0.7916666666666666
+Round table: leg,round_table,leg-top-place,rgbd_gp,RGB-D+GP,3,96,88,0.9166666666666666
+Round table: leg,round_table,leg-top-place,rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,104,84,0.8076923076923077
+Round table: leg,round_table,leg-top-place,rgbd_gp_skill,RGB-D+GP+skill,3,101,85,0.8415841584158416
+Round table: base,round_table,base-leg-place,rgbd_skill,RGB-D+skill,3,67,57,0.8507462686567164
+Round table: base,round_table,base-leg-place,rgbd_gp,RGB-D+GP,3,61,57,0.9344262295081968
+Round table: base,round_table,base-leg-place,rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,72,63,0.875
+Round table: base,round_table,base-leg-place,rgbd_gp_skill,RGB-D+GP+skill,3,70,68,0.9714285714285714
+Lamp: bulb,lamp,bulb-base-place,rgbd_skill,RGB-D+skill,3,103,51,0.49514563106796117
+Lamp: bulb,lamp,bulb-base-place,rgbd_gp,RGB-D+GP,3,107,66,0.616822429906542
+Lamp: bulb,lamp,bulb-base-place,rgbd_colored_gp,RGB-D+colored GP (TAGPoint),3,104,56,0.5384615384615384
+Lamp: bulb,lamp,bulb-base-place,rgbd_gp_skill,RGB-D+GP+skill,3,105,71,0.6761904761904762

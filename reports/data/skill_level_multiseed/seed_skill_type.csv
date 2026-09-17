@@ -1,0 +1,111 @@
+condition,condition_display,train_seed,skill_type,reached_count,completed_count,skill_success_rate
+rgb,RGB,2026090701,insert,92,92,1.0
+rgb,RGB,2026090701,pick,176,165,0.9375
+rgb,RGB,2026090701,place,129,100,0.7751937984496124
+rgb,RGB,2026090701,push,108,104,0.9629629629629629
+rgb,RGB,2026090701,screw,92,87,0.9456521739130435
+rgb,RGB,2026090702,insert,93,91,0.978494623655914
+rgb,RGB,2026090702,pick,174,164,0.9425287356321839
+rgb,RGB,2026090702,place,129,101,0.7829457364341085
+rgb,RGB,2026090702,push,107,104,0.9719626168224299
+rgb,RGB,2026090702,screw,90,81,0.9
+rgbd,RGB-D,2026090701,insert,101,101,1.0
+rgbd,RGB-D,2026090701,pick,177,174,0.9830508474576272
+rgbd,RGB-D,2026090701,place,137,109,0.7956204379562044
+rgbd,RGB-D,2026090701,push,108,106,0.9814814814814815
+rgbd,RGB-D,2026090701,screw,101,91,0.900990099009901
+rgbd,RGB-D,2026090702,insert,96,94,0.9791666666666666
+rgbd,RGB-D,2026090702,pick,177,174,0.9830508474576272
+rgbd,RGB-D,2026090702,place,138,104,0.7536231884057971
+rgbd,RGB-D,2026090702,push,108,105,0.9722222222222222
+rgbd,RGB-D,2026090702,screw,94,86,0.9148936170212766
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,insert,104,103,0.9903846153846154
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,pick,178,176,0.9887640449438202
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,place,139,112,0.8057553956834532
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,push,108,104,0.9629629629629629
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,screw,103,98,0.9514563106796117
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,insert,95,93,0.9789473684210527
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,pick,174,169,0.9712643678160919
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,place,133,105,0.7894736842105263
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,push,108,102,0.9444444444444444
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,screw,93,86,0.9247311827956989
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,insert,100,99,0.99
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,pick,175,172,0.9828571428571429
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,place,136,110,0.8088235294117647
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,push,108,108,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,screw,99,78,0.7878787878787878
+rgbd_gp,RGB-D+GP,autumn-dust-13,insert,101,100,0.9900990099009901
+rgbd_gp,RGB-D+GP,autumn-dust-13,pick,174,169,0.9712643678160919
+rgbd_gp,RGB-D+GP,autumn-dust-13,place,133,111,0.8345864661654135
+rgbd_gp,RGB-D+GP,autumn-dust-13,push,108,108,1.0
+rgbd_gp,RGB-D+GP,autumn-dust-13,screw,100,76,0.76
+rgbd_gp,RGB-D+GP,icy-vortex-9,insert,107,107,1.0
+rgbd_gp,RGB-D+GP,icy-vortex-9,pick,177,172,0.9717514124293786
+rgbd_gp,RGB-D+GP,icy-vortex-9,place,136,114,0.8382352941176471
+rgbd_gp,RGB-D+GP,icy-vortex-9,push,108,107,0.9907407407407407
+rgbd_gp,RGB-D+GP,icy-vortex-9,screw,107,89,0.8317757009345794
+rgbd_gp,RGB-D+GP,rare-monkey-4,insert,97,97,1.0
+rgbd_gp,RGB-D+GP,rare-monkey-4,pick,174,163,0.9367816091954023
+rgbd_gp,RGB-D+GP,rare-monkey-4,place,127,107,0.84251968503937
+rgbd_gp,RGB-D+GP,rare-monkey-4,push,108,107,0.9907407407407407
+rgbd_gp,RGB-D+GP,rare-monkey-4,screw,97,73,0.7525773195876289
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,insert,108,107,0.9907407407407407
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,pick,182,177,0.9725274725274725
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,place,140,120,0.8571428571428571
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,push,108,104,0.9629629629629629
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,screw,106,101,0.9528301886792453
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,insert,102,101,0.9901960784313726
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,pick,177,171,0.9661016949152542
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,place,134,112,0.835820895522388
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,push,108,105,0.9722222222222222
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,screw,101,89,0.8811881188118812
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,insert,112,112,1.0
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,pick,183,177,0.9672131147540983
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,place,141,129,0.9148936170212766
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,push,108,107,0.9907407407407407
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,screw,112,91,0.8125
+rgbd_grasp_part,RGB-D+grasp,2026090701,insert,78,76,0.9743589743589743
+rgbd_grasp_part,RGB-D+grasp,2026090701,pick,176,157,0.8920454545454546
+rgbd_grasp_part,RGB-D+grasp,2026090701,place,121,89,0.7355371900826446
+rgbd_grasp_part,RGB-D+grasp,2026090701,push,108,104,0.9629629629629629
+rgbd_grasp_part,RGB-D+grasp,2026090701,screw,75,68,0.9066666666666666
+rgbd_grasp_part,RGB-D+grasp,2026090702,insert,73,71,0.9726027397260274
+rgbd_grasp_part,RGB-D+grasp,2026090702,pick,174,157,0.9022988505747126
+rgbd_grasp_part,RGB-D+grasp,2026090702,place,120,80,0.6666666666666666
+rgbd_grasp_part,RGB-D+grasp,2026090702,push,108,105,0.9722222222222222
+rgbd_grasp_part,RGB-D+grasp,2026090702,screw,71,67,0.9436619718309859
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,insert,89,86,0.9662921348314607
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,pick,163,153,0.9386503067484663
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,place,117,97,0.8290598290598291
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,push,108,100,0.9259259259259259
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,screw,86,74,0.8604651162790697
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,insert,76,75,0.9868421052631579
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,pick,176,160,0.9090909090909091
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,place,124,84,0.6774193548387096
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,push,108,104,0.9629629629629629
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,screw,75,69,0.92
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,insert,71,67,0.9436619718309859
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,pick,174,166,0.9540229885057471
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,place,129,80,0.6201550387596899
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,push,108,105,0.9722222222222222
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,screw,67,66,0.9850746268656716
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,insert,90,90,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,pick,172,165,0.9593023255813954
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,place,129,102,0.7906976744186046
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,push,108,105,0.9722222222222222
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,screw,90,80,0.8888888888888888
+rgbd_skill,RGB-D+skill,2026090701,insert,97,94,0.9690721649484536
+rgbd_skill,RGB-D+skill,2026090701,pick,174,169,0.9712643678160919
+rgbd_skill,RGB-D+skill,2026090701,place,132,105,0.7954545454545454
+rgbd_skill,RGB-D+skill,2026090701,push,108,104,0.9629629629629629
+rgbd_skill,RGB-D+skill,2026090701,screw,94,85,0.9042553191489362
+rgbd_skill,RGB-D+skill,2026090702,insert,91,87,0.9560439560439561
+rgbd_skill,RGB-D+skill,2026090702,pick,172,166,0.9651162790697675
+rgbd_skill,RGB-D+skill,2026090702,place,130,97,0.7461538461538462
+rgbd_skill,RGB-D+skill,2026090702,push,108,105,0.9722222222222222
+rgbd_skill,RGB-D+skill,2026090702,screw,87,82,0.9425287356321839
+rgbd_skill,RGB-D+skill,good-serenity-16,insert,88,86,0.9772727272727273
+rgbd_skill,RGB-D+skill,good-serenity-16,pick,171,163,0.9532163742690059
+rgbd_skill,RGB-D+skill,good-serenity-16,place,127,98,0.7716535433070866
+rgbd_skill,RGB-D+skill,good-serenity-16,push,108,105,0.9722222222222222
+rgbd_skill,RGB-D+skill,good-serenity-16,screw,86,77,0.8953488372093024

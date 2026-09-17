@@ -1,0 +1,485 @@
+condition,condition_display,train_seed,source_batch,task,skill_state,skill_type,reached_count,completed_count,skill_success_rate
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,one_leg,top-leg-push,push,36,33,0.9166666666666666
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,one_leg,leg-top-pick,pick,33,33,1.0
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,one_leg,leg-top-place,place,33,29,0.8787878787878788
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,one_leg,leg-top-insert,insert,29,28,0.9655172413793104
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,one_leg,leg-top-screw,screw,28,28,1.0
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,round_table,top-leg-push,push,36,36,1.0
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,round_table,leg-top-pick,pick,36,30,0.8333333333333334
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,round_table,leg-top-place,place,30,24,0.8
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,round_table,leg-top-insert,insert,24,23,0.9583333333333334
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,round_table,leg-top-screw,screw,23,20,0.8695652173913043
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,round_table,base-leg-pick,pick,20,19,0.95
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,round_table,base-leg-place,place,19,17,0.8947368421052632
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,round_table,base-leg-insert,insert,17,17,1.0
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,round_table,base-leg-screw,screw,17,17,1.0
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,lamp,base-bulb-push,push,36,36,1.0
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,lamp,bulb-base-pick,pick,36,35,0.9722222222222222
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,lamp,bulb-base-place,place,35,18,0.5142857142857142
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,lamp,bulb-base-insert,insert,18,18,1.0
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,lamp,bulb-base-screw,screw,18,12,0.6666666666666666
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,lamp,hood-base-pick,pick,10,10,1.0
+rgbd_skill,RGB-D+skill,good-serenity-16,original_main_0610,lamp,hood-base-place,place,10,10,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,one_leg,top-leg-push,push,36,36,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,one_leg,leg-top-pick,pick,36,36,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,one_leg,leg-top-place,place,36,34,0.9444444444444444
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,one_leg,leg-top-insert,insert,34,34,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,one_leg,leg-top-screw,screw,34,33,0.9705882352941176
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,round_table,top-leg-push,push,36,36,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,round_table,leg-top-pick,pick,36,35,0.9722222222222222
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,round_table,leg-top-place,place,35,27,0.7714285714285715
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,round_table,leg-top-insert,insert,27,27,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,round_table,leg-top-screw,screw,27,21,0.7777777777777778
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,round_table,base-leg-pick,pick,21,20,0.9523809523809523
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,round_table,base-leg-place,place,20,16,0.8
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,round_table,base-leg-insert,insert,16,15,0.9375
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,round_table,base-leg-screw,screw,15,10,0.6666666666666666
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,lamp,base-bulb-push,push,36,36,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,lamp,bulb-base-pick,pick,36,35,0.9722222222222222
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,lamp,bulb-base-place,place,35,23,0.6571428571428571
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,lamp,bulb-base-insert,insert,23,23,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,lamp,bulb-base-screw,screw,23,14,0.6086956521739131
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,lamp,hood-base-pick,pick,10,10,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),absurd-voice-2,original_main_0610,lamp,hood-base-place,place,10,10,1.0
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,one_leg,top-leg-push,push,36,35,0.9722222222222222
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,one_leg,leg-top-pick,pick,34,34,1.0
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,one_leg,leg-top-place,place,34,30,0.8823529411764706
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,one_leg,leg-top-insert,insert,30,30,1.0
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,one_leg,leg-top-screw,screw,30,29,0.9666666666666667
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,round_table,top-leg-push,push,36,36,1.0
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,round_table,leg-top-pick,pick,36,30,0.8333333333333334
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,round_table,leg-top-place,place,30,27,0.9
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,round_table,leg-top-insert,insert,27,27,1.0
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,round_table,leg-top-screw,screw,27,22,0.8148148148148148
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,round_table,base-leg-pick,pick,22,18,0.8181818181818182
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,round_table,base-leg-place,place,18,17,0.9444444444444444
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,round_table,base-leg-insert,insert,17,17,1.0
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,round_table,base-leg-screw,screw,17,12,0.7058823529411765
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,lamp,base-bulb-push,push,36,36,1.0
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,lamp,bulb-base-pick,pick,36,35,0.9722222222222222
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,lamp,bulb-base-place,place,35,23,0.6571428571428571
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,lamp,bulb-base-insert,insert,23,23,1.0
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,lamp,bulb-base-screw,screw,23,10,0.43478260869565216
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,lamp,hood-base-pick,pick,10,10,1.0
+rgbd_gp,RGB-D+GP,rare-monkey-4,original_main_0610,lamp,hood-base-place,place,10,10,1.0
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,one_leg,top-leg-push,push,36,36,1.0
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,one_leg,leg-top-pick,pick,36,36,1.0
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,one_leg,leg-top-place,place,36,30,0.8333333333333334
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,one_leg,leg-top-insert,insert,30,30,1.0
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,one_leg,leg-top-screw,screw,30,28,0.9333333333333333
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,round_table,top-leg-push,push,36,36,1.0
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,round_table,leg-top-pick,pick,36,33,0.9166666666666666
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,round_table,leg-top-place,place,33,31,0.9393939393939394
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,round_table,leg-top-insert,insert,31,31,1.0
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,round_table,leg-top-screw,screw,31,20,0.6451612903225806
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,round_table,base-leg-pick,pick,20,18,0.9
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,round_table,base-leg-place,place,18,16,0.8888888888888888
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,round_table,base-leg-insert,insert,16,15,0.9375
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,round_table,base-leg-screw,screw,15,13,0.8666666666666667
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,lamp,base-bulb-push,push,36,36,1.0
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,lamp,bulb-base-pick,pick,36,36,1.0
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,lamp,bulb-base-place,place,36,24,0.6666666666666666
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,lamp,bulb-base-insert,insert,24,24,1.0
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,lamp,bulb-base-screw,screw,24,15,0.625
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,lamp,hood-base-pick,pick,10,10,1.0
+rgbd_gp,RGB-D+GP,autumn-dust-13,original_main_0610,lamp,hood-base-place,place,10,10,1.0
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,one_leg,top-leg-push,push,36,35,0.9722222222222222
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,one_leg,leg-top-pick,pick,35,35,1.0
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,one_leg,leg-top-place,place,35,34,0.9714285714285714
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,one_leg,leg-top-insert,insert,34,34,1.0
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,one_leg,leg-top-screw,screw,34,31,0.9117647058823529
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,round_table,top-leg-push,push,36,36,1.0
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,round_table,leg-top-pick,pick,36,33,0.9166666666666666
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,round_table,leg-top-place,place,33,30,0.9090909090909091
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,round_table,leg-top-insert,insert,30,30,1.0
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,round_table,leg-top-screw,screw,30,27,0.9
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,round_table,base-leg-pick,pick,27,25,0.9259259259259259
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,round_table,base-leg-place,place,25,24,0.96
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,round_table,base-leg-insert,insert,24,24,1.0
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,round_table,base-leg-screw,screw,24,20,0.8333333333333334
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,lamp,base-bulb-push,push,36,36,1.0
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,lamp,bulb-base-pick,pick,36,36,1.0
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,lamp,bulb-base-place,place,36,19,0.5277777777777778
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,lamp,bulb-base-insert,insert,19,19,1.0
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,lamp,bulb-base-screw,screw,19,11,0.5789473684210527
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,lamp,hood-base-pick,pick,7,7,1.0
+rgbd_gp,RGB-D+GP,icy-vortex-9,original_main_0610,lamp,hood-base-place,place,7,7,1.0
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,one_leg,top-leg-push,push,36,35,0.9722222222222222
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,one_leg,leg-top-pick,pick,34,34,1.0
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,one_leg,leg-top-place,place,34,32,0.9411764705882353
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,one_leg,leg-top-insert,insert,32,32,1.0
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,one_leg,leg-top-screw,screw,32,29,0.90625
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,round_table,top-leg-push,push,36,36,1.0
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,round_table,leg-top-pick,pick,36,33,0.9166666666666666
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,round_table,leg-top-place,place,33,32,0.9696969696969697
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,round_table,leg-top-insert,insert,32,32,1.0
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,round_table,leg-top-screw,screw,32,24,0.75
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,round_table,base-leg-pick,pick,24,21,0.875
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,round_table,base-leg-place,place,21,21,1.0
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,round_table,base-leg-insert,insert,21,21,1.0
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,round_table,base-leg-screw,screw,21,18,0.8571428571428571
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,lamp,base-bulb-push,push,36,36,1.0
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,lamp,bulb-base-pick,pick,36,36,1.0
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,lamp,bulb-base-place,place,36,27,0.75
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,lamp,bulb-base-insert,insert,27,27,1.0
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,lamp,bulb-base-screw,screw,27,20,0.7407407407407407
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,lamp,hood-base-pick,pick,17,17,1.0
+rgbd_gp_skill,RGB-D+GP+skill,fresh-tree-11,original_main_0610,lamp,hood-base-place,place,17,17,1.0
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,one_leg,top-leg-push,push,36,29,0.8055555555555556
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,one_leg,leg-top-pick,pick,29,29,1.0
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,one_leg,leg-top-place,place,29,29,1.0
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,one_leg,leg-top-insert,insert,29,28,0.9655172413793104
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,one_leg,leg-top-screw,screw,28,27,0.9642857142857143
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,round_table,top-leg-push,push,36,36,1.0
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,round_table,leg-top-pick,pick,36,28,0.7777777777777778
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,round_table,leg-top-place,place,28,22,0.7857142857142857
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,round_table,leg-top-insert,insert,22,22,1.0
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,round_table,leg-top-screw,screw,22,18,0.8181818181818182
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,round_table,base-leg-pick,pick,18,17,0.9444444444444444
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,round_table,base-leg-place,place,17,16,0.9411764705882353
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,round_table,base-leg-insert,insert,16,14,0.875
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,round_table,base-leg-screw,screw,14,11,0.7857142857142857
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,lamp,base-bulb-push,push,36,35,0.9722222222222222
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,lamp,bulb-base-pick,pick,35,34,0.9714285714285714
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,lamp,bulb-base-place,place,34,22,0.6470588235294118
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,lamp,bulb-base-insert,insert,22,22,1.0
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,lamp,bulb-base-screw,screw,22,18,0.8181818181818182
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,lamp,hood-base-pick,pick,9,9,1.0
+rgbd_grasp_part,RGB-D+grasp,morning-glitter-1-fresh36,fresh36_clean_n0,lamp,hood-base-place,place,9,8,0.8888888888888888
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,one_leg,top-leg-push,push,36,34,0.9444444444444444
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,one_leg,leg-top-pick,pick,34,34,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,one_leg,leg-top-place,place,34,32,0.9411764705882353
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,one_leg,leg-top-insert,insert,32,32,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,one_leg,leg-top-screw,screw,32,32,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,round_table,top-leg-push,push,36,36,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,round_table,leg-top-pick,pick,36,34,0.9444444444444444
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,round_table,leg-top-place,place,34,28,0.8235294117647058
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,round_table,leg-top-insert,insert,28,28,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,round_table,leg-top-screw,screw,28,20,0.7142857142857143
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,round_table,base-leg-pick,pick,18,15,0.8333333333333334
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,round_table,base-leg-place,place,15,13,0.8666666666666667
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,round_table,base-leg-insert,insert,13,13,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,round_table,base-leg-screw,screw,13,13,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,lamp,base-bulb-push,push,36,35,0.9722222222222222
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,lamp,bulb-base-pick,pick,35,34,0.9714285714285714
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,lamp,bulb-base-place,place,34,17,0.5
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,lamp,bulb-base-insert,insert,17,17,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,lamp,bulb-base-screw,screw,17,15,0.8823529411764706
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,lamp,hood-base-pick,pick,13,12,0.9230769230769231
+rgbd_grasp_part_colored,RGB-D+colored grasp,eternal-cosmos-2-fresh36,fresh36_clean_n0,lamp,hood-base-place,place,12,12,1.0
+rgb,RGB,2026090701,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,36,1.0
+rgb,RGB,2026090701,supplemental_aligned_reward_only,one_leg,top-leg-push,push,36,34,0.9444444444444444
+rgb,RGB,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,34,34,1.0
+rgb,RGB,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-place,place,34,32,0.9411764705882353
+rgb,RGB,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,32,32,1.0
+rgb,RGB,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,32,32,1.0
+rgb,RGB,2026090701,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgb,RGB,2026090701,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,33,0.9166666666666666
+rgb,RGB,2026090701,supplemental_aligned_reward_only,round_table,leg-top-place,place,33,28,0.8484848484848485
+rgb,RGB,2026090701,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,28,28,1.0
+rgb,RGB,2026090701,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,28,28,1.0
+rgb,RGB,2026090701,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,28,23,0.8214285714285714
+rgb,RGB,2026090701,supplemental_aligned_reward_only,round_table,base-leg-place,place,23,20,0.8695652173913043
+rgb,RGB,2026090701,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,20,20,1.0
+rgb,RGB,2026090701,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,20,17,0.85
+rgb,RGB,2026090701,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,34,0.9444444444444444
+rgb,RGB,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,34,31,0.9117647058823529
+rgb,RGB,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-place,place,31,12,0.3870967741935484
+rgb,RGB,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,12,12,1.0
+rgb,RGB,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,12,10,0.8333333333333334
+rgb,RGB,2026090701,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,8,8,1.0
+rgb,RGB,2026090701,supplemental_aligned_reward_only,lamp,hood-base-place,place,8,8,1.0
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,one_leg,top-leg-push,push,36,34,0.9444444444444444
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,34,34,1.0
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-place,place,34,34,1.0
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,34,34,1.0
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,34,33,0.9705882352941176
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,34,0.9444444444444444
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,round_table,leg-top-place,place,34,26,0.7647058823529411
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,26,26,1.0
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,26,26,1.0
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,26,25,0.9615384615384616
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,round_table,base-leg-place,place,25,23,0.92
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,23,23,1.0
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,23,21,0.9130434782608695
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,36,1.0
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,36,36,1.0
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-place,place,36,18,0.5
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,18,18,1.0
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,18,11,0.6111111111111112
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,9,9,1.0
+rgbd,RGB-D,2026090701,supplemental_aligned_reward_only,lamp,hood-base-place,place,8,8,1.0
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,one_leg,top-leg-push,push,36,33,0.9166666666666666
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,33,33,1.0
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-place,place,33,32,0.9696969696969697
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,32,30,0.9375
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,30,29,0.9666666666666667
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,32,0.8888888888888888
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,round_table,leg-top-place,place,32,25,0.78125
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,25,25,1.0
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,25,25,1.0
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,25,25,1.0
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,round_table,base-leg-place,place,25,21,0.84
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,21,20,0.9523809523809523
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,20,18,0.9
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,35,0.9722222222222222
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,35,34,0.9714285714285714
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-place,place,34,19,0.5588235294117647
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,19,19,1.0
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,19,13,0.6842105263157895
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,9,9,1.0
+rgbd_skill,RGB-D+skill,2026090701,supplemental_aligned_reward_only,lamp,hood-base-place,place,8,8,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,one_leg,top-leg-push,push,36,32,0.8888888888888888
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,32,32,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,one_leg,leg-top-place,place,32,31,0.96875
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,31,31,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,31,31,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,35,0.9722222222222222
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,round_table,leg-top-place,place,35,30,0.8571428571428571
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,30,29,0.9666666666666667
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,29,29,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,29,28,0.9655172413793104
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,round_table,base-leg-place,place,28,26,0.9285714285714286
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,26,26,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,26,26,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,36,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,36,36,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,lamp,bulb-base-place,place,36,17,0.4722222222222222
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,17,17,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,17,12,0.7058823529411765
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,9,9,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090701,supplemental_aligned_reward_only,lamp,hood-base-place,place,8,8,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,one_leg,top-leg-push,push,36,33,0.9166666666666666
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,33,33,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-place,place,33,33,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,33,33,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,32,32,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,34,0.9444444444444444
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,round_table,leg-top-place,place,34,28,0.8235294117647058
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,28,28,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,28,28,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,28,27,0.9642857142857143
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,round_table,base-leg-place,place,27,26,0.9629629629629629
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,26,25,0.9615384615384616
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,25,25,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,35,0.9722222222222222
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,35,34,0.9714285714285714
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-place,place,34,21,0.6176470588235294
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,21,21,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,21,16,0.7619047619047619
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,14,13,0.9285714285714286
+rgbd_gp_skill,RGB-D+GP+skill,2026090701,supplemental_aligned_reward_only,lamp,hood-base-place,place,12,12,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,one_leg,top-leg-push,push,36,32,0.8888888888888888
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,32,32,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-place,place,32,31,0.96875
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,31,31,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,31,30,0.967741935483871
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,31,0.8611111111111112
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,round_table,leg-top-place,place,31,26,0.8387096774193549
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,26,24,0.9230769230769231
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,24,24,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,24,13,0.5416666666666666
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,round_table,base-leg-place,place,13,0,0.0
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,0,0,nan
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,0,0,nan
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,36,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,36,34,0.9444444444444444
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-place,place,34,21,0.6176470588235294
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,21,21,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,20,14,0.7
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,12,11,0.9166666666666666
+rgbd_grasp_part,RGB-D+grasp,2026090701,supplemental_aligned_reward_only,lamp,hood-base-place,place,11,11,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,one_leg,top-leg-push,push,36,32,0.8888888888888888
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,32,32,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-place,place,32,30,0.9375
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,30,30,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,30,30,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,33,0.9166666666666666
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,round_table,leg-top-place,place,33,27,0.8181818181818182
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,27,26,0.9629629629629629
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,26,26,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,26,16,0.6153846153846154
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,round_table,base-leg-place,place,16,0,0.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,0,0,nan
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,0,0,nan
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,36,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,36,35,0.9722222222222222
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-place,place,35,19,0.5428571428571428
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,19,19,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,19,13,0.6842105263157895
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,10,8,0.8
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090701,supplemental_aligned_reward_only,lamp,hood-base-place,place,8,8,1.0
+rgb,RGB,2026090702,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,35,0.9722222222222222
+rgb,RGB,2026090702,supplemental_aligned_reward_only,one_leg,top-leg-push,push,35,33,0.9428571428571428
+rgb,RGB,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,33,33,1.0
+rgb,RGB,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-place,place,33,32,0.9696969696969697
+rgb,RGB,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,32,31,0.96875
+rgb,RGB,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,31,30,0.967741935483871
+rgb,RGB,2026090702,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgb,RGB,2026090702,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,31,0.8611111111111112
+rgb,RGB,2026090702,supplemental_aligned_reward_only,round_table,leg-top-place,place,31,26,0.8387096774193549
+rgb,RGB,2026090702,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,26,26,1.0
+rgb,RGB,2026090702,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,25,25,1.0
+rgb,RGB,2026090702,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,26,23,0.8846153846153846
+rgb,RGB,2026090702,supplemental_aligned_reward_only,round_table,base-leg-place,place,23,22,0.9565217391304348
+rgb,RGB,2026090702,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,22,21,0.9545454545454546
+rgb,RGB,2026090702,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,21,18,0.8571428571428571
+rgb,RGB,2026090702,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,35,0.9722222222222222
+rgb,RGB,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,35,34,0.9714285714285714
+rgb,RGB,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-place,place,34,13,0.38235294117647056
+rgb,RGB,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,13,13,1.0
+rgb,RGB,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,13,8,0.6153846153846154
+rgb,RGB,2026090702,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,8,8,1.0
+rgb,RGB,2026090702,supplemental_aligned_reward_only,lamp,hood-base-place,place,8,8,1.0
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,one_leg,top-leg-push,push,36,33,0.9166666666666666
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,33,33,1.0
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-place,place,33,30,0.9090909090909091
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,30,30,1.0
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,30,29,0.9666666666666667
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,35,0.9722222222222222
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,round_table,leg-top-place,place,35,28,0.8
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,28,28,1.0
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,28,28,1.0
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,28,26,0.9285714285714286
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,round_table,base-leg-place,place,26,23,0.8846153846153846
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,23,21,0.9130434782608695
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,21,19,0.9047619047619048
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,36,1.0
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,36,36,1.0
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-place,place,36,15,0.4166666666666667
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,15,15,1.0
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,15,10,0.6666666666666666
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,8,8,1.0
+rgbd,RGB-D,2026090702,supplemental_aligned_reward_only,lamp,hood-base-place,place,8,8,1.0
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,one_leg,top-leg-push,push,36,33,0.9166666666666666
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,33,33,1.0
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-place,place,33,31,0.9393939393939394
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,31,28,0.9032258064516129
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,28,27,0.9642857142857143
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,34,0.9444444444444444
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,round_table,leg-top-place,place,34,27,0.7941176470588235
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,27,26,0.9629629629629629
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,26,25,0.9615384615384616
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,25,23,0.92
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,round_table,base-leg-place,place,23,19,0.8260869565217391
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,19,19,1.0
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,19,18,0.9473684210526315
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,36,1.0
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,36,34,0.9444444444444444
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-place,place,34,14,0.4117647058823529
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,14,14,1.0
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,14,12,0.8571428571428571
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,6,6,1.0
+rgbd_skill,RGB-D+skill,2026090702,supplemental_aligned_reward_only,lamp,hood-base-place,place,6,6,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,one_leg,top-leg-push,push,36,32,0.8888888888888888
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,32,32,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,one_leg,leg-top-place,place,32,31,0.96875
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,31,30,0.967741935483871
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,30,30,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,34,0.9444444444444444
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,round_table,leg-top-place,place,34,27,0.7941176470588235
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,27,26,0.9629629629629629
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,26,26,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,26,24,0.9230769230769231
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,round_table,base-leg-place,place,24,21,0.875
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,21,21,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,21,18,0.8571428571428571
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,34,0.9444444444444444
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,34,33,0.9705882352941176
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,lamp,bulb-base-place,place,33,16,0.48484848484848486
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,16,16,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,16,12,0.75
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,10,10,1.0
+rgbd_colored_gp,RGB-D+colored GP (TAGPoint),2026090702,supplemental_aligned_reward_only,lamp,hood-base-place,place,10,10,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,one_leg,top-leg-push,push,36,33,0.9166666666666666
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,33,33,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-place,place,33,33,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,33,33,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,33,33,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,34,0.9444444444444444
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,round_table,leg-top-place,place,34,25,0.7352941176470589
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,25,24,0.96
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,24,24,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,24,22,0.9166666666666666
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,round_table,base-leg-place,place,22,21,0.9545454545454546
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,21,21,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,21,18,0.8571428571428571
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,36,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,36,35,0.9722222222222222
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-place,place,35,23,0.6571428571428571
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,23,23,1.0
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,23,14,0.6086956521739131
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,12,11,0.9166666666666666
+rgbd_gp_skill,RGB-D+GP+skill,2026090702,supplemental_aligned_reward_only,lamp,hood-base-place,place,10,10,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,one_leg,top-leg-push,push,36,33,0.9166666666666666
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,33,33,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-place,place,33,32,0.9696969696969697
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,32,31,0.96875
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,31,30,0.967741935483871
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,32,0.8888888888888888
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,round_table,leg-top-place,place,32,26,0.8125
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,26,25,0.9615384615384616
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,25,25,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,25,13,0.52
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,round_table,base-leg-place,place,13,1,0.07692307692307693
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,1,1,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,1,1,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,36,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,36,35,0.9722222222222222
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-place,place,35,14,0.4
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,14,14,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,14,11,0.7857142857142857
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,8,8,1.0
+rgbd_grasp_part,RGB-D+grasp,2026090702,supplemental_aligned_reward_only,lamp,hood-base-place,place,7,7,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,one_leg,top-leg-push,push,36,33,0.9166666666666666
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-pick,pick,33,33,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-place,place,33,31,0.9393939393939394
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-insert,insert,31,30,0.967741935483871
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,one_leg,leg-top-screw,screw,30,30,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,round_table,top-leg-push,push,36,36,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,round_table,leg-top-pick,pick,36,34,0.9444444444444444
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,round_table,leg-top-place,place,34,27,0.7941176470588235
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,round_table,leg-top-insert,insert,27,24,0.8888888888888888
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,round_table,leg-top-screw,screw,24,23,0.9583333333333334
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,round_table,base-leg-pick,pick,23,19,0.8260869565217391
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,round_table,base-leg-place,place,19,0,0.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,round_table,base-leg-insert,insert,0,0,nan
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,round_table,base-leg-screw,screw,0,0,nan
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,lamp,base-bulb-push,push,36,36,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-pick,pick,36,34,0.9444444444444444
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-place,place,34,13,0.38235294117647056
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-insert,insert,13,13,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,13,13,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,10,10,1.0
+rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,lamp,hood-base-place,place,9,9,1.0
