@@ -123,6 +123,12 @@ run name 固定为 `automate90_fb50_<condition>_seed<seed>_formal`。训练前�
 6. 仅评估 epoch-3000 final checkpoint：FB formal 每 task 36 rollouts；AutoMate ID90 每 task 12 rollouts；Test10 每 task、每 train seed 100 rollouts，分配到 5 个固定 evaluation seeds，每 seed 20 rollouts。
 7. Test10 报告 task-macro SR、rollout-micro SR、task-level bootstrap 95% CI 和逐任务 SR。九个有 specialist 的任务同时报告 generalist SR、specialist SR、差值与比值；`00755` 单独报告 generalist SR。
 
+### 5.1 AutoMate success 口径
+
+ID90 和 Test10 的主 SR 固定使用 AutoMate/IsaacLab 官方 success predicate，以与 AutoMate 原文和已有 100-task 面板保持同口径；训练和评测 agent 不得在本轮 90/10 实验中自行改阈值或用事后人工视频判定覆盖官方 SR。
+
+已知限制是，官方判据只组合高度窗口与全局 `15 mm` 平均 keypoint-distance 阈值，不检查孔腔包含、接触、实际插入深度或持续稳定。`00320` 的视频审计显示，该判据可在 peg 扫过孔口而未形成可见稳定插入时触发。本轮仍按官方 SR 登记结果，并将该问题作为独立的后续度量学任务；如未完成新的预登记严格判据，不在主结果中声称“稳定物理插入率”。
+
 ## 6. 启动门槛
 
 正式启动前必须同时满足：

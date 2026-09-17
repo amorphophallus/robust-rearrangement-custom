@@ -27,6 +27,12 @@ AutoMate 的核心问题是 assembly skill 能否随任务数量扩展，而 Fur
 
 AutoMate 100-task 面板主要使用 paired checkpoint，而 FurnitureBench 36-rollout 面板使用 formal checkpoint；`rgbd_skill` 的 AutoMate 行也是 formal。所以上表是 condition-level 的跨环境证据，不是逐行同一 checkpoint 的严格 head-to-head。要得到完全 matched 的跨环境表，需要补跑其余 formal checkpoint 的 AutoMate 100-task 面板。
 
+#### SR 口径决策与已知限制
+
+当前所有 AutoMate 主表、逐任务矩阵和后续 90/10 评测继续使用 AutoMate/IsaacLab 官方 success predicate，以保持与 AutoMate 原文及已有结果的同口径可比性；本报告暂不修改任何已登记 SR。该判据要求 peg root 位于 socket origin 与 `socket origin + disassembly_dist` 之间，且平均 keypoint distance 小于全局 `15 mm` 阈值；它不检查 peg 是否被孔腔包含、接触关系、实际插入深度或成功是否持续稳定。
+
+`00320` 的 rollout 视频暴露了该限制：其 `disassembly_dist=15 mm`，socket mesh 顶面为 `13.746 mm`，因此 peg 底端仍可在 socket 顶面上方约 `1.25 mm` 时满足高度条件。该任务的目标孔径约 `9.33 mm`、peg 直径约 `8.36 mm`、单侧径向间隙仅约 `0.49 mm`，而 12 个 `rgbd_colored_gp` 重放的最小 keypoint distance 均只到 `14.14–15.00 mm`。这些 rollout 在官方口径下仍记为 `12/12`，但不应额外解读为经视觉确认的 12 次稳定物理插入。后续如需研究物理完成质量，另行增加 post-step 观测、孔腔包含/插入深度与连续多步稳定性判据，并将其作为独立的 strict physical-insertion SR，不回溯覆盖官方 SR。
+
 ### Analysis
 
 Joint policy 在 99 个 AutoMate 训练任务上达到 `59.2–65.1%`，说明视觉 BC 在 100-task 规模仍保持广泛能力；`rgbd_colored_gp` 的 ID 成功率最高，为 `65.1%`。在 held-out `00755` 上，除 RGB 外的七个 RGB-D condition 达到 `66.7–83.3%`，显示出未在 joint data 中训练该 assembly 时的零样本 OOD 行为，但该结论目前只有一个 held-out task、每个 condition 12 rollout。
@@ -62,7 +68,7 @@ FurnitureBench 的影响具有明显 condition dependence：RGB-D 和 skill 分�
 
 以下矩阵直接内嵌于本主报告；每格为 `successes/12 (SR)`。 `Specialist final train SR` 来自各 specialist 的 TensorBoard `successes/iter` 最终值。
 
-Protocol: 12 rollouts/task; `automate_paper_default1_hardest_curriculum`; fixed-hardest curriculum; SBC disabled; scripted annotation.
+Protocol: 12 rollouts/task; `automate_paper_default1_hardest_curriculum`; fixed-hardest curriculum; SBC disabled; scripted annotation; AutoMate/IsaacLab official success predicate. 表中 SR 不是额外的 strict physical-insertion SR，判据限制见上文。
 
 | Assembly | Group | Paper-20 | Specialist final train SR† | `paired_rgb` | `paired_rgbd` | `paired_rgbd_colored_gp` | `paired_rgbd_gp` | `paired_rgbd_gp_skill` | `paired_rgbd_grasp_part` | `paired_rgbd_grasp_part_colored` | `formal_rgbd_skill` |
 |---|---|:---:|---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
