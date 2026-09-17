@@ -28,36 +28,31 @@ alignment are documented in `reports/real_time_alignment_and_eval.md`; use
 
 ### FrankaControl full-frame RGB-D eval (240x320)
 
-The six deployed checkpoints are under
-`checkpoints/rr_real_sim_fullframe_cotrain_0907`. They embed
+The current deployed checkpoints are under
+`checkpoints/rr_real_sim_modelscope_0912`. They embed
 `observation_type=rgbd`, `control.control_mode=pos`, and
 `data.image_spatial_transform=none`. The evaluator records canonical 240x320
 front/wrist RGB-D observations, preserves that spatial shape through both actor
 camera transforms, and rejects a non-240x320 input instead of silently resizing
 it.
 
-Copy the complete block below. Change only `RR_RUN` and `RR_EPOCH`; supported
-runs are `real40`, `real40_sim400`, and `real10_sim400`, and supported epochs
-are `3000` and `5000`.
+Copy the complete block below. Change only `RR_RUN`; supported runs are
+`real40` and `real10_sim400`.
 
 ```bash
 cd /home/hz/code/robust-rearrangement-custom
 
 RR_RUN=real40
-RR_EPOCH=3000
 RR_PYTHON=/home/hz/miniconda3/envs/rr-real/bin/python
-RR_CHECKPOINT_ROOT="$PWD/checkpoints/rr_real_sim_fullframe_cotrain_0907"
+RR_CHECKPOINT_ROOT="$PWD/checkpoints/rr_real_sim_modelscope_0912"
 RR_INTERFACE_CFG=/home/hz/code/YueHu_deoxys/deoxys/config/charmander.yml
 
 case "$RR_RUN" in
   real40)
-    RR_RUN_DIR=rr_fullframe0907_real40_b256_seed2026090712
-    ;;
-  real40_sim400)
-    RR_RUN_DIR=rr_fullframe0907_real40_sim400_b256_seed2026090711
+    RR_CHECKPOINT="$RR_CHECKPOINT_ROOT/real40/rr_modelscope0912_real40_b256_ws1_seed2026091213_timeline10hz/rr_modelscope0912_real40_b256_ws1_seed2026091213_timeline10hz_2026-09-14_15-56-42.245167/actor_chkpt_last.pt"
     ;;
   real10_sim400)
-    RR_RUN_DIR=rr_fullframe0907_real10_sim400_b256_seed2026090713
+    RR_CHECKPOINT="$RR_CHECKPOINT_ROOT/real10_sim400/rr_modelscope0912_real10_sim400_b256_ws1_seed2026091212_timeline10hz/rr_modelscope0912_real10_sim400_b256_ws1_seed2026091212_timeline10hz_2026-09-14_16-08-18.727013/actor_chkpt_last.pt"
     ;;
   *)
     printf 'unsupported RR_RUN: %s\n' "$RR_RUN" >&2
@@ -65,15 +60,6 @@ case "$RR_RUN" in
     ;;
 esac
 
-case "$RR_EPOCH" in
-  3000|5000) ;;
-  *)
-    printf 'unsupported RR_EPOCH: %s\n' "$RR_EPOCH" >&2
-    return 2 2>/dev/null || exit 2
-    ;;
-esac
-
-RR_CHECKPOINT="$RR_CHECKPOINT_ROOT/$RR_RUN/$RR_RUN_DIR/$RR_RUN_DIR/actor_chkpt_latest_${RR_EPOCH}.pt"
 test -f "$RR_CHECKPOINT" || { printf 'missing checkpoint: %s\n' "$RR_CHECKPOINT" >&2; return 2 2>/dev/null || exit 2; }
 
 "$RR_PYTHON" -m src.real.evaluate_policy \
