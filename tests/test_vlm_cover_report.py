@@ -104,7 +104,9 @@ def test_full_report_pools_success_but_excludes_legacy_tracking(tmp_path):
     assert "vlm_sigma_3task_pooled" in index["tables"]
     assert "vlm_orientation_tracking_equivalent" in index["tables"]
     assert "success_3task_pooled_png" in index["figures"]
+    assert "success_3task_pooled_pdf" in index["figures"]
     assert "tracking_position_3task_pooled_png" in index["figures"]
+    assert "tracking_position_3task_pooled_pdf" in index["figures"]
     assert "vlm_sigma_by_task" in index["tables"]
     assert "skill_type_replicate_and_pooled" in index["tables"]
     assert "tracking_error_png" in index["figures"]
@@ -128,11 +130,12 @@ def test_full_report_pools_success_but_excludes_legacy_tracking(tmp_path):
     assert "只读取已校验的 `success_tracking_pooled.csv`，不直接 query JSON" in text
     assert "n7→Shuffle` categorical endpoint" in text
     assert "每个 task 画两条上游 position-equivalent VLM σ 线" in text
-    assert "pooled tracking error（position / orientation / total）" in text
-    assert "三 task 合并的 pooled summary" in text
-    assert "pooled 图只保留三条三-task 纵向线" in text
+    assert "三 task 合并的 position tracking response" in text
+    assert "补充 pooled summary 与 task/metric breakdown" in text
+    assert "两条三-task position-equivalent VLM 纵线" in text
+    assert "论文排版与细节检查统一使用 PDF" in text
     assert "图下方的 orientation 对齐采用一个行为等效尺度" in text
-    assert text.index("### 1.3 三 task 合并的 pooled summary") < text.index(
+    assert text.index("### 1.3 补充 pooled summary 与 task/metric breakdown") < text.index(
         "### 1.4 主要结论"
     )
     assert text.index("### 1.4 主要结论") < text.index(

@@ -13,9 +13,13 @@
 
 ## 1. 结果图与主要结论
 
+> 定量图同时导出 PNG 预览与可无限缩放的矢量 PDF；论文排版与细节检查统一使用 PDF。
+
 ### 1.1 task-level success（真实噪声尺度）
 
 ![Pooled success on the actual noise scale](figures/vlm_cover_108/vlm_cover_108_success_numeric.png)
+
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_success_numeric.pdf)
 
 横轴使用真实 position σ/axis（mm；n0–n7 分别为 0、3、6、12、24、48、96、192 mm），因此 n0–n4 会集中在低噪声段，不再等距排列。每个 task 右侧的灰色窄轴按 fresh36 的方式显示 `n7→Shuffle` categorical endpoint，Shuffle 不被当作连续 mm 噪声点。小 marker 与细连线只读取已校验的 `success_tracking_pooled.csv`，不直接 query JSON；本图不展示 replicate 离散度。每个 task 只画两条上游 position-equivalent VLM σ 线：蓝色 Point VLM、红色 Grasp VLM。Grasp 的 orientation-equivalent 对齐只在正文和附录中说明，不在图上增加第三条纵线。n7=192 mm/axis 覆盖最大的 task-level position σ；ordinal trend 导出见 `ordinal_trends.csv`。
 
@@ -29,21 +33,27 @@ VLM σ 表示 VLM 点误差相当于多少 `mm/axis` 的 3D 位置噪声。统�
 
 图中六条 task-specific position-equivalent 纵线的统计量、有效 control-step pair 数和三 task pooled 汇总放在附录。它们是把真实 VLM 误差与数值噪声轴对齐的参考，不是额外成功率观测。
 
-### 1.2 pooled tracking error（position / orientation / total）
-
-![Pooled tracking error: position, orientation, and total](figures/vlm_cover_108/vlm_cover_108_tracking_error.png)
-
-这张图按 fresh36 的指标生成：3 个 task × 3 个 tracking 指标（position error、orientation error、total error），其中 `total = pos_m / 0.01 + ori_deg / 5`，主轴显示 n0–n7 的真实 position σ/axis，右侧窄轴显示 `n7→Shuffle`。点和线均不展示 replicate 离散度；point 条件没有 pose-aware orientation/total tracking 定义，因此后两行只显示 grasp-part 条件。r180 保留在表格中，不单独画 endpoint 图。
-
-Tracking 的参照点是该 condition 实际提供给 policy 的 displayed target：numeric-noise 条件使用加噪后的 target，VLM formal rollout 使用 clean-GT target。因此 n7 的 tracking error 是“末端执行器到错误目标点的距离”，不是末端执行器到 clean GT 的距离；它适合描述点跟随行为，不应直接当作任务几何误差。
-
-### 1.3 三 task 合并的 pooled summary
-
-![Three-task pooled success](figures/vlm_cover_108/vlm_cover_108_success_3task_pooled.png)
+### 1.2 三 task 合并的 position tracking response
 
 ![Three-task pooled position tracking](figures/vlm_cover_108/vlm_cover_108_tracking_position_3task_pooled.png)
 
-两张图把 `one_leg`、`round_table` 和 `lamp` 合并到同一条 condition 曲线。成功率按三个 task 的 rollout 数直接合并，因此每个 condition/noise cell 为 `3×108=324` 个 rollout；position tracking 按各 task 的有效 final skill-state 数加权，而不是简单平均三个 task 的均值。主轴显示真实 n0–n7 position σ/axis，右侧窄轴显示 `n7→Shuffle`；图不展示 replicate 离散度。pooled 图只保留两条三-task position-equivalent VLM 纵线：Point 与 Grasp。Grasp 的行为等效 orientation scale 只在正文和附录中说明，不在图上展示。三 task 合并表为 `three_task_pooled.csv`，VLM 标记读取 `vlm_sigma_3task_pooled.csv`。
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_tracking_position_3task_pooled.pdf)
+
+这张正文图把 `one_leg`、`round_table` 和 `lamp` 合并到同一条 condition 曲线。Position tracking 按各 task 的有效 final skill-state 数加权，而不是简单平均三个 task 的均值。主轴显示真实 n0–n7 position σ/axis，右侧窄轴显示 `n7→Shuffle`；图不展示 replicate 离散度。两条三-task position-equivalent VLM 纵线分别对应 Point 与 Grasp。Grasp 的 orientation/total tracking 仍在补充网格图与正文数值中报告，不与主要 position tracking 结论挤在同一张正文图里。
+
+Tracking 的参照点是该 condition 实际提供给 policy 的 displayed target：numeric-noise 条件使用加噪后的 target，VLM formal rollout 使用 clean-GT target。因此 n7 的 tracking error 是“末端执行器到错误目标点的距离”，不是末端执行器到 clean GT 的距离；它适合描述点跟随行为，不应直接当作任务几何误差。
+
+### 1.3 补充 pooled summary 与 task/metric breakdown
+
+![Three-task pooled success](figures/vlm_cover_108/vlm_cover_108_success_3task_pooled.png)
+
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_success_3task_pooled.pdf)
+
+![Task-by-metric tracking breakdown](figures/vlm_cover_108/vlm_cover_108_tracking_error.png)
+
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_tracking_error.pdf)
+
+Pooled success 按三个 task 的 rollout 数直接合并，因此每个 condition/noise cell 为 `3×108=324` 个 rollout。补充 tracking 网格按 fresh36 指标拆分 3 个 task × 3 个指标（position、orientation、total），其中 `total = pos_m / 0.01 + ori_deg / 5`；point condition 没有 pose-aware orientation/total 定义，因此后两行只显示 grasp condition。该网格用于诊断任务和指标差异，不作为正文 tracking 主图。r180 保留在表格中，不单独画 endpoint 图。
 
 n0–n7 的 position 与 orientation 扰动是绑定的，而不是两个独立实验轴：
 
@@ -124,17 +134,25 @@ Success rate
 
 ![Skill-level success rate](figures/vlm_cover_108/vlm_cover_108_skill_success_rate.png)
 
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_skill_success_rate.pdf)
+
 Position error
 
 ![Skill-level position tracking error](figures/vlm_cover_108/vlm_cover_108_skill_tracking_position.png)
+
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_skill_tracking_position.pdf)
 
 Orientation error
 
 ![Skill-level orientation tracking error](figures/vlm_cover_108/vlm_cover_108_skill_tracking_orientation.png)
 
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_skill_tracking_orientation.pdf)
+
 Total error
 
 ![Skill-level total tracking error](figures/vlm_cover_108/vlm_cover_108_skill_tracking_total.png)
+
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_skill_tracking_total.pdf)
 
 四张图沿用 fresh36 的 cascading skill 定义：每个子图是一种 skill type（`push/pick/place/insert/screw`）和一个 task，曲线表示不同 condition；success rate 为 `completed/entered`，不是 task success。tracking 统计每个 skill state 的最终有效段，并按同一 skill type 汇总；n0–n4 与 Shuffle 排除旧 seed-0 tracking 后使用 72 条 tracking rollout，n5–n7 使用 108 条。主轴使用真实 n0–n7 position σ/axis，右侧窄轴按 `n7→Shuffle` 显示 categorical endpoint；不展示 replicate 离散度。Point 条件只有 position tracking，Grasp 条件同时显示 position、orientation 和 `total = pos_m / 0.01 + ori_deg / 5`。每个主轴还叠加三条 VLM 参考线：task-level Point VLM RMS-equivalent σ、task-level Grasp VLM RMS-equivalent σ，以及该 skill 的 Grasp VLM p95-equivalent；若 p95 超出 n7，红色点线在右边界截断并标记 `p95>n7`。这些参考线只读取已校验的 `vlm_sigma_by_task.csv` 与 `vlm_skill_error_reference.csv`。
 

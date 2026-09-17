@@ -114,15 +114,19 @@ Holding GP fixed, adding skill improves one-leg, round-table and lamp by `+6.48`
 
 ![VLM-cover task-level success](figures/vlm_cover_108/vlm_cover_108_success_numeric.png)
 
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_success_numeric.pdf)
+
 图 1 的三个分面分别对应 `one_leg`、`round_table` 和 `lamp`；横轴使用真实 position σ/axis，右侧仅保留 `n7→Shuffle` 的 categorical endpoint。图中每个 task 只标出 Point VLM 与 Grasp VLM 两条 position-equivalent σ 线；Grasp 的 orientation-equivalent scale 只在文字和附录说明，不在图上增加第三条纵线。曲线来自已校验表，不展示 replicate 散点。
 
 #### 图 2：pooled tracking response
 
-![VLM-cover pooled tracking](figures/vlm_cover_108/vlm_cover_108_tracking_error.png)
+![VLM-cover pooled position tracking](figures/vlm_cover_108/vlm_cover_108_tracking_position_3task_pooled.png)
 
-图 2 按 fresh36 指标显示 position、orientation 和 total tracking error。它保留 `n7→Shuffle` 对照，用于区分“同一 subtask 的数值目标偏移”和“被置换 subtask 的 guidance”。Numeric-noise tracking 以 policy 实际接收的 displayed target 为参照，因此 n7 的大 tracking error 不是到 clean-GT 的距离。
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_tracking_position_3task_pooled.pdf)
 
-三 task pooled success 图和 pooled position tracking 图移至附录，不在正文重复；它们只用于给出跨任务的总体摘要。n0–n7 进入 ordinal 描述性趋势，Shuffle 与 r180 不进入连续拟合；grasp n0–n7 同时改变位置和旋转，只能解释为联合扰动。
+图 2 将三个任务的 position tracking 按有效 final skill-state 数加权后合并为一组 condition 曲线，并保留 `n7→Shuffle` 对照，用于区分“同一 subtask 的数值目标偏移”和“被置换 subtask 的 guidance”。Numeric-noise tracking 以 policy 实际接收的 displayed target 为参照，因此 n7 的大 tracking error 不是到 clean-GT 的距离。Position 是所有五种接口共享且直接对应 2D guidance 的主要 tracking 指标；3 task × 3 metric 的密集网格移至附录，用于补充 grasp 的 orientation/total 诊断。
+
+三 task pooled success 图移至附录，不在正文重复。n0–n7 进入 ordinal 描述性趋势，Shuffle 与 r180 不进入连续拟合；grasp n0–n7 同时改变位置和旋转，只能解释为联合扰动。
 
 #### 108 实验的主要结论（对应补充报告 §1.4）
 
@@ -174,9 +178,13 @@ Formal VLM guidance evaluation 中，Point family 完成 `181/324=55.9%` 个 rol
 
 ![各 skill 相对新 RGB-D 的 multi-seed 差值](./figures/skill_level_multiseed/skill_level_condition_contrasts_multiseed.png)
 
+[矢量 PDF](./figures/skill_level_multiseed/skill_level_condition_contrasts_multiseed.pdf)
+
 图 3 | Multi-seed condition 收益的阶段分布。RGB-D 使用两个新 checkpoint；GP、skill 与 GP+skill 各使用三个训练 checkpoint。柱高为 pooled `ΣC/ΣR` 的差值，不是 seed mean，也不是 paired trajectory 的因果效应。
 
 ![四个 Place 步骤的 multi-seed condition 对比](./figures/skill_level_multiseed/skill_level_place_comparison_multiseed.png)
+
+[矢量 PDF](./figures/skill_level_multiseed/skill_level_place_comparison_multiseed.pdf)
 
 图 4 | Multi-seed Place 步骤分析。四种 condition 均合并三个训练 checkpoint。GP+skill 相对 skill-only 在四个 Place 标签上均为正，增量依次为 `+5.07`、`+4.99`、`+12.07` 和 `+18.10 pp`。hood placement 因标签覆盖不完整继续排除。
 
@@ -276,8 +284,9 @@ Formal VLM guidance evaluation 中，Point family 完成 `181/324=55.9%` 个 rol
 - Multi-seed skill-level 分析：[`skill_level_analysis_multiseed_0917.md`](./skill_level_analysis_multiseed_0917.md)
 - Low→Med 空间泛化：[`low2med_generalization.md`](./low2med_generalization.md#results)
 - Clean-train → noisy-eval 正式结果：[`annotation_noise_vlm_cover_108.md`](./annotation_noise_vlm_cover_108.md)；早期 seed-0 对照：[`annotation_noise_clean_train_fresh36.md`](./annotation_noise_clean_train_fresh36.md#1-结果图)。
-- 主文图 1：`figures/vlm_cover_108/vlm_cover_108_success_numeric.png`（task-level SR；仅 Point/Grasp 两条 position-equivalent σ 线）。
-- 主文图 2：`figures/vlm_cover_108/vlm_cover_108_tracking_error.png`（pooled position/orientation/total tracking；不再使用单独 endpoint 图）。
+- 主文图 1：`figures/vlm_cover_108/vlm_cover_108_success_numeric.pdf`（task-level SR；仅 Point/Grasp 两条 position-equivalent σ 线）。
+- 主文图 2：`figures/vlm_cover_108/vlm_cover_108_tracking_position_3task_pooled.pdf`（三任务合并的 position tracking；保留 `n7→Shuffle` endpoint）。
+- 附录 tracking grid：`figures/vlm_cover_108/vlm_cover_108_tracking_error.pdf`（3 task × position/orientation/total，仅用于细粒度诊断）。
 - VLM 端到端评测：[`vlm_dit_guidance_eval.md`](./vlm_dit_guidance_eval.md#22-真实-vlm-引导误差及其下游影响)。
 - FurnitureBench–AutoMate 联合训练：[`automate_multitask_generalist_comparison_0914.md`](./automate_multitask_generalist_comparison_0914.md#跨环境主对比automate-扩展能力与-furniturebench-保持率)。
 
@@ -287,9 +296,19 @@ Formal VLM guidance evaluation 中，Point family 完成 `181/324=55.9%` 个 rol
 
 ![Three-task pooled success](figures/vlm_cover_108/vlm_cover_108_success_3task_pooled.png)
 
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_success_3task_pooled.pdf)
+
 三 task pooled position tracking：
 
 ![Three-task pooled position tracking](figures/vlm_cover_108/vlm_cover_108_tracking_position_3task_pooled.png)
+
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_tracking_position_3task_pooled.pdf)
+
+Task × metric tracking breakdown：
+
+![Task-by-metric tracking breakdown](figures/vlm_cover_108/vlm_cover_108_tracking_error.png)
+
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_tracking_error.pdf)
 
 Skill-level success、position/orientation/total tracking：
 
@@ -297,11 +316,19 @@ Skill-level 图中的第三条参考线是 Grasp VLM 的 point-error p95 stress 
 
 ![Skill-level success rate](figures/vlm_cover_108/vlm_cover_108_skill_success_rate.png)
 
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_skill_success_rate.pdf)
+
 ![Skill-level position tracking](figures/vlm_cover_108/vlm_cover_108_skill_tracking_position.png)
+
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_skill_tracking_position.pdf)
 
 ![Skill-level orientation tracking](figures/vlm_cover_108/vlm_cover_108_skill_tracking_orientation.png)
 
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_skill_tracking_orientation.pdf)
+
 ![Skill-level total tracking](figures/vlm_cover_108/vlm_cover_108_skill_tracking_total.png)
+
+[矢量 PDF](figures/vlm_cover_108/vlm_cover_108_skill_tracking_total.pdf)
 
 ### 附录 A.2：VLM position-equivalent σ anchor table
 
