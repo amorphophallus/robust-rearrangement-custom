@@ -1483,6 +1483,12 @@ def main(cfg: DictConfig):
         ddp_shard_enabled = bool(
             world_size > 1 and cfg.data.get("ddp_shard_enabled", False)
         )
+        episode_selection_index = cfg.data.get("episode_selection_index", None)
+        if episode_selection_index is not None and not ddp_shard_enabled:
+            raise ValueError(
+                "data.episode_selection_index requires "
+                "data.ddp_shard_enabled=true."
+            )
         validate_env_sampling_mode(
             cfg.data.get("env_sampling_weights", None),
             ddp_shard_enabled=ddp_shard_enabled,
@@ -1520,6 +1526,7 @@ def main(cfg: DictConfig):
                     data_path,
                     max_episodes=cfg.data.data_subset,
                     max_ep_cnt=cfg.data.get("max_episode_count", None),
+                    selection_index=episode_selection_index,
                 )
                 env_sampling_weights = normalize_env_sampling_weights(
                     cfg.data.get("env_sampling_weights", None),
@@ -1788,6 +1795,7 @@ def main(cfg: DictConfig):
                             data_path,
                             max_episodes=cfg.data.data_subset,
                             max_ep_cnt=cfg.data.get("max_episode_count", None),
+                            selection_index=episode_selection_index,
                         ),
                         progress_desc="LMDB depth stats",
                     ),

@@ -49,6 +49,10 @@ data:
   # The new LMDB converter writes it; Zarr inputs must already provide it.
   env_sampling_weights: null
   data_paths_override: null
+  # Optional small JSON index that filters the episode manifest by source and
+  # task without rewriting the underlying LMDB payload. This is currently used
+  # by the episode-sharded DDP path and is validated fail closed.
+  episode_selection_index: null
   storage_format: zarr
   # Optional fail-closed gates checked before any LMDB frames are loaded.
   required_lmdb_attrs: null

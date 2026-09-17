@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -97,19 +98,113 @@ def combine_episode_subset(
     )
 
 
-def build_episode_manifest(dataset_paths, max_episodes=None, max_ep_cnt=None):
+def apply_episode_selection_index(manifest, selection_index):
+    if selection_index is None:
+        return manifest
+
+    selection_path = Path(selection_index).expanduser().resolve()
+    with selection_path.open(encoding="utf-8") as stream:
+        payload = json.load(stream)
+    if payload.get("schema") != "rr-episode-selection-v1":
+        raise ValueError(
+            f"Unsupported episode selection schema in {selection_path}: "
+            f"{payload.get('schema')!r}"
+        )
+
+    rules = payload.get("rules")
+    if not isinstance(rules, list) or not rules:
+        raise ValueError(f"Episode selection index has no rules: {selection_path}")
+
+    selected = list(manifest)
+    for rule in rules:
+        source = str(rule["source"])
+        source_refs = [ref for ref in manifest if ref.source == source]
+        if not source_refs:
+            raise ValueError(
+                f"Episode selection source {source!r} is absent from the manifest."
+            )
+
+        input_tasks = {ref.task for ref in source_refs}
+        include_tasks = {str(task) for task in rule["include_tasks"]}
+        exclude_tasks = {str(task) for task in rule.get("exclude_tasks", [])}
+        if include_tasks & exclude_tasks:
+            raise ValueError(
+                f"Episode selection for {source!r} includes and excludes the same task."
+            )
+        if missing := include_tasks - input_tasks:
+            raise ValueError(
+                f"Episode selection for {source!r} references missing tasks: "
+                f"{sorted(missing)}"
+            )
+        if exclude_tasks and include_tasks | exclude_tasks != input_tasks:
+            raise ValueError(
+                f"Episode selection for {source!r} does not partition the input tasks."
+            )
+
+        expected_input_tasks = rule.get("expected_input_task_count")
+        if expected_input_tasks is not None and len(input_tasks) != int(
+            expected_input_tasks
+        ):
+            raise ValueError(
+                f"Episode selection for {source!r} expected {expected_input_tasks} "
+                f"input tasks, found {len(input_tasks)}."
+            )
+        expected_input_episodes = rule.get("expected_input_episode_count")
+        if expected_input_episodes is not None and len(source_refs) != int(
+            expected_input_episodes
+        ):
+            raise ValueError(
+                f"Episode selection for {source!r} expected {expected_input_episodes} "
+                f"input episodes, found {len(source_refs)}."
+            )
+
+        selected = [
+            ref
+            for ref in selected
+            if ref.source != source or ref.task in include_tasks
+        ]
+        output_refs = [ref for ref in selected if ref.source == source]
+        output_tasks = {ref.task for ref in output_refs}
+        expected_output_tasks = rule.get("expected_output_task_count")
+        if expected_output_tasks is not None and len(output_tasks) != int(
+            expected_output_tasks
+        ):
+            raise ValueError(
+                f"Episode selection for {source!r} expected {expected_output_tasks} "
+                f"output tasks, found {len(output_tasks)}."
+            )
+        expected_output_episodes = rule.get("expected_output_episode_count")
+        if expected_output_episodes is not None and len(output_refs) != int(
+            expected_output_episodes
+        ):
+            raise ValueError(
+                f"Episode selection for {source!r} expected {expected_output_episodes} "
+                f"output episodes, found {len(output_refs)}."
+            )
+
+    return selected
+
+
+def build_episode_manifest(
+    dataset_paths,
+    max_episodes=None,
+    max_ep_cnt=None,
+    selection_index=None,
+):
     dataset_format = ensure_homogeneous_dataset_format(dataset_paths)
     if dataset_format == "zarr":
-        return _require_zarr_backend().build_episode_manifest(
+        manifest = _require_zarr_backend().build_episode_manifest(
             dataset_paths,
             max_episodes=max_episodes,
             max_ep_cnt=max_ep_cnt,
         )
-    return lmdb_backend.build_episode_manifest(
-        dataset_paths,
-        max_episodes=max_episodes,
-        max_ep_cnt=max_ep_cnt,
-    )
+    else:
+        manifest = lmdb_backend.build_episode_manifest(
+            dataset_paths,
+            max_episodes=max_episodes,
+            max_ep_cnt=max_ep_cnt,
+        )
+    return apply_episode_selection_index(manifest, selection_index)
 
 
 def split_episode_manifest(manifest, test_split: float, seed: int):
