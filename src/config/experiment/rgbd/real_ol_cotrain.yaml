@@ -22,5 +22,8 @@ data:
   augment_image: true
   annotate_skill_one_hot: true
 
+training:
+  num_epochs: 3000
+
 wandb:
   project: real-sim-one-leg-rgbd-cotrain
