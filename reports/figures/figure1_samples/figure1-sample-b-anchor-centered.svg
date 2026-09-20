@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="940" viewBox="0 0 1800 940">
+  <defs>
+    <marker id="ag" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#536779"/></marker>
+    <marker id="ar" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#E76F51"/></marker>
+    <marker id="at" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#2A9D8F"/></marker>
+    <style>text{font-family:Arial,Helvetica,sans-serif}.h{font-weight:700;fill:#17324D}.body{font-size:17px;fill:#42566A}.small{font-size:15px;fill:#536779}.box{stroke-width:2}</style>
+  </defs>
+  <rect width="1800" height="940" fill="#FFFFFF"/>
+  <text x="45" y="50" font-size="30" class="h">A refreshed image-space target anchors long-horizon assembly</text>
+  <rect x="40" y="82" width="1720" height="255" rx="18" fill="#FFF9F6" stroke="#E76F51" stroke-width="2"/>
+  <text x="64" y="119" font-size="21" font-weight="700" fill="#8C3B2B">a  Long-horizon assembly couples local errors</text>
+  <g class="body" text-anchor="middle">
+    <rect x="95" y="155" width="190" height="64" rx="12" fill="#FFFFFF" stroke="#8FA3B8" class="box"/><text x="190" y="194">Pick</text>
+    <rect x="420" y="155" width="190" height="64" rx="12" fill="#FFFFFF" stroke="#8FA3B8" class="box"/><text x="515" y="194">Place</text>
+    <rect x="745" y="155" width="190" height="64" rx="12" fill="#FFFFFF" stroke="#8FA3B8" class="box"/><text x="840" y="194">Insert</text>
+    <rect x="1070" y="155" width="190" height="64" rx="12" fill="#FFFFFF" stroke="#8FA3B8" class="box"/><text x="1165" y="194">Screw</text>
+    <rect x="1395" y="155" width="250" height="64" rx="12" fill="#E8F6F3" stroke="#2A9D8F" class="box"/><text x="1520" y="194" fill="#176B62" font-weight="700">Assembly success</text>
+  </g>
+  <g stroke="#E76F51" stroke-width="3" marker-end="url(#ar)"><line x1="285" y1="187" x2="415" y2="187"/><line x1="610" y1="187" x2="740" y2="187"/><line x1="935" y1="187" x2="1065" y2="187"/><line x1="1260" y1="187" x2="1390" y2="187"/></g>
+  <rect x="460" y="258" width="885" height="50" rx="10" fill="#FDE9E3" stroke="#E76F51" class="box"/>
+  <text x="902" y="289" text-anchor="middle" class="body" fill="#8C3B2B">action error → shifted observation → distribution shift → downstream failure</text>
+
+  <rect x="40" y="365" width="1140" height="490" rx="18" fill="#F4F8FD" stroke="#3F78B5" stroke-width="2"/>
+  <text x="64" y="402" font-size="21" font-weight="700" fill="#244F7A">b  Two systems, one compact interface</text>
+  <rect x="85" y="470" width="185" height="80" rx="12" fill="#FFFFFF" stroke="#8FA3B8" class="box"/>
+  <text x="177" y="502" text-anchor="middle" class="body"><tspan x="177">Current image</tspan><tspan x="177" dy="23">+ instruction</tspan></text>
+  <rect x="325" y="470" width="235" height="80" rx="12" fill="#EAF2FB" stroke="#3F78B5" class="box"/>
+  <text x="442" y="500" text-anchor="middle" class="body" fill="#244F7A"><tspan x="442" font-weight="700">VLM</tspan><tspan x="442" dy="24">understand · decompose · ground</tspan></text>
+  <line x1="270" y1="510" x2="320" y2="510" stroke="#536779" stroke-width="3" marker-end="url(#ag)"/>
+  <circle cx="700" cy="560" r="105" fill="#E8F6F3" stroke="#2A9D8F" stroke-width="5"/>
+  <circle cx="700" cy="525" r="12" fill="#E76F51" stroke="#FFFFFF" stroke-width="4"/>
+  <text x="700" y="565" text-anchor="middle" font-size="22" font-weight="700" fill="#176B62">TAGPoint</text>
+  <text x="700" y="594" text-anchor="middle" class="small"><tspan x="700">where to act</tspan><tspan fill="#94701A"> + coarse action mode</tspan></text>
+  <line x1="560" y1="510" x2="613" y2="531" stroke="#2A9D8F" stroke-width="3" marker-end="url(#at)"/>
+  <rect x="855" y="470" width="185" height="80" rx="12" fill="#FFFFFF" stroke="#8FA3B8" class="box"/>
+  <text x="947" y="502" text-anchor="middle" class="body"><tspan x="947">Marked RGB-D</tspan><tspan x="947" dy="23">+ robot state</tspan></text>
+  <line x1="797" y1="530" x2="850" y2="513" stroke="#2A9D8F" stroke-width="3" marker-end="url(#at)"/>
+  <rect x="855" y="600" width="235" height="80" rx="12" fill="#F1EBF7" stroke="#7B61A8" class="box"/>
+  <text x="972" y="630" text-anchor="middle" class="body" fill="#5B4783"><tspan x="972" font-weight="700">DiT action expert</tspan><tspan x="972" dy="24">continuous action chunks</tspan></text>
+  <line x1="947" y1="550" x2="947" y2="595" stroke="#7B61A8" stroke-width="3" marker-end="url(#ag)"/>
+  <rect x="340" y="742" width="530" height="72" rx="12" fill="#FFFFFF" stroke="#2A9D8F" class="box"/>
+  <text x="605" y="771" text-anchor="middle" class="body" fill="#176B62" font-weight="700"><tspan x="605">Re-estimated from the current observation</tspan><tspan x="605" dy="24">not rolled forward from previous policy predictions</tspan></text>
+  <line x1="700" y1="665" x2="650" y2="737" stroke="#2A9D8F" stroke-width="3" marker-end="url(#at)"/>
+
+  <rect x="1210" y="365" width="550" height="490" rx="18" fill="#F8F9FB" stroke="#73879C" stroke-width="2"/>
+  <text x="1234" y="402" font-size="21" font-weight="700" fill="#30475E">c  The interface is the experimental variable</text>
+  <rect x="1260" y="445" width="450" height="82" rx="12" fill="#FFFFFF" stroke="#17324D" class="box"/>
+  <text x="1485" y="476" text-anchor="middle" class="body"><tspan x="1485" font-weight="700" fill="#17324D">Five conditioning interfaces</tspan><tspan x="1485" dy="25">GP · skill · GP+skill · TAGPoint · 6D grasp</tspan></text>
+  <line x1="1485" y1="527" x2="1485" y2="573" stroke="#536779" stroke-width="3" marker-end="url(#ag)"/>
+  <g text-anchor="middle" class="body">
+    <rect x="1245" y="580" width="145" height="72" rx="11" fill="#EAF2FB" stroke="#3F78B5" class="box"/><text x="1317" y="609"><tspan x="1317">Clean</tspan><tspan x="1317" dy="22">multitask success</tspan></text>
+    <rect x="1412" y="580" width="145" height="72" rx="11" fill="#FFF4D6" stroke="#D5A021" class="box"/><text x="1484" y="609"><tspan x="1484">Controlled</tspan><tspan x="1484" dy="22">perturbations</tspan></text>
+    <rect x="1579" y="580" width="145" height="72" rx="11" fill="#E8F6F3" stroke="#2A9D8F" class="box"/><text x="1651" y="609"><tspan x="1651">Actual VLM</tspan><tspan x="1651" dy="22">guidance</tspan></text>
+    <rect x="1412" y="720" width="145" height="72" rx="11" fill="#F1EBF7" stroke="#7B61A8" class="box"/><text x="1484" y="749"><tspan x="1484">Task scale</tspan><tspan x="1484" dy="22">+ real world</tspan></text>
+  </g>
+</svg>

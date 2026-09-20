@@ -169,11 +169,11 @@ Formal VLM guidance evaluation 中，Point family 完成 `181/324=55.9%` 个 rol
 
 新版 RGB-D checkpoint 已使 Push/Pick 接近饱和，因此旧版“condition 的收益主要集中于 Push/Pick”不再成立。最清楚的正向差异转移到 Place：相对 RGB-D，plain GP 为 `+6.38 pp`，TAGPoint 为 `+2.69 pp`，GP+skill 为 `+9.53 pp`；skill-only 与 RGB-D 基本持平（`-0.33 pp`）。在已有 skill condition 时加入 GP，Place 从 `77.12% (300/389)` 提高到 `86.99% (361/415)`，增加 `9.87 pp`。
 
-![各 skill 相对新 RGB-D 的 multi-seed 差值](./figures/skill_level_multiseed/skill_level_condition_contrasts_multiseed.png)
+![四类 skill 相对新 RGB-D 的 multi-seed 差值](./figures/skill_level_multiseed/skill_level_condition_contrasts_multiseed.png)
 
 [矢量 PDF](./figures/skill_level_multiseed/skill_level_condition_contrasts_multiseed.pdf)
 
-图 3 | Multi-seed condition 收益的阶段分布。RGB-D 使用两个新 checkpoint；GP、skill 与 GP+skill 各使用三个训练 checkpoint。柱高为 pooled `ΣC/ΣR` 的差值，不是 seed mean，也不是 paired trajectory 的因果效应。
+图 3 | Multi-seed Push、Pick、Place、Screw 条件完成率差值。横轴为四类 skill，纵轴为完成率差值（pp）；每组相邻三根竖柱依次为 skill、GP、GP+skill，分别直接减去该 skill 的 RGB-D pooled 完成率；Insert 不在图中。RGB-D 使用两个新 checkpoint；三种条件各使用三个训练 checkpoint。柱高为 pooled `ΣC/ΣR` 的差值，不是 seed mean，也不是 paired trajectory 的因果效应。
 
 ![四个 Place 步骤的 multi-seed condition 对比](./figures/skill_level_multiseed/skill_level_place_comparison_multiseed.png)
 
@@ -182,6 +182,8 @@ Formal VLM guidance evaluation 中，Point family 完成 `181/324=55.9%` 个 rol
 图 4 | Multi-seed Place 步骤分析。四种 condition 均合并三个训练 checkpoint。GP+skill 相对 skill-only 在四个 Place 标签上均为正，增量依次为 `+5.07`、`+4.99`、`+12.07` 和 `+18.10 pp`。hood placement 因标签覆盖不完整继续排除。
 
 该分析仍受 stage-entry distribution 影响：各 policy 从任务起点执行，后续阶段的零件位姿、抓取状态与机器人状态由前序行为共同决定。因此 pooled C/R 可用于定位当前流程差异，但不等同于固定入口状态下的独立 skill 能力；original 与 supplemental checkpoint 的数据/评测 lineage 也不完全一致。
+
+Screw 是非均匀收益的反例：GP 的 pooled Screw 为 `78.29% (238/304)`，低于 RGB-D 的 `90.77% (177/195)`，主要差异位于 round-table（`79.17% (114/144)` 对 `95.92% (94/98)`），尤其是其第一个 Screw stage（`69/88` 对 `54/54`）。TAGPoint 与 GP+skill 的 pooled Screw 分别为 `88.81%` 与 `88.09%`。二维位置不足以单独说明旋转接触过程，是与数据相容的解释，但不同入口状态与 checkpoint lineage 使该解释尚非因果结论。
 
 
 ### 2.5 VLM 引导下的端到端评测

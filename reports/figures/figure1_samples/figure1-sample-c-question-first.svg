@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="940" viewBox="0 0 1800 940">
+  <defs>
+    <marker id="at" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#2A9D8F"/></marker>
+    <marker id="ap" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#7B61A8"/></marker>
+    <style>text{font-family:Arial,Helvetica,sans-serif}.h{font-weight:700;fill:#17324D}.body{font-size:17px;fill:#42566A}.small{font-size:15px;fill:#536779}.box{stroke-width:2}</style>
+  </defs>
+  <rect width="1800" height="940" fill="#FFFFFF"/>
+  <text x="900" y="52" text-anchor="middle" font-size="32" class="h">What should a VLM tell an action expert?</text>
+  <rect x="35" y="90" width="400" height="790" rx="18" fill="#FFF9F6" stroke="#E76F51" stroke-width="2"/>
+  <text x="58" y="127" font-size="21" font-weight="700" fill="#8C3B2B">a  Furniture assembly requirements</text>
+  <g text-anchor="middle">
+    <rect x="80" y="180" width="310" height="100" rx="14" fill="#FFFFFF" stroke="#E76F51" class="box"/>
+    <text x="235" y="219" class="body"><tspan x="235" font-weight="700">Switch</tspan><tspan x="235" dy="27">tasks and stages</tspan></text>
+    <rect x="80" y="325" width="310" height="100" rx="14" fill="#FFFFFF" stroke="#E76F51" class="box"/>
+    <text x="235" y="364" class="body"><tspan x="235" font-weight="700">Localize</tspan><tspan x="235" dy="27">part and target</tspan></text>
+    <rect x="80" y="470" width="310" height="100" rx="14" fill="#FFFFFF" stroke="#E76F51" class="box"/>
+    <text x="235" y="509" class="body"><tspan x="235" font-weight="700">Execute</tspan><tspan x="235" dy="27">contact-rich actions</tspan></text>
+    <rect x="80" y="655" width="310" height="90" rx="14" fill="#FDE9E3" stroke="#E76F51" class="box"/>
+    <text x="235" y="690" class="body" fill="#8C3B2B" font-weight="700"><tspan x="235">Failure at one stage</tspan><tspan x="235" dy="25">can invalidate the assembly</tspan></text>
+  </g>
+
+  <rect x="465" y="90" width="790" height="790" rx="18" fill="#F7F9FC" stroke="#73879C" stroke-width="2"/>
+  <text x="490" y="127" font-size="21" font-weight="700" fill="#30475E">b  Candidate conditioning interfaces</text>
+  <rect x="505" y="165" width="220" height="72" rx="12" fill="#F1EBF7" stroke="#7B61A8" class="box"/>
+  <text x="615" y="193" text-anchor="middle" class="body"><tspan x="615" font-weight="700">What to do?</tspan><tspan x="615" dy="23" class="small">semantic information</tspan></text>
+  <rect x="995" y="165" width="220" height="72" rx="12" fill="#EAF2FB" stroke="#3F78B5" class="box"/>
+  <text x="1105" y="193" text-anchor="middle" class="body"><tspan x="1105" font-weight="700">Where to act?</tspan><tspan x="1105" dy="23" class="small">spatial information</tspan></text>
+  <rect x="500" y="295" width="210" height="115" rx="13" fill="#F1EBF7" stroke="#7B61A8" class="box"/>
+  <text x="605" y="329" text-anchor="middle" class="body"><tspan x="605" font-weight="700">Skill condition</tspan><tspan x="605" dy="24">5D one-hot</tspan><tspan x="605" dy="24" class="small" fill="#7B61A8">semantic only</tspan></text>
+  <rect x="1010" y="295" width="210" height="115" rx="13" fill="#EAF2FB" stroke="#3F78B5" class="box"/>
+  <text x="1115" y="329" text-anchor="middle" class="body"><tspan x="1115" font-weight="700">GP</tspan><tspan x="1115" dy="24">2D target</tspan><tspan x="1115" dy="24" class="small" fill="#3F78B5">spatial only</tspan></text>
+  <rect x="755" y="275" width="210" height="125" rx="13" fill="#FFF1E8" stroke="#E58B47" class="box"/>
+  <text x="860" y="308" text-anchor="middle" class="body"><tspan x="860" font-weight="700">GP + skill</tspan><tspan x="860" dy="23" class="small">complete fixed-vocabulary</tspan><tspan x="860" dy="21" class="small">signal</tspan><tspan x="860" dy="23" class="small" fill="#E58B47">information-rich reference</tspan></text>
+  <rect x="730" y="475" width="260" height="145" rx="16" fill="#E8F6F3" stroke="#2A9D8F" stroke-width="5"/>
+  <circle cx="860" cy="510" r="12" fill="#E76F51" stroke="#FFFFFF" stroke-width="4"/>
+  <text x="860" y="550" text-anchor="middle" class="body" fill="#176B62"><tspan x="860" font-size="21" font-weight="700">TAGPoint</tspan><tspan x="860" dy="27">2D target + color-coded action mode</tspan><tspan x="860" dy="24" class="small">compact image-aligned interface</tspan></text>
+  <rect x="730" y="680" width="260" height="125" rx="13" fill="#FDEDEC" stroke="#C95A65" class="box"/>
+  <text x="860" y="715" text-anchor="middle" class="body"><tspan x="860" font-weight="700">6D grasp annotation</tspan><tspan x="860" dy="24" class="small">target + end-effector orientation</tspan><tspan x="860" dy="25" class="small" fill="#C95A65">richer pose interface</tspan></text>
+  <rect x="615" y="815" width="490" height="42" rx="10" fill="#FFFFFF" stroke="#17324D" class="box"/>
+  <text x="860" y="842" text-anchor="middle" class="body h">Which information is useful, robust, and extensible?</text>
+
+  <rect x="1285" y="90" width="480" height="790" rx="18" fill="#F4F8FD" stroke="#3F78B5" stroke-width="2"/>
+  <text x="1308" y="127" font-size="20" font-weight="700" fill="#244F7A">c  One shared expert, controlled comparison</text>
+  <rect x="1375" y="165" width="300" height="120" rx="14" fill="#EAF2FB" stroke="#3F78B5" class="box"/>
+  <text x="1525" y="197" text-anchor="middle" class="body" fill="#244F7A"><tspan x="1525" font-weight="700">VLM</tspan><tspan x="1525" dy="24">instruction understanding</tspan><tspan x="1525" dy="22">task decomposition</tspan><tspan x="1525" dy="22">visual grounding</tspan></text>
+  <rect x="1375" y="345" width="300" height="85" rx="14" fill="#E8F6F3" stroke="#2A9D8F" stroke-width="4"/>
+  <text x="1525" y="377" text-anchor="middle" class="body" fill="#176B62"><tspan x="1525">Conditioning interface</tspan><tspan x="1525" dy="25" font-weight="700">the experimental variable</tspan></text>
+  <line x1="1525" y1="285" x2="1525" y2="340" stroke="#2A9D8F" stroke-width="3" marker-end="url(#at)"/>
+  <rect x="1355" y="490" width="340" height="100" rx="14" fill="#F1EBF7" stroke="#7B61A8" class="box"/>
+  <text x="1525" y="525" text-anchor="middle" class="body" fill="#5B4783"><tspan x="1525" font-weight="700">Shared DiT action expert</tspan><tspan x="1525" dy="26">same data · same capacity · same training</tspan></text>
+  <line x1="1525" y1="430" x2="1525" y2="485" stroke="#7B61A8" stroke-width="3" marker-end="url(#ap)"/>
+  <rect x="1340" y="650" width="370" height="120" rx="14" fill="#FFFFFF" stroke="#17324D" class="box"/>
+  <text x="1525" y="683" text-anchor="middle" class="body"><tspan x="1525" font-weight="700" fill="#17324D">Evidence ladder</tspan><tspan x="1525" dy="25">clean success → skill analysis</tspan><tspan x="1525" dy="23">→ controlled perturbations → actual VLM</tspan><tspan x="1525" dy="23">→ task scale → real world</tspan></text>
+  <rect x="1340" y="795" width="370" height="62" rx="12" fill="#FFF4D6" stroke="#D5A021" class="box"/>
+  <text x="1525" y="820" text-anchor="middle" class="small" font-weight="700" fill="#6E5313"><tspan x="1525">Recommended interface</tspan><tspan x="1525" dy="21">+ measured failure boundary</tspan></text>
+</svg>

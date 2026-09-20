@@ -178,13 +178,13 @@ Supplemental JSON 统一来自 aligned wrist、positive-meters depth（RGB 除�
 
 ### 6.3 Insert 接近饱和，Screw 的方向依赖 condition
 
-所有主 condition 的 Insert pooled C/R 均接近 97–100%，继续不把它解释为 condition 的独立优势：只有完成较严格 Place 的 rollout 才会进入 Insert。Screw 则没有一致的正向排序；相对 RGB-D，plain GP 为 `-12.48 pp`，skill-only 为 `+0.62 pp`，TAGPoint 为 `-1.96 pp`，GP+skill 为 `-2.68 pp`。该阶段应继续按 task 与入口状态分析，不能从 pooled 值推导统一赢家。
+所有主 condition 的 Insert pooled C/R 均接近 97–100%，继续不把它解释为 condition 的独立优势：只有完成较严格 Place 的 rollout 才会进入 Insert。Screw 则没有一致的正向排序；相对 RGB-D，plain GP 为 `-12.48 pp`，skill-only 为 `+0.62 pp`，TAGPoint 为 `-1.96 pp`，GP+skill 为 `-2.68 pp`。GP 的 Screw 降幅主要见于 round-table：RGB-D 为 `94/98=95.92%`，GP 为 `114/144=79.17%`；其中第一个 Screw stage 分别为 `54/54` 与 `69/88`。one-leg 分别为 `62/64=96.88%` 与 `88/94=93.62%`，lamp 为 `21/33=63.64%` 与 `36/66=54.55%`。这与“二维点指定接触位置，但不单独指定旋转接触过程”一致，可作为机制假设；不同 policy 进入 Screw 时的状态及 checkpoint lineage 未匹配，不能据此认定 GP 导致独立 Screw 能力退化。
 
 ## 7. 图表
 
-![多 seed 的 condition × skill 差值](./figures/skill_level_multiseed/skill_level_condition_contrasts_multiseed.png)
+![四类 skill 条件完成率相对 RGB-D 的差值](./figures/skill_level_multiseed/skill_level_condition_contrasts_multiseed.png)
 
-**图 1｜Condition 收益的阶段分布（multi-seed）。** 每个 skill 的差值统一以仅使用两组新 checkpoint 的 RGB-D 为减数；GP、skill 与 GP+skill 各合并 3 个训练 checkpoint。第三根柱按 `skill−RGB-D` 与 `GP+skill−skill` 作带符号分层，菱形表示 `GP+skill−RGB-D` 的净差值。所有数值均为 pooled `ΣC/ΣR` 差值，不是 seed mean，也不表示轨迹配对的因果效应。
+**图 1｜四类 skill 的条件完成率相对 RGB-D 的差值（multi-seed）。** 横轴依次为 Push、Pick、Place、Screw，纵轴为完成率差值（pp）；每组紧邻的三根竖柱按 skill、GP、GP+skill 排列，分别直接减去该 skill 的 RGB-D pooled 完成率，不存在带符号分层或跨柱相加。仅从图中排除 Insert。RGB-D 使用两组新 checkpoint，其余每个 condition 合并 3 个训练 checkpoint。柱高是 pooled `ΣC/ΣR` 差值，不是 seed mean，也不表示轨迹配对的因果效应。
 
 ![多 seed 的 Place 步骤比较](./figures/skill_level_multiseed/skill_level_place_comparison_multiseed.png)
 
