@@ -10,8 +10,8 @@
 
 - `rgb` 与 `rgbd` 的原始 main checkpoint 使用了错误的数据/checkpoint lineage，现从主结果、均值、方差和论文结论中全部排除。两行正式表使用通过统一评估契约的 `2026090701`、`2026090702`、`2026091701`，因此 `n_train=3`。
 - `rgbd_gp` 沿用原 main experiment 的三个既有 seed；其余五个带 condition 的方法合并原 main seed 与两个补训 seed，因此 `n_train=3`。
-- `2026090701/02` 已按 aligned wrist、positive-meters depth（RGB 除外）和 reward-only success 评估，又以独立 `eval seed=1` 复测，并对 `eval seed=0/1` 逐格取较小成功数。`2026091701` 已在相同 camera/depth/success contract 下以 `eval seed=0`、`n_envs=12` 重测完成并进入正式表；第 13 节记录完整协议和数据来源。两个 grasp condition 按可追溯历史评估逐格取最大成功数，来源见第 12.3 节。
-- 由于部分 condition 仍混合历史与 supplemental lineage，表中排序是当前登记结果，不解释为严格的 paired causal effect。RGB/RGB-D 虽已是三个 train seed，但前两个登记的是两个 eval seed 的逐格 conservative min，第三个只有 eval seed 0；这个 estimator 差异必须与 train-seed 方差一起报告。
+- `2026090701/02` 已按 aligned wrist、positive-meters depth（RGB 除外）和 reward-only success 评估，又以独立 `eval seed=1` 复测，并对 `eval seed=0/1` 逐格取较小成功数。`2026091701` 也已在相同 camera/depth/success contract 下完成 `eval seed=0/1`，逐 task 取 conservative min 后进入正式表；第 13 节记录完整协议和数据来源。两个 grasp condition 按可追溯历史评估逐格取最大成功数，来源见第 12.3 节。
+- 由于部分 condition 仍混合历史与 supplemental lineage，且 grasp condition 使用不同的历史逐格 max 口径，表中排序是当前登记结果，不解释为严格的 paired causal effect。RGB/RGB-D 的三个 train seed 现均使用 `eval seed=0/1` 逐格 conservative min。
 
 旧 RGB/RGB-D checkpoint 及其 `0/36` 结果只保留在后文 provenance 审计中，不再用于“退化到单任务”“seed-dependent collapse”或任何方法结论。
 
@@ -23,14 +23,14 @@
 | `rgbd_colored_gp` | 3 | 87.04 ± 4.24% | 50.00 ± 22.22% | 35.19 ± 3.21% | 57.41 ± 5.78% |
 | `rgbd_gp_skill` | 3 | **88.89 ± 4.81%** | **56.48 ± 11.23%** | **44.44 ± 10.02%** | **63.27 ± 4.18%** |
 | `rgbd_skill` | 3 | 77.78 ± 2.78% | 49.07 ± 1.60% | 34.26 ± 1.60% | 53.70 ± 1.60% |
-| `rgbd` | 3 | 86.11 ± 7.35% | 50.00 ± 2.78% | 26.85 ± 6.99% | 54.32 ± 5.10% |
-| `rgb` | 3 | 84.26 ± 4.24% | 46.30 ± 4.24% | 18.52 ± 4.24% | 49.69 ± 1.07% |
+| `rgbd` | 3 | 82.41 ± 1.60% | 49.07 ± 1.60% | 25.93 ± 5.78% | 52.47 ± 1.93% |
+| `rgb` | 3 | 84.26 ± 4.24% | 41.67 ± 8.33% | 18.52 ± 4.24% | 48.15 ± 3.34% |
 | `rgbd_grasp_part` | 3 | 87.04 ± 4.24% | 14.81 ± 20.85% | 37.04 ± 5.78% | 46.30 ± 8.49% |
 | `rgbd_grasp_part_colored` | 3 | 87.04 ± 8.93% | 22.22 ± 19.25% | 33.33 ± 2.78% | 47.53 ± 5.58% |
 
 Overall 先在每个 train seed 内汇总三个 task 的成功数（总分母 108），再在同一 condition 的 train seed 间计算 mean ± sample std。当前 overall 点估计排序为：
 
-`rgbd_gp_skill` (63.27) > `rgbd_colored_gp` (57.41) > `rgbd` (54.32) > `rgbd_skill` (53.70) > `rgbd_gp` (52.47) > `rgb` (49.69) > `rgbd_grasp_part_colored` (47.53) > `rgbd_grasp_part` (46.30)。各行现均登记三个 train seed，但 lineage 和 eval-repeat estimator 仍不完全一致；小差异不解释为精确方法排序。
+`rgbd_gp_skill` (63.27) > `rgbd_colored_gp` (57.41) > `rgbd_skill` (53.70) > `rgbd` (52.47) = `rgbd_gp` (52.47) > `rgb` (48.15) > `rgbd_grasp_part_colored` (47.53) > `rgbd_grasp_part` (46.30)。各行现均登记三个 train seed，但 lineage 和登记规则仍不完全一致；小差异不解释为精确方法排序。
 
 ## 3. 逐 seed 成功率
 
@@ -42,8 +42,8 @@ Overall 先在每个 train seed 内汇总三个 task 的成功数（总分母 10
 | `rgbd_colored_gp` | 3 | 91.67% (33/36)<br>86.11% (31/36)<br>83.33% (30/36) | 27.78% (10/36)<br>72.22% (26/36)<br>50.00% (18/36) | 38.89% (14/36)<br>33.33% (12/36)<br>33.33% (12/36) |
 | `rgbd_gp_skill` | 3 | 83.33% (30/36)<br>91.67% (33/36)<br>91.67% (33/36) | 50.00% (18/36)<br>69.44% (25/36)<br>50.00% (18/36) | 55.56% (20/36)<br>41.67% (15/36)<br>36.11% (13/36) |
 | `rgbd_skill` | 3 | 77.78% (28/36)<br>80.56% (29/36)<br>75.00% (27/36) | 47.22% (17/36)<br>50.00% (18/36)<br>50.00% (18/36) | 33.33% (12/36)<br>36.11% (13/36)<br>33.33% (12/36) |
-| `rgbd` | 3 | 83.33% (30/36)<br>80.56% (29/36)<br>94.44% (34/36) | 50.00% (18/36)<br>47.22% (17/36)<br>52.78% (19/36) | 19.44% (7/36)<br>27.78% (10/36)<br>33.33% (12/36) |
-| `rgb` | 3 | 88.89% (32/36)<br>83.33% (30/36)<br>80.56% (29/36) | 41.67% (15/36)<br>50.00% (18/36)<br>47.22% (17/36) | 22.22% (8/36)<br>13.89% (5/36)<br>19.44% (7/36) |
+| `rgbd` | 3 | 83.33% (30/36)<br>80.56% (29/36)<br>83.33% (30/36) | 50.00% (18/36)<br>47.22% (17/36)<br>50.00% (18/36) | 19.44% (7/36)<br>27.78% (10/36)<br>30.56% (11/36) |
+| `rgb` | 3 | 88.89% (32/36)<br>83.33% (30/36)<br>80.56% (29/36) | 41.67% (15/36)<br>50.00% (18/36)<br>33.33% (12/36) | 22.22% (8/36)<br>13.89% (5/36)<br>19.44% (7/36) |
 | `rgbd_grasp_part` | 3 | 86.11% (31/36)<br>91.67% (33/36)<br>83.33% (30/36) | 38.89% (14/36)<br>2.78% (1/36)<br>2.78% (1/36) | 41.67% (15/36)<br>38.89% (14/36)<br>30.56% (11/36) |
 | `rgbd_grasp_part_colored` | 3 | 80.56% (29/36)<br>83.33% (30/36)<br>97.22% (35/36) | 44.44% (16/36)<br>11.11% (4/36)<br>11.11% (4/36) | 33.33% (12/36)<br>30.56% (11/36)<br>36.11% (13/36) |
 
@@ -73,7 +73,7 @@ Overall 先在每个 train seed 内汇总三个 task 的成功数（总分母 10
 | `grasp_part` | +5.56 | −45.83 | +11.11 | −9.72 |
 | `grasp_part_colored` | +8.34 | −37.50 | +9.72 | −6.48 |
 
-当前结果支持一个更窄的主结论：在严格同-lineage 的两个 supplemental seed 中，GP+skill、colored GP、skill-only 相对 RGB-D 的 overall 分别为 `+12.04、+8.33、+2.78 pp`（该 lineage 没有纯 GP）。三种语义 condition 的平均增益在 one_leg、round_table、lamp 分别为 `+2.78、+8.33、+12.04 pp`，收益在 lamp 最大。Grasp-part 的 round_table 退化使其 overall 低于 baseline，应单独分析。主汇总表现均为 `n=3`，但 RGB/RGB-D 的第三 seed 无匹配的 conditional run，前两 seed 又使用 eval-seed min，且 grasp 使用历史逐格 max；因此主表只提供登记点估计和方差，不作为统一抽样估计量下的无偏 method effect。
+当前结果支持一个更窄的主结论：在严格同-lineage 的两个 supplemental seed 中，GP+skill、colored GP、skill-only 相对 RGB-D 的 overall 分别为 `+12.04、+8.33、+2.78 pp`（该 lineage 没有纯 GP）。三种语义 condition 的平均增益在 one_leg、round_table、lamp 分别为 `+2.78、+8.33、+12.04 pp`，收益在 lamp 最大。Grasp-part 的 round_table 退化使其 overall 低于 baseline，应单独分析。主汇总表现均为 `n=3`，但 RGB/RGB-D 的第三 seed 无匹配的 conditional run，且 grasp 使用历史逐格 max；因此主表只提供登记点估计和方差，不作为统一抽样估计量下的无偏 method effect。
 
 ## 5. 重新整理后的实验结论
 
@@ -100,13 +100,13 @@ Overall 先在每个 train seed 内汇总三个 task 的成功数（总分母 10
 - **Skill-only：** overall 只比无 condition RGB-D 高 `2.78 pp`，one_leg 还低 `4.17 pp`，说明离散语义本身有帮助但不充分；它缺少“应该对哪里操作”的空间定位。与 GP+skill 的比较进一步支持 GP 的必要性。
 - **Colored GP：** 它相对纯 GP overall 提高 `4.94 pp`，说明语义颜色不是无效装饰；但低于 GP+skill 的上限，且 round_table 的 seed 方差较大。颜色到底编码了什么、各 skill-level 的贡献是多少，留到后续 skill-level analysis 讨论。
 - **Grasp-part：** 原先看到的 `0/36` 不是因为 RGB/RGB-D 的 min 规则被误套，而是 aligned 复测本身为 0。按用户指定对全部 task 逐格恢复历史 max 后，round_table 的普通 grasp 两个新 seed 为 `1/36、1/36`，colored grasp 为 `4/36、4/36`；来源见第 12.3 节。它仍是明确的 round_table 特定失败，需要另做 grasp-level 分析。
-- **RGB/RGB-D：** 原 main checkpoint 已判定为错误 lineage 并从统计与结论中排除。新 `2026091701` 在 aligned center crop 下为 RGB `53/108`、RGB-D `65/108`，旧 legacy-resize 结果 `42/108`、`0/108` 已降级为输入契约错误的 diagnostic。合入第三 train seed 后，正式主表 RGB 为 `49.69±1.07%`，RGB-D 为 `54.32±5.10%`。
+- **RGB/RGB-D：** 原 main checkpoint 已判定为错误 lineage 并从统计与结论中排除。新 `2026091701` 的 canonical eval seed 0 为 RGB `53/108`、RGB-D `65/108`；corrected eval seed 1 为 `53/108`、`59/108`，逐 task conservative min 后分别登记 `48/108`、`59/108`。旧 legacy-resize 结果 `42/108`、`0/108` 已降级为输入契约错误的 diagnostic。合入第三 train seed 后，正式主表 RGB 为 `48.15±3.34%`，RGB-D 为 `52.47±1.93%`。
 
 ### 5.4 Paper narrative: spatial and semantic conditioning improve multi-task assembly
 
 **Motivation.** We test whether explicit task-relevant conditions help a shared multi-task policy infer both what interaction to execute and where to execute it. The comparison separates spatial information (a guidance point, GP) from semantic information (a fixed skill label or a colour code attached to GP).
 
-**Experimental setting.** We evaluate DiT policies on one-leg, round-table and lamp in FurnitureBench, with 36 rollouts per checkpoint and task. Most conditions use three independent training runs. The original RGB and RGB-D checkpoints are excluded because they belong to an erroneous data/checkpoint lineage; these two baselines currently report mean ± sample standard deviation over two valid supplemental runs.
+**Experimental setting.** We evaluate DiT policies on one-leg, round-table and lamp in FurnitureBench, with 36 rollouts per checkpoint and task. All registered conditions use three training runs. The original RGB and RGB-D checkpoints are excluded because they belong to an erroneous data/checkpoint lineage; their three valid replacement runs use the per-task minimum over evaluation seeds 0 and 1.
 
 **Results.** In the controlled two-run lineage, RGB-D reaches `51.39±0.65%` overall success. Skill-only reaches `54.17±1.96%`, coloured GP reaches `59.72±5.89%`, and GP+skill reaches `63.43±5.89%`. Averaged over the three semantic conditions, the gain over RGB-D is `+2.78 pp` on one-leg, `+8.33 pp` on round-table and `+12.04 pp` on lamp. In the broader registered table, GP+skill remains the highest point estimate (`63.27±4.18%`) and coloured GP the second highest (`57.41±5.78%`), although the mixed lineages and unequal `n_train` limit strict ranking claims.
 
@@ -185,7 +185,7 @@ Clean success rate 只测量在分布内、正确 condition 下的最终完成�
 | GP+skill 是最终方案 | **改为上限参照** | 固定 one-hot skill 数量不易扩展；GP+skill 用于探索 colored GP 的理论成功率上限。Colored GP 的三通道 8-bit 颜色码可继续设计，是更可扩展的研究方向。 |
 | `skill = GP` | **不成立为等价结论** | GP+skill 比 skill-only overall 高 `9.57 pp`，支持空间 GP 的作用；skill-only 只提供离散阶段，不提供操作位置。 |
 | colored GP 没提供预期语义信息 | **撤回** | Colored GP 相对 GP overall 高 `4.94 pp`，与 GP+skill 相对 GP 的方向一致，支持“GP 上的语义信息有用”；因果使用方式仍需 permutation/skill-level analysis。 |
-| RGB-D/RGB 因 round_table 数据更长而只会 round_table | **撤回** | 该判断依赖已排除的错误 checkpoint，不能用于描述有效 RGB/RGB-D baseline。第三 seed 在 aligned re-eval 中 RGB/RGB-D 分别为 `53/108`、`65/108`，三项任务均有成功；旧 RGB-D `0/108` 已确认是 wrist contract 错误的 diagnostic。 |
+| RGB-D/RGB 因 round_table 数据更长而只会 round_table | **撤回** | 该判断依赖已排除的错误 checkpoint，不能用于描述有效 RGB/RGB-D baseline。第三 seed 的 canonical eval seed 0 中 RGB/RGB-D 分别为 `53/108`、`65/108`，corrected conservative min 为 `48/108`、`59/108`，三项任务均有成功；旧 RGB-D `0/108` 已确认是 wrist contract 错误的 diagnostic。 |
 | skill-only 的 one_leg 问题来自 Place | **撤回为总体结论** | 新两 seed one_leg 为 `29/36、27/36`，不存在稳定崩溃；阶段性原因交给 skill-level analysis。 |
 
 ## 9. 建议用于论文的当前表述
@@ -509,27 +509,35 @@ checkpoint 来源与 hash 为：
 
 ### 13.2 正确 eval protocol、入口和命令
 
-先执行 `2 conditions × 3 tasks × 12 rollouts` 最小验证。六个 JSON 均通过以下 gate：`n_envs=12`、`eval seed=0`、low randomness、scripted annotation、physics-reward success、requested/resolved `center-crop-224`、wrist `240×320 → 224×224`、RGB-D positive-meters depth / RGB not-applicable depth、tracking complete 及完整命令登记。
+canonical eval seed 0 先执行 `2 conditions × 3 tasks × 12 rollouts` 最小验证；corrected eval seed 1 在 base 上按相同协议再次执行六格 validation。12 个 JSON 均通过以下 gate：`n_envs=12`、low randomness、scripted annotation、physics-reward success、requested/resolved `center-crop-224`、wrist `240×320 → 224×224`、RGB-D positive-meters depth / RGB not-applicable depth、tracking complete 及完整命令登记。
 
 | Condition | one_leg | round_table | lamp | Total |
 |---|---:|---:|---:|---:|
 | `rgb` | 10/12 | 9/12 | 1/12 | 20/36 |
 | `rgbd` | 11/12 | 7/12 | 3/12 | 21/36 |
 
-在当前代码下，正确入口是 `/home/hy/anaconda3/envs/rr/bin/python -m src.eval.evaluate_model`，不是旧 snapshot 的直接脚本。本轮从冻结快照 `/tmp/rr_main3seed_eval_0921` 运行，完整模板命令如下；`N_ROLLOUTS=12` 用于验证，`36` 用于正式结果：
+corrected eval seed 1 validation 为：
+
+| Condition | one_leg | round_table | lamp | Total |
+|---|---:|---:|---:|---:|
+| `rgb` | 12/12 | 4/12 | 2/12 | 18/36 |
+| `rgbd` | 11/12 | 6/12 | 1/12 | 18/36 |
+
+正确入口是 `python -m src.eval.evaluate_model`，不是直接执行旧 snapshot 脚本。canonical seed 0 从 r218 冻结快照 `/tmp/rr_main3seed_eval_0921` 运行；corrected seed 1 从 base 冻结 bundle `/home/huyue/tmp/rr-joint90-corrected-eval-0921/code` 运行。两者均使用同一 Main canonical camera/depth contract；最新完整模板如下，`N_ROLLOUTS=12` 用于验证、`36` 用于正式结果，`EVAL_SEED` 分别取 0 和 1：
 
 ```bash
-cd /data/hy/robust-rearrangement
+cd EVAL_ROOT
 CUDA_VISIBLE_DEVICES=0 \
-LD_LIBRARY_PATH=/home/hy/anaconda3/envs/rr/lib:${LD_LIBRARY_PATH:-} \
+LD_LIBRARY_PATH=CONDA_ENV/lib:${LD_LIBRARY_PATH:-} \
 PYTHONNOUSERSITE=1 \
-PYTHONPATH=/tmp/rr_main3seed_eval_0921:/data/hy/robust-rearrangement/furniture-bench \
-/home/hy/anaconda3/envs/rr/bin/python -m src.eval.evaluate_model \
+PYTHONPATH=EVAL_ROOT:EVAL_ROOT/furniture-bench:ASSET_ROOT/isaacgym/python \
+PYTHON -m src.eval.evaluate_model \
   --wt-path CHECKPOINT \
+  --gpu 0 \
   --task TASK \
   --n-envs 12 \
   --n-rollouts N_ROLLOUTS \
-  --seed 0 \
+  --seed EVAL_SEED \
   --randomness low \
   --max-rollout-steps 1000 \
   --action-type pos \
@@ -537,7 +545,9 @@ PYTHONPATH=/tmp/rr_main3seed_eval_0921:/data/hy/robust-rearrangement/furniture-b
   --annotate-skill \
   --enable-annotation-verify \
   --annotation-source scripted \
+  --sim-front-camera-preset original \
   --wrist-image-transform center-crop-224 \
+  --eepose-frame robot-base \
   --tracking-metric-type position \
   --if-exists error \
   --task-summary-out SUMMARY_JSON
@@ -545,26 +555,42 @@ PYTHONPATH=/tmp/rr_main3seed_eval_0921:/data/hy/robust-rearrangement/furniture-b
 
 RGB-D 的 policy depth 由 observation contract 请求，`--save-depth-image` 只决定是否把 depth 保存到 rollout，**不是**获取 depth 的开关，所以本轮正确命令不需要该参数。定向 camera-contract 测试的 3 个 test function 全部通过（eval 环境未安装 pytest，因此直接调用测试函数），且相关源文件通过 `py_compile`。
 
-### 13.3 `2×36×3` 正式结果与三 seed 重算
+### 13.3 `2×36×3` 正式结果、conservative min 与三 seed 重算
+
+canonical eval seed 0 正式结果为：
 
 | Condition | one_leg | round_table | lamp | Overall |
 |---|---:|---:|---:|---:|
 | `rgb` | 80.56% (29/36) | 47.22% (17/36) | 19.44% (7/36) | 49.07% (53/108) |
 | `rgbd` | 94.44% (34/36) | 52.78% (19/36) | 33.33% (12/36) | 60.19% (65/108) |
 
+corrected eval seed 1 正式结果为：
+
+| Condition | one_leg | round_table | lamp | Overall |
+|---|---:|---:|---:|---:|
+| `rgb` | 91.67% (33/36) | 33.33% (12/36) | 22.22% (8/36) | 49.07% (53/108) |
+| `rgbd` | 83.33% (30/36) | 50.00% (18/36) | 30.56% (11/36) | 54.63% (59/108) |
+
+逐 task 取 `min(eval seed 0, eval seed 1)` 后，`2026091701` 正式登记为：
+
+| Condition | one_leg | round_table | lamp | Overall |
+|---|---:|---:|---:|---:|
+| `rgb` | 80.56% (29/36) | 33.33% (12/36) | 19.44% (7/36) | 44.44% (48/108) |
+| `rgbd` | 83.33% (30/36) | 50.00% (18/36) | 30.56% (11/36) | 54.63% (59/108) |
+
 与第 12.2 节的前两 train seed 合并后，mean 和 sample std（`ddof=1`）为：
 
 | Condition | n_train | one_leg | round_table | lamp | Overall |
 |---|---:|---:|---:|---:|---:|
-| `rgb` | 3 | 84.26 ± 4.24% | 46.30 ± 4.24% | 18.52 ± 4.24% | 49.69 ± 1.07% |
-| `rgbd` | 3 | 86.11 ± 7.35% | 50.00 ± 2.78% | 26.85 ± 6.99% | 54.32 ± 5.10% |
+| `rgb` | 3 | 84.26 ± 4.24% | 41.67 ± 8.33% | 18.52 ± 4.24% | 48.15 ± 3.34% |
+| `rgbd` | 3 | 82.41 ± 1.60% | 49.07 ± 1.60% | 25.93 ± 5.78% | 52.47 ± 1.93% |
 
-Overall 先对每个 train seed 汇总三个 task，再跨 train seed 计算 mean ± sample std。RGB 的三个 overall 是 `55/108、53/108、53/108`；RGB-D 是 `55/108、56/108、65/108`。前两 seed 仍是 eval seed 0/1 逐格 min，第三 seed 是 eval seed 0；因此这是用户指定的当前 main 3-seed 登记口径，不声称三个 seed 具有完全相同的 eval-repeat estimator。
+Overall 先对每个 train seed 汇总三个 task，再跨 train seed 计算 mean ± sample std。RGB 的三个 overall 是 `55/108、53/108、48/108`；RGB-D 是 `55/108、56/108、59/108`。三个 train seed 现均按 eval seed 0/1 逐格 min 登记。
 
-旧 legacy-resize diagnostic 为 RGB `42/108`、RGB-D `0/108`；正确 center-crop 复测恢复到 `53/108`、`65/108`。这说明 RGB-D 的全零不是 checkpoint 训练 collapse，而是 eval 输入几何与训练数据不匹配。
+旧 legacy-resize diagnostic 为 RGB `42/108`、RGB-D `0/108`；正确 center-crop 的 canonical seed-0 复测恢复到 `53/108`、`65/108`，corrected seed-1 repeat 为 `53/108`、`59/108`。这说明 RGB-D 的全零不是 checkpoint 训练 collapse，而是 eval 输入几何与训练数据不匹配。
 
 ### 13.4 运行与数据来源登记
 
-本次 12 个 task JSON 均通过 schema/protocol 审计。机器可读来源表为 `../logs/main3seed-rgb-rgbd-reeval-0921/source_registry.json`，运行元数据和逐 cell 命令为 `../logs/main3seed-rgb-rgbd-reeval-0921/run_metadata.txt`，结果分别为 `validation12/results/` 和 `formal36/results/`。评估源码快照的 non-pycache `src/` manifest SHA-256 为 `f1c73cdb7217a9ed0e8de3aa145f5bf86cd4553658797ba60684f66eebea081d`，root commit 为 `073d38bb2f09e0123d27dd8d0a220b1046310dd7`，FurnitureBench commit 为 `dc7f4355b80e8312441d69facbee79bf3315affe`。
+canonical eval seed 0 的 12 个 task JSON 位于 r218 `../logs/main3seed-rgb-rgbd-reeval-0921/`；corrected eval seed 1 的 12 个 JSON、逐 cell 日志、命令、哈希清单和聚合结果位于 base `../logs/main-retrain-corrected-repeat-seed1-0921/`。后者的机器可读 min 为 `conservative_min.json`。两轮均通过 schema/protocol 审计，root/FurnitureBench reference commit 分别为 `073d38bb2f09e0123d27dd8d0a220b1046310dd7` 与 `dc7f4355b80e8312441d69facbee79bf3315affe`；corrected bundle 的 `evaluate_model.py`、`rollout.py`、`vision.py` SHA-256 分别为 `955ed10e...`、`34f2c28f...`、`f2a7021c...`。
 
-原始 checkpoint 本来就在本机 rr 项目的 `checkpoints/` 下。由于 `/data` 是机械盘且当时存在全机 I/O 争用，RGB-D 正式评估又将 checkpoint 复制到 NVMe 上的 `/tmp/rr_main3seed_eval_0921/checkpoints/rgbd/actor_chkpt_last.pt`；大小 `617,447,254` bytes，SHA-256 与上述原件完全相同。Eval 不读取训练 LMDB；日志中出现的 LMDB path 是 checkpoint 内的 training-config metadata。进程文件和 memory-map 审计未发现 LMDB，初始化的剩余 I/O 主要来自位于 `/data` 的 IsaacGym 动态库，不是 eval dataset 阻塞。
+corrected repeat 在 base 上使用经 base→4090 SSH 核对的 NAS 完成凭据与 checkpoint：RGB 为 `617,369,826` bytes、RGB-D 为 `617,447,254` bytes，SHA-256 与第 13.1 节完全一致。Eval 不读取训练 LMDB；日志中出现的 LMDB path 是 checkpoint 内的 training-config metadata。

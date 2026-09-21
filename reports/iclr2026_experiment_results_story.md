@@ -1,7 +1,7 @@
 # ICLR 2026 实验结果与论文叙事整理
 
 > 整理日期：2026-09-21（aligned main 第三 seed 与下游 baseline 同步）<br>
-> main 第三 seed eval 源码快照：`073d38bb2f09e0123d27dd8d0a220b1046310dd7`；non-pycache `src/` manifest SHA-256 `f1c73cdb7217a9ed0e8de3aa145f5bf86cd4553658797ba60684f66eebea081d`<br>
+> main 第三 seed canonical eval 源码快照：`073d38bb2f09e0123d27dd8d0a220b1046310dd7`；corrected eval-seed-1 repeat 使用同 root/FurnitureBench reference 的冻结 evaluator bundle，并按相同 camera/depth contract 审计<br>
 > VLM 覆盖范围噪声 campaign 基线：`main@f6877ff75418b4f4af835f3b4a9dfecea0ffc9ab`<br>
 > 原始文档：`D:\ZJU\研一春夏\ICLR2026\实验结果整理\实验结果整理.md`<br>
 > 说明：§2.1–2.2 保留两张源表；§2.3 已用三个评测 replicate、108 rollout/cell 的 VLM 覆盖范围噪声实验替换早期 seed-0 结论；§2.4 补充 skill-level 分析及其表图。
@@ -22,7 +22,7 @@ Long-horizon furniture assembly requires robots to switch across tasks and stage
 
 详细数据来源、checkpoint 对应关系、逐 seed 成功数、评估输入契约和排除规则见 [main experiment review](./main_3seed_experiment_review_0913.md)。
 
-设置：DiT policy 在 FurnitureBench 的 `one_leg`、`round_table`、`lamp` 三个任务上训练；每个 checkpoint/task 评估 36 rollout。Overall 先在每个训练 seed 内对 108 个 rollout 汇总，再在同一 condition 的训练 seed 间计算 mean ± sample standard deviation。原始 RGB/RGB-D checkpoint 因错误 lineage 被排除，新第三 seed 已按 aligned `center-crop-224`、positive-meters depth 与 reward-only success 口径补入；现在所有行均登记三个 train seed。RGB/RGB-D 前两 seed 使用 eval seed 0/1 逐格 min，第三 seed 目前仅有 eval seed 0，因此仍存在 eval-repeat estimator 差异。
+设置：DiT policy 在 FurnitureBench 的 `one_leg`、`round_table`、`lamp` 三个任务上训练；每个 checkpoint/task 评估 36 rollout。Overall 先在每个训练 seed 内对 108 个 rollout 汇总，再在同一 condition 的训练 seed 间计算 mean ± sample standard deviation。原始 RGB/RGB-D checkpoint 因错误 lineage 被排除，新第三 seed 已按 aligned `center-crop-224`、positive-meters depth 与 reward-only success 口径补入；现在所有行均登记三个 train seed。RGB/RGB-D 的三个 train seed 均使用 eval seed 0/1 逐 task conservative min。
 
 #### 表 1：不同 condition 的多任务成功率（mean ± std）
 
@@ -32,8 +32,8 @@ Long-horizon furniture assembly requires robots to switch across tasks and stage
 | RGB-D + colored GP | 3 | 87.04 ± 4.24% | 50.00 ± 22.22% | 35.19 ± 3.21% | 57.41 ± 5.78% |
 | RGB-D + GP + skill | 3 | **88.89 ± 4.81%** | **56.48 ± 11.23%** | **44.44 ± 10.02%** | **63.27 ± 4.18%** |
 | RGB-D + skill | 3 | 77.78 ± 2.78% | 49.07 ± 1.60% | 34.26 ± 1.60% | 53.70 ± 1.60% |
-| RGB-D | 3 | 86.11 ± 7.35% | 50.00 ± 2.78% | 26.85 ± 6.99% | 54.32 ± 5.10% |
-| RGB | 3 | 84.26 ± 4.24% | 46.30 ± 4.24% | 18.52 ± 4.24% | 49.69 ± 1.07% |
+| RGB-D | 3 | 82.41 ± 1.60% | 49.07 ± 1.60% | 25.93 ± 5.78% | 52.47 ± 1.93% |
+| RGB | 3 | 84.26 ± 4.24% | 41.67 ± 8.33% | 18.52 ± 4.24% | 48.15 ± 3.34% |
 | RGB-D + grasp-part | 3 | 87.04 ± 4.24% | 14.81 ± 20.85% | 37.04 ± 5.78% | 46.30 ± 8.49% |
 | RGB-D + colored grasp-part | 3 | 87.04 ± 8.93% | 22.22 ± 19.25% | 33.33 ± 2.78% | 47.53 ± 5.58% |
 
@@ -41,7 +41,7 @@ Long-horizon furniture assembly requires robots to switch across tasks and stage
 
 **Motivation.** We test whether explicit task-relevant conditions help a shared policy infer both what interaction to execute and where to execute it. The comparison separates spatial information (a guidance point, GP) from semantic information (a fixed skill label or a colour code attached to GP).
 
-**Experimental setting.** We evaluate DiT policies on one-leg, round-table and lamp with 36 rollouts per checkpoint and task. Most conditions use three independent training runs. The original RGB and RGB-D checkpoints are excluded because they belong to an erroneous data/checkpoint lineage; these two baselines currently use two valid supplemental runs.
+**Experimental setting.** We evaluate DiT policies on one-leg, round-table and lamp with 36 rollouts per checkpoint and task. All registered conditions use three training runs. The original RGB and RGB-D checkpoints are excluded because they belong to an erroneous data/checkpoint lineage; their three valid replacement runs use the per-task minimum over evaluation seeds 0 and 1.
 
 **Results.** In the controlled two-run lineage, RGB-D reaches `51.39±0.65%` overall success. Skill-only reaches `54.17±1.96%`, coloured GP reaches `59.72±5.89%`, and GP+skill reaches `63.43±5.89%`. The average gain of these three semantic conditions is `+2.78 pp` on one-leg, `+8.33 pp` on round-table and `+12.04 pp` on lamp. In the broader registered table, GP+skill has the highest point estimate (`63.27±4.18%`) and coloured GP the second highest (`57.41±5.78%`), with unequal `n_train` and mixed lineages limiting strict ranking claims.
 
