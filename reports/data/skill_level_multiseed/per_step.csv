@@ -483,3 +483,25 @@ rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_rewa
 rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,lamp,bulb-base-screw,screw,13,13,1.0
 rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,lamp,hood-base-pick,pick,10,10,1.0
 rgbd_grasp_part_colored,RGB-D+colored grasp,2026090702,supplemental_aligned_reward_only,lamp,hood-base-place,place,9,9,1.0
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,one_leg,top-leg-pick,pick,36,36,1.0
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,one_leg,top-leg-push,push,36,35,0.9722222222222222
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,one_leg,leg-top-pick,pick,35,35,1.0
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,one_leg,leg-top-place,place,35,35,1.0
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,one_leg,leg-top-insert,insert,35,34,0.9714285714285714
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,one_leg,leg-top-screw,screw,34,34,1.0
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,round_table,top-leg-push,push,36,36,1.0
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,round_table,leg-top-pick,pick,36,34,0.9444444444444444
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,round_table,leg-top-place,place,34,25,0.7352941176470589
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,round_table,leg-top-insert,insert,25,25,1.0
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,round_table,leg-top-screw,screw,25,25,1.0
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,round_table,base-leg-pick,pick,25,25,1.0
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,round_table,base-leg-place,place,25,21,0.84
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,round_table,base-leg-insert,insert,21,19,0.9047619047619048
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,round_table,base-leg-screw,screw,19,19,1.0
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,lamp,base-bulb-push,push,36,36,1.0
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,lamp,bulb-base-pick,pick,36,36,1.0
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,lamp,bulb-base-place,place,36,19,0.5277777777777778
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,lamp,bulb-base-insert,insert,19,19,1.0
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,lamp,bulb-base-screw,screw,19,14,0.7368421052631579
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,lamp,hood-base-pick,pick,11,9,0.8181818181818182
+rgbd,RGB-D,2026091701,main3seed_aligned_reward_only_0921,lamp,hood-base-place,place,9,9,1.0

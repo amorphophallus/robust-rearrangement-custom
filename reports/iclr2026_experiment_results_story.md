@@ -1,7 +1,7 @@
 # ICLR 2026 实验结果与论文叙事整理
 
-> 整理日期：2026-09-17（main baseline 与 joint delta 更新）<br>
-> 代码基线：`main@19ab7cc3c4eaa841c6c0d4751dba9dc40c3e1889`（整理时与 `origin/main` 一致）<br>
+> 整理日期：2026-09-21（aligned main 第三 seed 与下游 baseline 同步）<br>
+> main 第三 seed eval 源码快照：`073d38bb2f09e0123d27dd8d0a220b1046310dd7`；non-pycache `src/` manifest SHA-256 `f1c73cdb7217a9ed0e8de3aa145f5bf86cd4553658797ba60684f66eebea081d`<br>
 > VLM 覆盖范围噪声 campaign 基线：`main@f6877ff75418b4f4af835f3b4a9dfecea0ffc9ab`<br>
 > 原始文档：`D:\ZJU\研一春夏\ICLR2026\实验结果整理\实验结果整理.md`<br>
 > 说明：§2.1–2.2 保留两张源表；§2.3 已用三个评测 replicate、108 rollout/cell 的 VLM 覆盖范围噪声实验替换早期 seed-0 结论；§2.4 补充 skill-level 分析及其表图。
@@ -22,7 +22,7 @@ Long-horizon furniture assembly requires robots to switch across tasks and stage
 
 详细数据来源、checkpoint 对应关系、逐 seed 成功数、评估输入契约和排除规则见 [main experiment review](./main_3seed_experiment_review_0913.md)。
 
-设置：DiT policy 在 FurnitureBench 的 `one_leg`、`round_table`、`lamp` 三个任务上训练；每个 checkpoint/task 评估 36 rollout。Overall 先在每个训练 seed 内对 108 个 rollout 汇总，再在同一 condition 的训练 seed 间计算 mean ± sample standard deviation。原始 RGB/RGB-D checkpoint 因错误 lineage 被排除，这两行暂为两个有效 supplemental seed；其余 condition 为三个 train seed。
+设置：DiT policy 在 FurnitureBench 的 `one_leg`、`round_table`、`lamp` 三个任务上训练；每个 checkpoint/task 评估 36 rollout。Overall 先在每个训练 seed 内对 108 个 rollout 汇总，再在同一 condition 的训练 seed 间计算 mean ± sample standard deviation。原始 RGB/RGB-D checkpoint 因错误 lineage 被排除，新第三 seed 已按 aligned `center-crop-224`、positive-meters depth 与 reward-only success 口径补入；现在所有行均登记三个 train seed。RGB/RGB-D 前两 seed 使用 eval seed 0/1 逐格 min，第三 seed 目前仅有 eval seed 0，因此仍存在 eval-repeat estimator 差异。
 
 #### 表 1：不同 condition 的多任务成功率（mean ± std）
 
@@ -32,8 +32,8 @@ Long-horizon furniture assembly requires robots to switch across tasks and stage
 | RGB-D + colored GP | 3 | 87.04 ± 4.24% | 50.00 ± 22.22% | 35.19 ± 3.21% | 57.41 ± 5.78% |
 | RGB-D + GP + skill | 3 | **88.89 ± 4.81%** | **56.48 ± 11.23%** | **44.44 ± 10.02%** | **63.27 ± 4.18%** |
 | RGB-D + skill | 3 | 77.78 ± 2.78% | 49.07 ± 1.60% | 34.26 ± 1.60% | 53.70 ± 1.60% |
-| RGB-D | 2 | 81.94 ± 1.96% | 48.61 ± 1.96% | 23.61 ± 5.89% | 51.39 ± 0.65% |
-| RGB | 2 | 86.11 ± 3.93% | 45.83 ± 5.89% | 18.06 ± 5.89% | 50.00 ± 1.31% |
+| RGB-D | 3 | 86.11 ± 7.35% | 50.00 ± 2.78% | 26.85 ± 6.99% | 54.32 ± 5.10% |
+| RGB | 3 | 84.26 ± 4.24% | 46.30 ± 4.24% | 18.52 ± 4.24% | 49.69 ± 1.07% |
 | RGB-D + grasp-part | 3 | 87.04 ± 4.24% | 14.81 ± 20.85% | 37.04 ± 5.78% | 46.30 ± 8.49% |
 | RGB-D + colored grasp-part | 3 | 87.04 ± 8.93% | 22.22 ± 19.25% | 33.33 ± 2.78% | 47.53 ± 5.58% |
 
@@ -155,25 +155,25 @@ Formal VLM guidance evaluation 中，Point family 完成 `181/324=55.9%` 个 rol
 
 #### 数据范围与统计口径
 
-本轮使用 66 份 task JSON。RGB-D+skill、colored GP（TAGPoint）、GP+skill、grasp 与 colored grasp 各合并 3 个训练 checkpoint；plain GP 沿用 3 个原始 checkpoint。RGB/RGB-D 排除 original checkpoint，只使用 `2026090701`、`2026090702` 两组新 checkpoint。每个 checkpoint/task 为 36 条 rollout。统计继续采用完整语义标签的 pooled 条件完成率 `100×ΣC/ΣR`，与旧图逻辑一致；逐 seed 比例和 sample std 另存于机器可读数据，但本轮图中不画误差条。
+原分析使用 66 份 task JSON；本轮加入 `2026091701` RGB-D 的 3 份 aligned task JSON，共 69 份。RGB-D+skill、colored GP（TAGPoint）、GP+skill、grasp 与 colored grasp 各合并 3 个训练 checkpoint；plain GP 沿用 3 个原始 checkpoint。RGB-D 排除 original checkpoint，使用 `2026090701`、`2026090702`、`2026091701` 三组 checkpoint。每个 checkpoint/task 为 36 条 rollout。统计继续采用完整语义标签的 pooled 条件完成率 `100×ΣC/ΣR`，与旧图逻辑一致；这不是 task-level mean ± std 的替代。
 
 #### 更新后的核心结果
 
 | Condition | n_train | Push | Pick | Place | Insert | Screw |
 |---|---:|---:|---:|---:|---:|---:|
-| RGB-D | 2 | 97.69% (211/216) | 98.31% (348/354) | 77.45% (213/275) | 98.98% (195/197) | 90.77% (177/195) |
+| RGB-D | 3 | 98.15% (318/324) | 98.12% (523/533) | 77.78% (322/414) | 98.32% (292/297) | 92.12% (269/292) |
 | RGB-D+skill | 3 | 96.91% (314/324) | 96.32% (498/517) | 77.12% (300/389) | 96.74% (267/276) | 91.39% (244/267) |
 | RGB-D+GP | 3 | 99.38% (322/324) | 96.00% (504/525) | 83.84% (332/396) | 99.67% (304/305) | 78.29% (238/304) |
 | RGB-D+colored GP (TAGPoint) | 3 | 96.91% (314/324) | 98.10% (517/527) | 80.15% (327/408) | 98.66% (295/299) | 88.81% (262/295) |
 | RGB-D+GP+skill | 3 | 97.53% (316/324) | 96.86% (525/542) | **86.99% (361/415)** | 99.38% (320/322) | 88.09% (281/319) |
 
-新版 RGB-D checkpoint 已使 Push/Pick 接近饱和，因此旧版“condition 的收益主要集中于 Push/Pick”不再成立。最清楚的正向差异转移到 Place：相对 RGB-D，plain GP 为 `+6.38 pp`，TAGPoint 为 `+2.69 pp`，GP+skill 为 `+9.53 pp`；skill-only 与 RGB-D 基本持平（`-0.33 pp`）。在已有 skill condition 时加入 GP，Place 从 `77.12% (300/389)` 提高到 `86.99% (361/415)`，增加 `9.87 pp`。
+三 seed RGB-D 在 Push/Pick 上已接近饱和，因此旧版“condition 的收益主要集中于 Push/Pick”不再成立。最清楚的正向差异转移到 Place：相对 RGB-D，plain GP 为 `+6.06 pp`，TAGPoint 为 `+2.37 pp`，GP+skill 为 `+9.21 pp`；skill-only 与 RGB-D 基本持平（`-0.66 pp`）。在已有 skill condition 时加入 GP，Place 从 `77.12% (300/389)` 提高到 `86.99% (361/415)`，增加 `9.87 pp`。
 
 ![四类 skill 相对新 RGB-D 的 multi-seed 差值](./figures/skill_level_multiseed/skill_level_condition_contrasts_multiseed.png)
 
 [矢量 PDF](./figures/skill_level_multiseed/skill_level_condition_contrasts_multiseed.pdf)
 
-图 3 | Multi-seed Push、Pick、Place、Screw 条件完成率差值。横轴为四类 skill，纵轴为完成率差值（pp）；每组相邻三根竖柱依次为 skill、GP、GP+skill，分别直接减去该 skill 的 RGB-D pooled 完成率；Insert 不在图中。RGB-D 使用两个新 checkpoint；三种条件各使用三个训练 checkpoint。柱高为 pooled `ΣC/ΣR` 的差值，不是 seed mean，也不是 paired trajectory 的因果效应。
+图 3 | Multi-seed Push、Pick、Place、Screw 条件完成率差值。横轴为四类 skill，纵轴为完成率差值（pp）；每组相邻三根竖柱依次为 skill、GP、GP+skill，分别直接减去该 skill 的 RGB-D pooled 完成率；Insert 不在图中。RGB-D、GP、skill 与 GP+skill 均使用三个训练 checkpoint。柱高为 pooled `ΣC/ΣR` 的差值，不是 seed mean，也不是 paired trajectory 的因果效应；RGB-D 第三 seed 没有匹配的 conditional run。
 
 ![四个 Place 步骤的 multi-seed condition 对比](./figures/skill_level_multiseed/skill_level_place_comparison_multiseed.png)
 
@@ -183,7 +183,7 @@ Formal VLM guidance evaluation 中，Point family 完成 `181/324=55.9%` 个 rol
 
 该分析仍受 stage-entry distribution 影响：各 policy 从任务起点执行，后续阶段的零件位姿、抓取状态与机器人状态由前序行为共同决定。因此 pooled C/R 可用于定位当前流程差异，但不等同于固定入口状态下的独立 skill 能力；original 与 supplemental checkpoint 的数据/评测 lineage 也不完全一致。
 
-Screw 是非均匀收益的反例：GP 的 pooled Screw 为 `78.29% (238/304)`，低于 RGB-D 的 `90.77% (177/195)`，主要差异位于 round-table（`79.17% (114/144)` 对 `95.92% (94/98)`），尤其是其第一个 Screw stage（`69/88` 对 `54/54`）。TAGPoint 与 GP+skill 的 pooled Screw 分别为 `88.81%` 与 `88.09%`。二维位置不足以单独说明旋转接触过程，是与数据相容的解释，但不同入口状态与 checkpoint lineage 使该解释尚非因果结论。
+Screw 是非均匀收益的反例：GP 的 pooled Screw 为 `78.29% (238/304)`，低于 RGB-D 的 `92.12% (269/292)`。TAGPoint 与 GP+skill 的 pooled Screw 分别为 `88.81%` 与 `88.09%`。二维位置不足以单独说明旋转接触过程，是与数据相容的解释，但不同入口状态与 checkpoint lineage 使该解释尚非因果结论。
 
 
 ### 2.5 VLM 引导下的端到端评测
@@ -194,7 +194,7 @@ Screw 是非均匀收益的反例：GP 的 pooled Screw 为 `78.29% (238/304)`�
 
 #### 实验设计与评测协议
 
-我们比较无 VLM 的 RGB-D 基线以及 point-based 与 grasp-based 两类 VLM 引导接口，并在 `one_leg`、`round_table` 和 `lamp` 三个任务上采用一致的完整任务成功判据。RGB-D 基线合并两个有效训练 run，每个任务共 72 条 rollout；每个 VLM condition/task 包含 36 条 rollout。VLM 每 8 个环境步更新一次引导，其间沿用缓存结果。成功仅在完整家具装配完成时计入。
+我们比较无 VLM 的 RGB-D 基线以及 point-based 与 grasp-based 两类 VLM 引导接口，并在 `one_leg`、`round_table` 和 `lamp` 三个任务上采用一致的完整任务成功判据。RGB-D 基线合并三个有效训练 run，每个任务共 108 条 rollout；每个 VLM condition/task 包含 36 条 rollout。VLM 每 8 个环境步更新一次引导，其间沿用缓存结果。成功仅在完整家具装配完成时计入。
 
 **跨任务双头微调（cross-task dual-head fine-tuning）。** 我们从三个任务的 scripted rollouts 构建统一标注集，并分别微调两个 VLM。Ver1 输出 skill 与二维目标点，对应 point guidance；Ver2 进一步输出 `target_rotation_6d`，对应 grasp guidance。Rotation6D 由 scripted guidance pose 的旋转矩阵前两行构成，并通过逐行 Gram--Schmidt 正交化解码为合法的 `SO(3)` 姿态。
 
@@ -212,18 +212,18 @@ Screw 是非均匀收益的反例：GP 的 pooled Screw 为 `78.29% (238/304)`�
 
 #### 端到端结果
 
-表 5 | 无 VLM RGB-D 基线与真实 VLM 引导系统的完整任务成功率。RGB-D 基线合并两个有效训练 run（每个任务 72 条 rollout，Overall 216 条）；每个 VLM condition/task 包含 36 条 rollout（Overall 108 条）。不同策略独立训练且样本量不同，因此无 VLM/有 VLM 以及 point/grasp 间的差异均为系统级描述性比较，而非单变量因果消融。
+表 5 | 无 VLM RGB-D 基线与真实 VLM 引导系统的完整任务成功率。RGB-D 基线合并三个有效训练 run（每个任务 108 条 rollout，Overall 324 条）；每个 VLM condition/task 包含 36 条 rollout（Overall 108 条）。不同策略独立训练且样本量不同，因此无 VLM/有 VLM 以及 point/grasp 间的差异均为系统级描述性比较，而非单变量因果消融。
 
 | Condition | one_leg | round_table | lamp | Overall |
 | --- | ---: | ---: | ---: | ---: |
-| RGB-D（no VLM） | 81.9% (59/72) | 48.6% (35/72) | 23.6% (17/72) | 51.4% (111/216) |
+| RGB-D（no VLM） | 86.1% (93/108) | 50.0% (54/108) | 26.9% (29/108) | 54.3% (176/324) |
 | RGB-D+GP | 86.1% (31/36) | 44.4% (16/36) | 44.4% (16/36) | 58.3% (63/108) |
 | RGB-D+colored GP | 86.1% (31/36) | 41.7% (15/36) | 50.0% (18/36) | 59.3% (64/108) |
 | RGB-D+GP+skill | 83.3% (30/36) | 27.8% (10/36) | 38.9% (14/36) | 50.0% (54/108) |
 | RGB-D+grasp-part | 88.9% (32/36) | 38.9% (14/36) | 61.1% (22/36) | **63.0% (68/108)** |
 | RGB-D+grasp-part-colored | 72.2% (26/36) | 38.9% (14/36) | 41.7% (15/36) | 50.9% (55/108) |
 
-**不完美的 VLM 引导仍能形成端到端行为。** 无 VLM 的 RGB-D 基线在两个有效训练 run 上完成 `111/216=51.4%` 个 rollout。三个 point condition 在真实 VLM 引导下完成 `181/324=55.9%` 个 rollout，其整体成功率为 50.0–59.3%；其中 colored GP（TAGPoint）达到 `64/108=59.3%`，相对无 VLM RGB-D 基线高 `7.9 pp`。两个 grasp condition 分别达到 63.0% 和 50.9%，grasp-part 取得表中最高的整体成功率。这个对照说明带 VLM guidance 的完整系统可以超过无 guidance 的 RGB-D 系统，但由于策略分别训练、基线合并两个 run 且没有 paired reset，它不能单独识别“加入 VLM”这一变量的因果贡献。结合附录 A.2 中 Point VLM 的 3-task 等效位置噪声 `63.44 mm/axis`，结果表明下游 action expert 能够在真实 VLM 目标点误差下保持完整任务执行。
+**不完美的 VLM 引导仍能形成端到端行为。** 无 VLM 的 RGB-D 基线在三个有效训练 run 上完成 `176/324=54.3%` 个 rollout。三个 point condition 在真实 VLM 引导下完成 `181/324=55.9%` 个 rollout，其整体成功率为 50.0–59.3%；其中 colored GP（TAGPoint）达到 `64/108=59.3%`，相对无 VLM RGB-D 基线高 `4.9 pp`。两个 grasp condition 分别达到 63.0% 和 50.9%，grasp-part 取得表中最高的整体成功率。这个对照说明带 VLM guidance 的完整系统在当前登记中可以高于无 guidance RGB-D 基线，但由于策略分别训练、样本量不同且没有 paired reset，它不能单独识别“加入 VLM”这一变量的因果贡献。结合附录 A.2 中 Point VLM 的 3-task 等效位置噪声 `63.44 mm/axis`，结果表明下游 action expert 能够在真实 VLM 目标点误差下保持完整任务执行。
 
 **显式姿态通道为 grasp guidance 提供了额外表达能力。** `RGB-D+grasp-part` 的整体成功率为 63.0%，在 lamp 上达到 61.1%，相对三个 point condition 提高 11.1–22.2 个百分点。这一任务依赖的优势与 Ver2 增加旋转输出的设计一致：当接触方向和末端姿态更关键时，grasp guidance 可以提供仅有位置点时缺失的约束。`grasp-part-colored` 的整体成功率为 50.9%，说明旋转信息的收益并不在所有接口组合与任务上稳定出现；同时，旋转预测也增加了上游模型需要拟合的误差维度。
 
@@ -249,8 +249,8 @@ Screw 是非均匀收益的反例：GP 的 pooled Screw 为 `78.29% (238/304)`�
 
 | Condition | AutoMate ID SR（99 train tasks） | AutoMate OOD SR（`00755`） | FB overall（joint formal） | FB Δ vs main |
 | --- | ---: | ---: | ---: | ---: |
-| RGB | 739/1188 = 62.2% | 3/12 = 25.0% | 50/108 = 46.3% | −3.70 pp |
-| RGB-D | 761/1188 = 64.1% | 9/12 = 75.0% | **67/108 = 62.0%** | **+10.65 pp** |
+| RGB | 739/1188 = 62.2% | 3/12 = 25.0% | 50/108 = 46.3% | −3.40 pp |
+| RGB-D | 761/1188 = 64.1% | 9/12 = 75.0% | **67/108 = 62.0%** | **+7.72 pp** |
 | RGB-D+skill | 750/1188 = 63.1% | 8/12 = 66.7% | 65/108 = 60.2% | +6.48 pp |
 | RGB-D+GP | 754/1188 = 63.5% | **10/12 = 83.3%** | 50/108 = 46.3% | −6.17 pp |
 | RGB-D+TAGPoint | **773/1188 = 65.1%** | **10/12 = 83.3%** | 58/108 = 53.7% | −3.70 pp |
@@ -262,7 +262,7 @@ Screw 是非均匀收益的反例：GP 的 pooled Screw 为 `78.29% (238/304)`�
 
 联合策略在 99 个 AutoMate 训练 assembly 上达到 `59.2–65.1%`，表明同一个视觉行为克隆策略在约百任务规模仍保留广泛的 assembly 能力；TAGPoint 的 ID 成功率最高，为 `65.1%`。在单个 held-out `00755` 上，GP 与 TAGPoint 均达到 `83.3%`，但这一 OOD 观察目前只有一个任务、每个 condition 12 条 rollout，不能外推为稳定的跨几何泛化排名。
 
-联合训练对 FurnitureBench 的影响具有明显的 condition dependence：RGB-D 与 skill 分别相对 main experiment 提高 `+10.65` 与 `+6.48 pp`，其余六种接口下降 `2.78–10.49 pp`，八种 condition 的平均变化为 `−2.06 pp`。因此，大规模 AutoMate 数据没有一致提升所有 FurnitureBench condition，也没有使原有长时程任务能力整体失效。更准确的结论是：joint policy 获得了 99-task AutoMate 能力，同时以较小的平均损失保留 FurnitureBench 能力，但不同接口受到的正迁移或干扰不同。由于当前 AutoMate annotation 只有 Insert，该实验验证的是 assembly identity 与任务家族的规模扩展，而不是五种 skill 的跨环境迁移。
+联合训练对 FurnitureBench 的影响具有明显的 condition dependence：RGB-D 与 skill 分别相对 main experiment 提高 `+7.72` 与 `+6.48 pp`，其余六种接口下降 `2.78–10.49 pp`，八种 condition 的平均变化为 `−2.39 pp`。因此，大规模 AutoMate 数据没有一致提升所有 FurnitureBench condition，也没有使原有长时程任务能力整体失效。更准确的结论是：joint policy 获得了 99-task AutoMate 能力，同时以较小的平均损失保留 FurnitureBench 能力，但不同接口受到的正迁移或干扰不同。由于当前 AutoMate annotation 只有 Insert，该实验验证的是 assembly identity 与任务家族的规模扩展，而不是五种 skill 的跨环境迁移。
 
 
 ## 3. 仍在进行或计划中的实验
