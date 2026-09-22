@@ -14,6 +14,13 @@ from PIL import Image
 from services.vlm_guidance.engine import FurnitureInferenceEngine
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _engine_from_env() -> FurnitureInferenceEngine:
     return FurnitureInferenceEngine(
         base_model_dir=os.getenv("VLM_BASE_MODEL_DIR"),
@@ -25,6 +32,7 @@ def _engine_from_env() -> FurnitureInferenceEngine:
         image_max_pixels=int(os.getenv("VLM_IMAGE_MAX_PIXELS", "262144")),
         max_micro_batch_size=int(os.getenv("VLM_MAX_MICRO_BATCH_SIZE", "8")),
         max_new_tokens=int(os.getenv("VLM_MAX_NEW_TOKENS", "256")),
+        allow_invalid_predictions=_env_flag("VLM_ALLOW_INVALID_PREDICTIONS"),
         model_revision=os.getenv("VLM_MODEL_REVISION", "unknown"),
         manifest_path=os.getenv("VLM_MANIFEST_PATH"),
         output_schema=os.getenv("VLM_OUTPUT_SCHEMA", "skill_point"),
@@ -71,6 +79,7 @@ def ready(request: Request):
         "output_schema": engine.output_schema,
         "device": str(engine.device),
         "attention_backend": engine.attention_backend,
+        "allow_invalid_predictions": engine.allow_invalid_predictions,
     }
 
 

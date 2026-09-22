@@ -28,7 +28,10 @@ from src.eval.vlm_content_audit import audit_manifest_rollouts
 
 AUTO_EVAL_DEFAULT = Path("/data/hy/gpu-snatcher/auto_eval.sh")
 EXPECTED_GPU_SNATCHER_COMMIT = "ebfea2d9f27bfdcea3a30791ebd6e70a05757799"
-EXPECTED_VLM_REVISION = "9d36062d461e6d07f78d6148bea8039e1e019f92"
+EXPECTED_VLM_REVISION = os.environ.get(
+    "VLM_EXPECTED_REVISION",
+    "9d36062d461e6d07f78d6148bea8039e1e019f92",
+)
 TASKS = ("one_leg", "round_table", "lamp")
 TASK_MAX_STEPS = {task: 1000 for task in TASKS}
 MAX_SAVED_ROLLOUTS_PER_CELL = 10
@@ -585,6 +588,18 @@ def _child_env(args: argparse.Namespace, token: str | None) -> dict[str, str]:
     return env
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _relaxed_point_diagnostic_config() -> dict[str, bool]:
+    return {
+        "allow_invalid_predictions": _env_flag("VLM_ALLOW_INVALID_PREDICTIONS"),
+        "allow_out_of_frame_points": _env_flag("VLM_ALLOW_OUT_OF_FRAME_POINTS"),
+        "clip_policy_image_points": _env_flag("VLM_CLIP_OUT_OF_FRAME_POINTS"),
+    }
+
+
 def print_phase(args: argparse.Namespace) -> int:
     output_dir = args.output_dir.resolve()
     manifest_path = output_dir / "manifest.json"
@@ -681,6 +696,7 @@ def print_phase(args: argparse.Namespace) -> int:
         "max_saved_rollouts_per_cell": MAX_SAVED_ROLLOUTS_PER_CELL,
         "tracking_metric_type": "pose",
         "vlm_noise_projection_samples": 200,
+        "vlm_relaxed_point_diagnostic": _relaxed_point_diagnostic_config(),
         "data_dir_raw": str(args.data_dir_raw.resolve()),
         "commands_validated": True,
         "smoke_manifest": str(args.smoke_manifest.resolve()) if args.smoke_manifest else None,
@@ -709,6 +725,7 @@ def _load_execution_manifest(args: argparse.Namespace) -> tuple[Path, dict[str, 
         "max_saved_rollouts_per_cell": MAX_SAVED_ROLLOUTS_PER_CELL,
         "vlm_noise_projection_samples": 200,
         "vlm_timeout_seconds": float(getattr(args, "vlm_timeout_seconds", 30.0)),
+        "vlm_relaxed_point_diagnostic": _relaxed_point_diagnostic_config(),
         "data_dir_raw": str(args.data_dir_raw.resolve()),
     }
     if args.stage == "formal":

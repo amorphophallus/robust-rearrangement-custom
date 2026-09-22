@@ -35,6 +35,13 @@ POSE_OUTPUT_SCHEMA = "skill_point_rotation6d"
 LOGGER = logging.getLogger(__name__)
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class VLMGuidanceError(RuntimeError):
     """Raised when remote annotations cannot safely be used."""
 
@@ -166,6 +173,7 @@ class VLMGuidanceClient:
         session: requests.Session | None = None,
         expected_policy_version: int = EXPECTED_POLICY_VERSION,
         expected_output_schema: str | None = None,
+        allow_out_of_frame_points: bool | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = float(timeout_seconds)
@@ -173,6 +181,12 @@ class VLMGuidanceClient:
         self.session = session or requests.Session()
         self.expected_policy_version = int(expected_policy_version)
         self.expected_output_schema = expected_output_schema
+        self.allow_out_of_frame_points = (
+            _env_flag("VLM_ALLOW_OUT_OF_FRAME_POINTS")
+            if allow_out_of_frame_points is None
+            else bool(allow_out_of_frame_points)
+        )
+        self.allow_invalid_predictions = _env_flag("VLM_ALLOW_INVALID_PREDICTIONS")
         self.ready_model_revision: str | None = None
         self.ready_model_mode: str | None = None
         self.prediction_http_request_count = 0
@@ -529,14 +543,43 @@ class VLMGuidanceClient:
                 continue
             skill = str(row.get("skill"))
             if skill not in VALID_SKILLS:
-                raise VLMGuidanceError(f"VLM returned invalid skill: {skill!r}")
+                if not self.allow_invalid_predictions:
+                    raise VLMGuidanceError(f"VLM returned invalid skill: {skill!r}")
+                parse_error = row.get("parse_error")
+                if not isinstance(parse_error, str) or not parse_error:
+                    parse_error = f"unsupported generated skill: {skill!r}"
+                # Keep invalid model output visible to metrics and rollout
+                # artifacts. Do not substitute an oracle or previous skill.
+                predictions.append(
+                    VLMPrediction(
+                        request_id=item["request_id"],
+                        skill=None,
+                        skill_confidence=None,
+                        skill_probabilities=None,
+                        point_1000=None,
+                        point_px=None,
+                        model_revision=revision,
+                        query_step=step_idx,
+                        model_output_valid=False,
+                        parse_error=parse_error,
+                        generated_text=(
+                            str(row["generated_text"])
+                            if row.get("generated_text") is not None
+                            else None
+                        ),
+                    )
+                )
+                continue
             point_px = np.asarray(row.get("point_px"), dtype=np.float32)
             point_1000 = np.asarray(row.get("point_1000"), dtype=np.float32)
             if point_px.shape != (2,) or point_1000.shape != (2,):
                 raise VLMGuidanceError("VLM returned invalid point shape")
             if not np.isfinite(point_px).all() or not np.isfinite(point_1000).all():
                 raise VLMGuidanceError("VLM returned non-finite point")
-            if not (0 <= point_px[0] <= 319 and 0 <= point_px[1] <= 239):
+            if (
+                not self.allow_out_of_frame_points
+                and not (0 <= point_px[0] <= 319 and 0 <= point_px[1] <= 239)
+            ):
                 raise VLMGuidanceError(f"VLM point is outside front image: {point_px}")
             rotation_6d = None
             rotation_matrix = None
@@ -759,11 +802,17 @@ def policy_bundles_from_vlm(
             oracle.get("guidance_point_2d", {})
         )
         bundle["skill"] = prediction.skill
-        bundle["guidance_point_2d"] = {
-            "color_image2": (
-                prediction.point_px.copy() if prediction.point_px is not None else None
-            )
-        }
+        policy_point = (
+            prediction.point_px.copy() if prediction.point_px is not None else None
+        )
+        if policy_point is not None and _env_flag("VLM_CLIP_OUT_OF_FRAME_POINTS"):
+            # Keep raw VLM output in vlm_annotation; only the policy image marker is clipped.
+            policy_point = np.clip(
+                policy_point,
+                np.asarray([0.0, 0.0], dtype=np.float32),
+                np.asarray([319.0, 239.0], dtype=np.float32),
+            ).astype(np.float32)
+        bundle["guidance_point_2d"] = {"color_image2": policy_point}
         if prediction.pose_contract:
             # These are the only geometry fields consumed by grasp-part
             # rendering. Overwrite them unconditionally for pose-policy rows so

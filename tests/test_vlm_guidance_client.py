@@ -83,6 +83,62 @@ class ErrorSession(FakeSession):
         )
 
 
+class OutOfFrameSession(FakeSession):
+    def post(self, url, *, files, headers, timeout):
+        metadata = json.loads(files["metadata"][1])
+        request_id = metadata["items"][0]["request_id"]
+        return FakeResponse(
+            {
+                "model_revision": "revision",
+                "policy_version": 3,
+                "model_mode": "original_sft",
+                "predictions": [
+                    {
+                        "request_id": request_id,
+                        "skill": "pick",
+                        "skill_confidence": None,
+                        "skill_probabilities": None,
+                        "point_1000": [1225.7, 895.4],
+                        "point_px": [391.0, 214.0],
+                        "generated_text": (
+                            '{"skill":"pick","target_point_2d":[391.0,214.0]}'
+                        ),
+                        "parse_error": (
+                            "target_point_2d is outside the front image: [391.0, 214.0]"
+                        ),
+                    }
+                ],
+                "timing_ms": {"total": 12.0},
+            }
+        )
+
+
+class InvalidSkillSession(FakeSession):
+    def post(self, url, *, files, headers, timeout):
+        metadata = json.loads(files["metadata"][1])
+        rows = []
+        for item in metadata["items"]:
+            rows.append(
+                {
+                    "request_id": item["request_id"],
+                    "skill": "invalid",
+                    "point_1000": None,
+                    "point_px": None,
+                    "generated_text": '{"skill":"invalid","target_point_2d":null}',
+                    "parse_error": "unsupported generated skill: 'invalid'",
+                }
+            )
+        return FakeResponse(
+            {
+                "model_revision": "revision",
+                "policy_version": 3,
+                "model_mode": "original_sft",
+                "predictions": rows,
+                "timing_ms": {"total": 12.0},
+            }
+        )
+
+
 class StructuredSession(FakeSession):
     def get(self, url, *, headers, timeout):
         response = super().get(url, headers=headers, timeout=timeout)
@@ -364,6 +420,98 @@ def test_client_preserves_server_error_detail():
 
     assert "outside the front image" in message
     assert "env0-step495" in message
+
+
+def test_relaxed_client_preserves_raw_point_and_clips_policy_marker(monkeypatch):
+    session = OutOfFrameSession()
+    client = VLMGuidanceClient(
+        "http://vlm",
+        session=session,
+        allow_out_of_frame_points=True,
+    )
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+
+    predictions, _ = client.predict(
+        task="one_leg",
+        front_images=[image],
+        wrist_images=[image],
+        state_infos=[{"base": {}}],
+        step_idx=8,
+    )
+
+    np.testing.assert_array_equal(predictions[0].point_px, [391.0, 214.0])
+    monkeypatch.setenv("VLM_CLIP_OUT_OF_FRAME_POINTS", "1")
+    bundle = policy_bundles_from_vlm(
+        [{"skill": "pick", "guidance_point_2d": {"color_image2": np.array([10.0, 20.0])}}],
+        predictions,
+        step_idx=8,
+    )[0]
+
+    np.testing.assert_array_equal(bundle["guidance_point_2d"]["color_image2"], [319.0, 214.0])
+    np.testing.assert_array_equal(bundle["vlm_annotation"]["point_px"], [391.0, 214.0])
+
+
+def test_strict_client_rejects_server_out_of_frame_point():
+    client = VLMGuidanceClient("http://vlm", session=OutOfFrameSession())
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+
+    try:
+        client.predict(
+            task="one_leg",
+            front_images=[image],
+            wrist_images=[image],
+            state_infos=[{"base": {}}],
+            step_idx=8,
+        )
+    except Exception as error:
+        message = str(error)
+    else:
+        raise AssertionError("expected strict client to reject out-of-frame point")
+
+    assert "outside front image" in message
+
+
+def test_relaxed_client_records_invalid_skill_without_substitution(monkeypatch):
+    monkeypatch.setenv("VLM_ALLOW_INVALID_PREDICTIONS", "1")
+    client = VLMGuidanceClient("http://vlm", session=InvalidSkillSession())
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+
+    predictions, _ = client.predict(
+        task="one_leg",
+        front_images=[image],
+        wrist_images=[image],
+        state_infos=[{"base": {}}],
+        step_idx=655,
+    )
+
+    prediction = predictions[0]
+    assert prediction.skill is None
+    assert prediction.point_px is None
+    assert prediction.point_1000 is None
+    assert prediction.model_output_valid is False
+    assert prediction.parse_error == "unsupported generated skill: 'invalid'"
+    assert prediction.generated_text == '{"skill":"invalid","target_point_2d":null}'
+
+
+def test_strict_client_rejects_invalid_skill(monkeypatch):
+    monkeypatch.delenv("VLM_ALLOW_INVALID_PREDICTIONS", raising=False)
+    client = VLMGuidanceClient("http://vlm", session=InvalidSkillSession())
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+
+    try:
+        client.predict(
+            task="one_leg",
+            front_images=[image],
+            wrist_images=[image],
+            state_infos=[{"base": {}}],
+            step_idx=655,
+        )
+    except Exception as error:
+        message = str(error)
+    else:
+        raise AssertionError("expected strict client to reject invalid skill")
+
+    assert "invalid skill" in message
 
 
 def test_policy_bundle_preserves_oracle_diagnostics_but_uses_vlm_outputs():
