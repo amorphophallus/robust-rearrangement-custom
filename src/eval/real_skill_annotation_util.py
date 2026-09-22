@@ -46,7 +46,7 @@ from src.common.guidance import GUIDANCE_SCHEMA_VERSION
 
 
 ANNOTATION_SOURCE = "real_skill_annotation_util"
-ANNOTATION_VERSION = 19
+ANNOTATION_VERSION = 25
 ANNOTATION_STATUS_KEY = "annotation_status"
 ANNOTATION_STATUS_ANNOTATED = "annotated"
 ANNOTATION_STATUS_UNANNOTATED = "unannotated"
@@ -69,6 +69,31 @@ _TABLETOP_SOCKET_SIGNS = (
 LEG_TO_EE_LENGTH_FRACTION = 0.25
 ONE_LEG_REAL_PLACE_ORIENTATION_THRESHOLD_RAD = float(np.deg2rad(20.0))
 REAL_INSERT_TO_SCREW_TIMEOUT_S = 3.0
+
+# Lamp real-annotation policy.  Keep these values here rather than changing
+# the FurnitureBench part classes: those classes are also used by simulation.
+LAMP_REAL_BASE_PUSH_POSITION_THRESHOLD_M = 0.05
+LAMP_REAL_BULB_PICK_OFFSET_ROBOT_M = (0.043, 0.010, 0.0)
+LAMP_REAL_BULB_PICK_CLOSE_WIDTH_M = 0.075
+LAMP_REAL_BULB_PICK_REARM_WIDTH_M = 0.077
+LAMP_REAL_BULB_OPEN_WIDTH_M = 0.070
+LAMP_REAL_BULB_GRIP_WIDTH_M = 0.035
+LAMP_REAL_BULB_GUIDANCE_LENGTH_FRACTION = 0.25
+LAMP_REAL_BULB_PLACE_REL_POS_M = (0.0, -0.0678, 0.0)
+LAMP_REAL_BULB_PLACE_HEIGHT_M = 0.09
+LAMP_REAL_BULB_PLACE_PLANAR_THRESHOLD_M = 0.007
+LAMP_REAL_BULB_PLACE_AXIAL_THRESHOLD_M = 0.05
+LAMP_REAL_BULB_PLACE_ORIENTATION_THRESHOLD_RAD = 0.15
+LAMP_REAL_BULB_SCREW_OFFSET_M = 0.0325
+LAMP_REAL_BULB_SCREW_GRIP_WIDTH_M = 0.07
+LAMP_REAL_HOOD_PICK_OFFSET_ROBOT_M = (0.0, 0.0, 0.0)
+LAMP_REAL_HOOD_PICK_EE_DISTANCE_THRESHOLD_M = 0.15
+LAMP_REAL_HOOD_GRIP_WIDTH_M = 0.01
+LAMP_REAL_HOOD_PLACE_REL_POS_M = (0.0, -0.088324, 0.0)
+LAMP_REAL_HOOD_PLACE_HEIGHT_M = 0.07
+LAMP_REAL_ASSEMBLED_POSITION_THRESHOLDS_M = (0.005, 0.0045, 0.005)
+LAMP_REAL_ASSEMBLED_ORIENTATION_BOUND = 0.94
+LAMP_REAL_DROP_CONFIRMATION_FRAMES = 4
 
 
 def _pose_vector_to_matrix(pose: np.ndarray) -> np.ndarray:
@@ -256,6 +281,7 @@ class RealSkillAnnotator(SkillAnnotator):
         self._insert_started_time_ns: Dict[str, int] = {}
         self._screw_assembled_latched = set()
         self._current_observation_time_ns = 0
+        self._lamp_bulb_pick_armed = False
         if self.furniture_name == "one_leg":
             _, operated_part_idx = self.furniture.should_be_assembled[0]
             operated_part = self.furniture.parts[operated_part_idx]
@@ -305,6 +331,7 @@ class RealSkillAnnotator(SkillAnnotator):
         self._insert_started_time_ns = {}
         self._screw_assembled_latched = set()
         self._current_observation_time_ns = 0
+        self._lamp_bulb_pick_armed = False
         self._obstacle_pose_source = "pickle_appended"
         self._frame_idx = -1
         self.stats = RealAnnotationStats()
@@ -354,11 +381,18 @@ class RealSkillAnnotator(SkillAnnotator):
             furniture_bench_config["robot"]["max_gripper_width"][key] - 0.001
         )
 
-    def _gripper_event(self, width: float) -> Optional[str]:
+    def _gripper_event(self, width: float, active_part=None) -> Optional[str]:
+        open_width_m = self.open_width_m
+        if (
+            self.furniture_name == "lamp"
+            and active_part is not None
+            and active_part.name == "lamp_bulb"
+        ):
+            open_width_m = LAMP_REAL_BULB_OPEN_WIDTH_M
         if not self._gripper_closed and width <= self.close_width_m:
             self._gripper_closed = True
             return "closed"
-        if self._gripper_closed and width >= self.open_width_m:
+        if self._gripper_closed and width >= open_width_m:
             self._gripper_closed = False
             return "opened"
         return None
@@ -1011,8 +1045,9 @@ class RealSkillAnnotator(SkillAnnotator):
         source observations are never modified.
         """
 
+        part_name = part if isinstance(part, str) else part.name
         if (
-            self._place_rigid_reference_part_name != part.name
+            self._place_rigid_reference_part_name != part_name
             or self._place_rigid_reference_ee_pose_robot is None
             or self._place_rigid_reference_part_pose_robot is None
         ):
@@ -1042,7 +1077,7 @@ class RealSkillAnnotator(SkillAnnotator):
 
         fallback_inputs = dict(annotation_inputs)
         fallback_rb_states = annotation_inputs["rb_states"].clone()
-        part_idx = annotation_inputs["part_idxs"][part.name][0]
+        part_idx = annotation_inputs["part_idxs"][part_name][0]
         fallback_rb_states[part_idx] = torch.as_tensor(
             _matrix_to_pose_vector(current_part_pose_april),
             dtype=fallback_rb_states.dtype,
@@ -1051,7 +1086,7 @@ class RealSkillAnnotator(SkillAnnotator):
         fallback_inputs["rb_states"] = fallback_rb_states
 
         active_part = self._active_part()
-        if active_part is not None and active_part.name == part.name:
+        if active_part is not None and active_part.name == part_name:
             active_pos = fallback_rb_states[part_idx, :3]
             finger_offset = torch.tensor(
                 [0.01, 0.0, 0.0],
@@ -1076,6 +1111,40 @@ class RealSkillAnnotator(SkillAnnotator):
             ),
         }
         return fallback_inputs, debug
+
+    def _start_real_place_rigid_reference(
+        self,
+        part_name: str,
+        annotation_inputs: Mapping[str, Any],
+    ) -> None:
+        """Start a real-only EE/part rigid reference without part FSM calls."""
+
+        tracker = self._tracked_parts.get(part_name)
+        if (
+            tracker is not None
+            and tracker.rigid_reference_ee_pose_robot is not None
+            and tracker.rigid_reference_part_pose_robot is not None
+        ):
+            ee_pose_robot = tracker.rigid_reference_ee_pose_robot.copy()
+            part_pose_robot = tracker.rigid_reference_part_pose_robot.copy()
+            reference_frame = tracker.rigid_reference_frame
+        else:
+            ee_pose_robot = C.to_homogeneous(
+                annotation_inputs["ee_pos"],
+                C.quat2mat(annotation_inputs["ee_quat"]),
+            ).detach().cpu().numpy()
+            part_pose_robot = (
+                self._part_pose_robot_from_inputs(part_name, annotation_inputs)
+                .detach()
+                .cpu()
+                .numpy()
+            )
+            reference_frame = self._frame_idx
+
+        self._place_rigid_reference_part_name = part_name
+        self._place_rigid_reference_ee_pose_robot = ee_pose_robot
+        self._place_rigid_reference_part_pose_robot = part_pose_robot
+        self._place_rigid_reference_frame = reference_frame
 
     def _transition_pose_reliable(self, part_name: str) -> bool:
         tracker = self._tracked_parts[part_name]
@@ -1207,6 +1276,705 @@ class RealSkillAnnotator(SkillAnnotator):
                 and orientation_error < orientation_threshold
             ),
         }
+
+    @staticmethod
+    def _real_euler_xyz_rotation(
+        xyz: Sequence[float],
+        *,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Return Rz @ Ry @ Rx without importing a simulator part helper."""
+
+        x, y, z = (float(value) for value in xyz)
+        cx, sx = np.cos(x), np.sin(x)
+        cy, sy = np.cos(y), np.sin(y)
+        cz, sz = np.cos(z), np.sin(z)
+        rotation = np.array(
+            [
+                [cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
+                [sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx],
+                [-sy, cy * sx, cy * cx],
+            ],
+            dtype=np.float32,
+        )
+        return torch.as_tensor(rotation, dtype=dtype, device=device)
+
+    @staticmethod
+    def _lamp_real_pose(
+        position: torch.Tensor, rotation: torch.Tensor
+    ) -> torch.Tensor:
+        return C.to_homogeneous(position, rotation)
+
+    def _lamp_real_base_push_target(
+        self, annotation_inputs: Mapping[str, Any]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Return real lamp-base push guidance point and pose."""
+
+        dtype = annotation_inputs["ee_pos"].dtype
+        device = annotation_inputs["ee_pos"].device
+        target_april = torch.zeros(4, dtype=dtype, device=device)
+        target_april[3] = 1.0
+        for obstacle_name in _OBSTACLE_NAMES:
+            obstacle_idx = annotation_inputs["part_idxs"][obstacle_name][0]
+            obstacle_position = annotation_inputs["rb_states"][obstacle_idx, :3]
+            target_april[0] = torch.maximum(target_april[0], obstacle_position[0])
+            target_april[1] = torch.maximum(target_april[1], obstacle_position[1])
+        target_robot = (
+            annotation_inputs["april_to_robot_mat"]
+            @ annotation_inputs["sim_to_april_mat"]
+            @ target_april
+        )
+        target_robot[0] -= 0.104
+        target_robot[1] -= 0.062
+
+        base_pose = self._part_pose_robot_from_inputs(
+            "lamp_base", annotation_inputs
+        )
+        guidance = base_pose[:3, 3].clone()
+        guidance[:2] = target_robot[:2]
+
+        push_direction = guidance - base_pose[:3, 3]
+        push_direction[2] = 0.0
+        if torch.linalg.norm(push_direction) < 1e-6:
+            ee_rotation = C.quat2mat(annotation_inputs["ee_quat"])
+            grasp_axis = ee_rotation[:3, 0].clone()
+            grasp_axis[2] = 0.0
+            if torch.linalg.norm(grasp_axis) < 1e-6:
+                grasp_axis = torch.tensor([1.0, 0.0, 0.0], dtype=dtype, device=device)
+            else:
+                grasp_axis = grasp_axis / torch.linalg.norm(grasp_axis)
+        else:
+            push_direction = push_direction / torch.linalg.norm(push_direction)
+            grasp_axis = torch.stack(
+                (-push_direction[1], push_direction[0], push_direction.new_tensor(0.0))
+            )
+        down_axis = torch.tensor([0.0, 0.0, -1.0], dtype=dtype, device=device)
+        height_axis = torch.cross(down_axis, grasp_axis, dim=0)
+        rotation = torch.stack((grasp_axis, height_axis, down_axis), dim=1)
+        return guidance, self._lamp_real_pose(guidance, rotation)
+
+    def _lamp_real_bulb_pick_target(
+        self, annotation_inputs: Mapping[str, Any]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        bulb_pose = self._part_pose_robot_from_inputs(
+            "lamp_bulb", annotation_inputs
+        )
+        dtype, device = bulb_pose.dtype, bulb_pose.device
+        guidance = bulb_pose[:3, 3] + torch.tensor(
+            LAMP_REAL_BULB_PICK_OFFSET_ROBOT_M, dtype=dtype, device=device
+        )
+        margin = self._real_euler_xyz_rotation(
+            (0.0, -np.pi / 5.0, 0.0), dtype=dtype, device=device
+        )
+        grasp = self._real_euler_xyz_rotation(
+            (np.pi / 2.0, -np.pi / 2.0, 0.0), dtype=dtype, device=device
+        )
+        rotation = margin @ annotation_inputs["april_to_robot_mat"][:3, :3] @ grasp
+        return guidance, self._lamp_real_pose(guidance, rotation)
+
+    def _lamp_real_bulb_place_target(
+        self, annotation_inputs: Mapping[str, Any]
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        base_pose = self._part_pose_robot_from_inputs(
+            "lamp_base", annotation_inputs
+        )
+        bulb_pose = self._part_pose_robot_from_inputs(
+            "lamp_bulb", annotation_inputs
+        )
+        ee_pose = C.to_homogeneous(
+            annotation_inputs["ee_pos"], C.quat2mat(annotation_inputs["ee_quat"])
+        )
+        dtype, device = base_pose.dtype, base_pose.device
+        rel_position = torch.tensor(
+            [*LAMP_REAL_BULB_PLACE_REL_POS_M, 1.0], dtype=dtype, device=device
+        )
+        hole_position = (base_pose @ rel_position)[:3]
+        target_rotation = torch.tensor(
+            [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]],
+            dtype=dtype,
+            device=device,
+        )
+        target_position = hole_position.clone()
+        target_position[2] = base_pose[2, 3] + LAMP_REAL_BULB_PLACE_HEIGHT_M
+        target_bulb_pose = self._lamp_real_pose(target_position, target_rotation)
+        target_ee_pose = target_bulb_pose @ torch.linalg.inv(bulb_pose) @ ee_pose
+        bulb_part = next(
+            part for part in self.furniture.parts if part.name == "lamp_bulb"
+        )
+        bulb_length_m = self._longest_part_length(bulb_part)
+        guidance = target_bulb_pose[:3, 3].clone()
+        guidance[2] += (
+            LAMP_REAL_BULB_GUIDANCE_LENGTH_FRACTION * bulb_length_m
+        )
+        guidance_pose = target_ee_pose.clone()
+        guidance_pose[:3, 3] = guidance
+        return guidance, guidance_pose, target_bulb_pose
+
+    def _lamp_real_bulb_place_geometry(
+        self, annotation_inputs: Mapping[str, Any]
+    ) -> Dict[str, Any]:
+        base_pose = self._part_pose_robot_from_inputs(
+            "lamp_base", annotation_inputs
+        )
+        bulb_pose = self._part_pose_robot_from_inputs(
+            "lamp_bulb", annotation_inputs
+        )
+        _, _, target_bulb_pose = self._lamp_real_bulb_place_target(
+            annotation_inputs
+        )
+        current_relative = torch.linalg.inv(base_pose) @ bulb_pose
+        target_relative = torch.linalg.inv(base_pose) @ target_bulb_pose
+        position_error = current_relative[:3, 3] - target_relative[:3, 3]
+        planar_error = float(position_error[[0, 2]].abs().sum().item())
+        axial_error = float(position_error[1].abs().item())
+        orientation_error = float(
+            self._rotation_error_ignoring_parent_axis(
+                current_relative[:3, :3],
+                target_relative[:3, :3],
+                ignored_axis=1,
+            ).item()
+        )
+        return {
+            "place_planar_error_m": planar_error,
+            "place_axial_error_m": axial_error,
+            "place_orientation_error_rad": orientation_error,
+            "place_planar_threshold_m": LAMP_REAL_BULB_PLACE_PLANAR_THRESHOLD_M,
+            "place_axial_threshold_m": LAMP_REAL_BULB_PLACE_AXIAL_THRESHOLD_M,
+            "place_orientation_threshold_rad": (
+                LAMP_REAL_BULB_PLACE_ORIENTATION_THRESHOLD_RAD
+            ),
+            "place_planar_axes": "xz",
+            "place_axial_axis": "y",
+            "place_ignored_rotation_axis": "y",
+            "place_geometry_ok": (
+                planar_error < LAMP_REAL_BULB_PLACE_PLANAR_THRESHOLD_M
+                and axial_error < LAMP_REAL_BULB_PLACE_AXIAL_THRESHOLD_M
+                and orientation_error
+                < LAMP_REAL_BULB_PLACE_ORIENTATION_THRESHOLD_RAD
+            ),
+        }
+
+    def _lamp_real_bulb_screw_target(
+        self, annotation_inputs: Mapping[str, Any]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        bulb_pose = self._part_pose_robot_from_inputs(
+            "lamp_bulb", annotation_inputs
+        )
+        guidance = (
+            bulb_pose[:3, 3]
+            + bulb_pose[:3, 1] * LAMP_REAL_BULB_SCREW_OFFSET_M
+        )
+        rotation = self._real_euler_xyz_rotation(
+            (np.pi, 0.0, 0.0), dtype=bulb_pose.dtype, device=bulb_pose.device
+        )
+        return guidance, self._lamp_real_pose(guidance, rotation)
+
+    def _lamp_real_hood_pick_target(
+        self, annotation_inputs: Mapping[str, Any]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        hood_pose = self._part_pose_robot_from_inputs(
+            "lamp_hood", annotation_inputs
+        )
+        guidance = hood_pose[:3, 3] + torch.tensor(
+            LAMP_REAL_HOOD_PICK_OFFSET_ROBOT_M,
+            dtype=hood_pose.dtype,
+            device=hood_pose.device,
+        )
+        rotation = self._real_euler_xyz_rotation(
+            (np.pi, 0.0, 0.0), dtype=hood_pose.dtype, device=hood_pose.device
+        )
+        return guidance, self._lamp_real_pose(guidance, rotation)
+
+    def _lamp_real_hood_place_target(
+        self, annotation_inputs: Mapping[str, Any]
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        base_pose = self._part_pose_robot_from_inputs(
+            "lamp_base", annotation_inputs
+        )
+        dtype, device = base_pose.dtype, base_pose.device
+        target_relative = torch.eye(4, dtype=dtype, device=device)
+        target_relative[:3, 3] = torch.tensor(
+            LAMP_REAL_HOOD_PLACE_REL_POS_M, dtype=dtype, device=device
+        )
+        target_hood_pose = base_pose @ target_relative
+        target_hood_pose = target_hood_pose.clone()
+        target_hood_pose[2, 3] += LAMP_REAL_HOOD_PLACE_HEIGHT_M
+        return target_hood_pose[:3, 3], target_hood_pose, target_hood_pose
+
+    def _lamp_real_assembled(
+        self,
+        annotation_inputs: Mapping[str, Any],
+        part_name: str,
+    ) -> Tuple[bool, Dict[str, Any]]:
+        base_pose = self._part_pose_robot_from_inputs(
+            "lamp_base", annotation_inputs
+        )
+        part_pose = self._part_pose_robot_from_inputs(part_name, annotation_inputs)
+        relative = torch.linalg.inv(base_pose) @ part_pose
+        dtype, device = relative.dtype, relative.device
+        target = torch.eye(4, dtype=dtype, device=device)
+        if part_name == "lamp_bulb":
+            target[:3, 3] = torch.tensor(
+                LAMP_REAL_BULB_PLACE_REL_POS_M, dtype=dtype, device=device
+            )
+            target[:3, :3] = self._real_euler_xyz_rotation(
+                (0.0, 0.0, np.pi), dtype=dtype, device=device
+            )
+        elif part_name == "lamp_hood":
+            target[:3, 3] = torch.tensor(
+                LAMP_REAL_HOOD_PLACE_REL_POS_M, dtype=dtype, device=device
+            )
+        else:
+            raise ValueError(f"Unsupported real lamp part {part_name!r}")
+
+        position_error = (relative[:3, 3] - target[:3, 3]).abs()
+        position_threshold = torch.tensor(
+            LAMP_REAL_ASSEMBLED_POSITION_THRESHOLDS_M,
+            dtype=dtype,
+            device=device,
+        )
+        position_ok = bool(torch.all(position_error <= position_threshold).item())
+        if part_name == "lamp_hood":
+            orientation_error = 0.0
+            orientation_threshold = None
+            orientation_ok = True
+        else:
+            orientation_error = float(
+                self._rotation_error_ignoring_parent_axis(
+                    relative[:3, :3], target[:3, :3], ignored_axis=1
+                ).item()
+            )
+            orientation_threshold = float(
+                np.arccos(LAMP_REAL_ASSEMBLED_ORIENTATION_BOUND)
+            )
+            orientation_ok = orientation_error <= orientation_threshold
+        return position_ok and orientation_ok, {
+            "assembled_position_error_m": position_error.detach().cpu().tolist(),
+            "assembled_position_threshold_m": list(
+                LAMP_REAL_ASSEMBLED_POSITION_THRESHOLDS_M
+            ),
+            "assembled_position_ok": position_ok,
+            "assembled_orientation_error_rad": orientation_error,
+            "assembled_orientation_threshold_rad": orientation_threshold,
+            "assembled_orientation_ok": orientation_ok,
+            "assembled_ignored_rotation_axis": (
+                "y" if part_name == "lamp_bulb" else None
+            ),
+        }
+
+    def _lamp_real_finalize_result(
+        self,
+        *,
+        pairs,
+        active_part_name: str,
+        partner_part_name: str,
+        assembly_step: str,
+        skill: Optional[str],
+        guidance_point_robot: Optional[torch.Tensor],
+        guidance_pose_robot: Optional[torch.Tensor],
+        guidance_gripper_width: Optional[float],
+        debug: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        skill_state_label = self._skill_state_label(
+            active_part_name, partner_part_name, skill
+        )
+        if skill is None:
+            skill = self.previous_skill
+            skill_state_label = self.previous_skill_state
+            assembly_step = self.previous_assembly_step
+            guidance_point_robot = self.previous_guidance_point_robot
+            guidance_pose_robot = self.previous_guidance_pose_robot
+            guidance_gripper_width = self.previous_guidance_gripper_width
+        else:
+            self.previous_skill = skill
+            self.previous_skill_state = skill_state_label
+            self.previous_assembly_step = assembly_step
+            if guidance_point_robot is not None:
+                self.previous_guidance_point_robot = _to_numpy(
+                    guidance_point_robot
+                ).astype(np.float32)
+            if guidance_pose_robot is not None:
+                self.previous_guidance_pose_robot = _pose_to_numpy(
+                    guidance_pose_robot
+                )
+            self.previous_guidance_gripper_width = guidance_gripper_width
+
+        guidance_point = (
+            None
+            if guidance_point_robot is None
+            else _to_numpy(guidance_point_robot).astype(np.float32)
+        )
+        guidance_pose = (
+            None
+            if guidance_pose_robot is None
+            else _pose_to_numpy(guidance_pose_robot)
+        )
+        self.previous_guidance_point = (
+            None if guidance_point is None else guidance_point.copy()
+        )
+        self.previous_guidance_point_clean = (
+            None if guidance_point is None else guidance_point.copy()
+        )
+        self.previous_guidance_pose = (
+            None if guidance_pose is None else guidance_pose.copy()
+        )
+        self.previous_guidance_pose_clean = (
+            None if guidance_pose is None else guidance_pose.copy()
+        )
+        debug["task_fsm_complete"] = self.assemble_idx >= len(pairs)
+        return {
+            "skill": skill,
+            "skill_state": skill_state_label,
+            "assembly_step": assembly_step,
+            "guidance_point": guidance_point,
+            "guidance_pose": guidance_pose,
+            "guidance_gripper_width": guidance_gripper_width,
+            "debug": debug,
+        }
+
+    def _step_lamp_real_skill_state(
+        self, annotation_inputs: Mapping[str, Any]
+    ) -> Dict[str, Any]:
+        """Independent real Lamp FSM; never calls FurnitureBench part FSMs."""
+
+        pairs = self.furniture.should_be_assembled
+        if self.assemble_idx >= len(pairs):
+            return {
+                "skill": self.previous_skill,
+                "skill_state": self.previous_skill_state,
+                "assembly_step": self.previous_assembly_step,
+                "guidance_point": self.previous_guidance_point,
+                "guidance_pose": self.previous_guidance_pose,
+                "guidance_gripper_width": self.previous_guidance_gripper_width,
+                "debug": {
+                    "phase": "complete",
+                    "task_fsm_complete": True,
+                    "real_fsm": "lamp_v1",
+                },
+            }
+
+        part1_idx, part2_idx = pairs[self.assemble_idx]
+        base = self.furniture.parts[part1_idx]
+        operated = self.furniture.parts[part2_idx]
+        assembly_step = self._assembly_step_label(base, operated)
+        debug: Dict[str, Any] = {
+            "assemble_idx": self.assemble_idx,
+            "assembly_step": assembly_step,
+            "active_part": None,
+            "phase": None,
+            "real_fsm": "lamp_v1",
+        }
+        entered_operated_from_push = False
+
+        base_active = (
+            not getattr(base, "pre_assemble_done", True)
+            and getattr(base, "skill_state", None) != "done"
+        )
+        if base_active:
+            base.skill_state = "push"
+            guidance, guidance_pose = self._lamp_real_base_push_target(
+                annotation_inputs
+            )
+            base_pose = self._part_pose_robot_from_inputs(
+                "lamp_base", annotation_inputs
+            )
+            push_error = float(
+                (base_pose[:3, 3] - guidance).abs().sum().item()
+            )
+            push_geometry_ok = (
+                push_error < LAMP_REAL_BASE_PUSH_POSITION_THRESHOLD_M
+            )
+            push_pose_reliable = self._transition_pose_reliable("lamp_base")
+            push_ok = push_geometry_ok and push_pose_reliable
+            debug.update(
+                {
+                    "active_part": "lamp_base",
+                    "phase": "pre_assemble",
+                    "push_position_error_m": push_error,
+                    "push_position_threshold_m": (
+                        LAMP_REAL_BASE_PUSH_POSITION_THRESHOLD_M
+                    ),
+                    "push_geometry_ok": push_geometry_ok,
+                    "push_pose_reliable": push_pose_reliable,
+                    "push_transition_ok": push_ok,
+                }
+            )
+            if not push_ok:
+                if push_geometry_ok and not push_pose_reliable:
+                    debug["blocked_stale_push_transition"] = True
+                return self._lamp_real_finalize_result(
+                    pairs=pairs,
+                    active_part_name="lamp_base",
+                    partner_part_name=operated.name,
+                    assembly_step=assembly_step,
+                    skill="push",
+                    guidance_point_robot=guidance,
+                    guidance_pose_robot=guidance_pose,
+                    guidance_gripper_width=0.055,
+                    debug=debug,
+                )
+            base.skill_state = "done"
+            base.pre_assemble_done = True
+            entered_operated_from_push = True
+
+        part_name = operated.name
+        state = getattr(operated, "skill_state", "pick")
+        if state == "done":
+            state = "pick"
+            operated.skill_state = state
+        skill = state
+        guidance = guidance_pose = None
+        target_width = None
+        target_part_pose = None
+        debug.update(active_part=part_name, phase="assemble", state_before=state)
+
+        if part_name == "lamp_bulb":
+            assembled, assembled_debug = self._lamp_real_assembled(
+                annotation_inputs, part_name
+            )
+            debug.update(assembled_debug)
+            debug["assembled"] = assembled
+
+            if state == "pick":
+                guidance, guidance_pose = self._lamp_real_bulb_pick_target(
+                    annotation_inputs
+                )
+                target_width = LAMP_REAL_BULB_GRIP_WIDTH_M
+                close_event = (
+                    self._current_gripper_event == "closed"
+                    and not entered_operated_from_push
+                )
+                debug.update(
+                    {
+                        "pick_transition_policy": "lamp_bulb_partial_close_event_only",
+                        "pick_gripper_close_event": close_event,
+                        "pick_close_width_threshold_m": (
+                            LAMP_REAL_BULB_PICK_CLOSE_WIDTH_M
+                        ),
+                    }
+                )
+                if close_event:
+                    operated.skill_state = state = skill = "place"
+                    self._start_real_place_rigid_reference(
+                        part_name, annotation_inputs
+                    )
+                    guidance, guidance_pose, target_part_pose = (
+                        self._lamp_real_bulb_place_target(annotation_inputs)
+                    )
+            elif state == "place":
+                (
+                    guidance,
+                    guidance_pose,
+                    target_part_pose,
+                ) = self._lamp_real_bulb_place_target(annotation_inputs)
+                target_width = LAMP_REAL_BULB_GRIP_WIDTH_M
+                geometry_inputs = annotation_inputs
+                geometry = self._lamp_real_bulb_place_geometry(geometry_inputs)
+                debug.update({f"place_live_{key}": value for key, value in geometry.items()})
+                geometry_source = "tracked_pose"
+                if not geometry["place_geometry_ok"]:
+                    fallback_inputs, fallback_debug = self._place_rigid_fallback_inputs(
+                        part_name, annotation_inputs, "lamp_base"
+                    )
+                    debug.update(fallback_debug)
+                    if fallback_inputs is not None:
+                        fallback_geometry = self._lamp_real_bulb_place_geometry(
+                            fallback_inputs
+                        )
+                        debug.update(
+                            {
+                                f"place_rigid_{key}": value
+                                for key, value in fallback_geometry.items()
+                            }
+                        )
+                        if fallback_geometry["place_geometry_ok"]:
+                            geometry = fallback_geometry
+                            geometry_source = "rigid_ee_delta"
+                debug.update(geometry)
+                debug["place_geometry_source"] = geometry_source
+                source_reliable = self._transition_pose_reliable(part_name)
+                transition_ok = geometry["place_geometry_ok"] and (
+                    source_reliable or geometry_source == "rigid_ee_delta"
+                )
+                debug["place_transition_ok"] = transition_ok
+                if transition_ok:
+                    operated.skill_state = state = skill = "insert"
+                    self._insert_started_time_ns.setdefault(
+                        part_name, self._current_observation_time_ns
+                    )
+                elif not self._gripper_closed:
+                    seated = (
+                        geometry["place_planar_error_m"]
+                        < 2.0 * LAMP_REAL_BULB_PLACE_PLANAR_THRESHOLD_M
+                        and geometry["place_axial_error_m"]
+                        < 2.0 * LAMP_REAL_BULB_PLACE_AXIAL_THRESHOLD_M
+                        and geometry["place_orientation_error_rad"]
+                        < 2.0 * LAMP_REAL_BULB_PLACE_ORIENTATION_THRESHOLD_RAD
+                    )
+                    operated.skill_reverse_reset_steps = (
+                        0
+                        if seated
+                        else getattr(operated, "skill_reverse_reset_steps", 0) + 1
+                    )
+                    if (
+                        operated.skill_reverse_reset_steps
+                        >= LAMP_REAL_DROP_CONFIRMATION_FRAMES
+                    ):
+                        operated.skill_state = state = skill = "pick"
+                        operated.skill_reverse_reset_steps = 0
+            elif state == "insert":
+                (
+                    guidance,
+                    guidance_pose,
+                    target_part_pose,
+                ) = self._lamp_real_bulb_place_target(annotation_inputs)
+                target_width = LAMP_REAL_BULB_GRIP_WIDTH_M
+                elapsed_s, timeout_reached = self._insert_timeout_status(part_name)
+                debug.update(
+                    {
+                        "insert_to_screw_policy": "elapsed_observation_time",
+                        "insert_elapsed_s": elapsed_s,
+                        "insert_timeout_s": self.insert_to_screw_timeout_s,
+                        "insert_timeout_reached": timeout_reached,
+                        "insert_to_screw_timeout_transition": timeout_reached,
+                    }
+                )
+                if timeout_reached:
+                    operated.skill_state = state = skill = "screw"
+                    guidance, guidance_pose = self._lamp_real_bulb_screw_target(
+                        annotation_inputs
+                    )
+                    target_width = LAMP_REAL_BULB_SCREW_GRIP_WIDTH_M
+            elif state == "screw":
+                guidance, guidance_pose = self._lamp_real_bulb_screw_target(
+                    annotation_inputs
+                )
+                target_width = LAMP_REAL_BULB_SCREW_GRIP_WIDTH_M
+                transition_ok = assembled and (
+                    self._transition_pose_reliable(part_name)
+                    or self._current_gripper_event == "opened"
+                    or self._current_release_started_part_name == part_name
+                )
+                debug["screw_transition_ok"] = transition_ok
+                if transition_ok:
+                    operated.skill_state = "done"
+                    self._insert_started_time_ns.pop(part_name, None)
+                    self.assemble_idx += 1
+                    if self.assemble_idx < len(pairs):
+                        next_part_idx = pairs[self.assemble_idx][1]
+                        next_part = self.furniture.parts[next_part_idx]
+                        next_part.skill_state = "pick"
+                        next_part.skill_reverse_reset_steps = 0
+                    skill = None
+        elif part_name == "lamp_hood":
+            assembled, assembled_debug = self._lamp_real_assembled(
+                annotation_inputs, part_name
+            )
+            debug.update(assembled_debug)
+            debug["assembled"] = assembled
+            if state == "pick":
+                guidance, guidance_pose = self._lamp_real_hood_pick_target(
+                    annotation_inputs
+                )
+                target_width = LAMP_REAL_HOOD_GRIP_WIDTH_M
+                hood_pose = self._part_pose_robot_from_inputs(
+                    part_name, annotation_inputs
+                )
+                ee_distance = float(
+                    torch.linalg.norm(
+                        annotation_inputs["ee_pos"] - hood_pose[:3, 3]
+                    ).item()
+                )
+                close_event = (
+                    self._current_gripper_event == "closed"
+                    and not entered_operated_from_push
+                )
+                distance_ok = ee_distance < LAMP_REAL_HOOD_PICK_EE_DISTANCE_THRESHOLD_M
+                debug.update(
+                    {
+                        "pick_transition_policy": "gripper_close_event_and_ee_distance",
+                        "pick_gripper_close_event": close_event,
+                        "pick_ee_distance_m": ee_distance,
+                        "pick_ee_distance_threshold_m": (
+                            LAMP_REAL_HOOD_PICK_EE_DISTANCE_THRESHOLD_M
+                        ),
+                        "pick_ee_distance_ok": distance_ok,
+                    }
+                )
+                if close_event and distance_ok:
+                    operated.skill_state = state = skill = "place"
+                    self._start_real_place_rigid_reference(
+                        part_name, annotation_inputs
+                    )
+                    guidance, guidance_pose, target_part_pose = (
+                        self._lamp_real_hood_place_target(annotation_inputs)
+                    )
+            elif state == "place":
+                guidance, guidance_pose, target_hood_pose = (
+                    self._lamp_real_hood_place_target(annotation_inputs)
+                )
+                target_part_pose = target_hood_pose
+                target_width = LAMP_REAL_HOOD_GRIP_WIDTH_M
+                hood_pose = self._part_pose_robot_from_inputs(
+                    part_name, annotation_inputs
+                )
+                place_error = float(
+                    (hood_pose[:3, 3] - target_hood_pose[:3, 3]).abs().sum().item()
+                )
+                completion_ok = assembled and not self._gripper_closed
+                debug.update(
+                    {
+                        "place_position_error_m": place_error,
+                        "place_position_threshold_m": 0.04,
+                        "hood_completion_policy": "assembled_and_gripper_open",
+                        "hood_completion_ok": completion_ok,
+                    }
+                )
+                if completion_ok:
+                    operated.skill_state = "done"
+                    self.assemble_idx += 1
+                    skill = None
+                elif not self._gripper_closed:
+                    seated = place_error < 0.08
+                    operated.skill_reverse_reset_steps = (
+                        0
+                        if seated
+                        else getattr(operated, "skill_reverse_reset_steps", 0) + 1
+                    )
+                    if (
+                        operated.skill_reverse_reset_steps
+                        >= LAMP_REAL_DROP_CONFIRMATION_FRAMES
+                    ):
+                        operated.skill_state = state = skill = "pick"
+                        operated.skill_reverse_reset_steps = 0
+        else:
+            raise ValueError(f"Unexpected Lamp operated part {part_name!r}")
+
+        if guidance is not None:
+            operated.skill_guidance_point_robot = guidance.clone()
+        if guidance_pose is not None:
+            operated.skill_guidance_pose_robot = guidance_pose.clone()
+            operated.skill_target_ee_pose_robot = guidance_pose.clone()
+        operated.skill_target_gripper_width = target_width
+        if target_part_pose is not None:
+            operated.skill_target_part_pose_robot = target_part_pose.clone()
+            operated.skill_target_anchor_pose_robot = (
+                self._part_pose_robot_from_inputs("lamp_base", annotation_inputs)
+                .clone()
+            )
+        debug["state_after"] = getattr(operated, "skill_state", state)
+        return self._lamp_real_finalize_result(
+            pairs=pairs,
+            active_part_name=part_name,
+            partner_part_name="lamp_base",
+            assembly_step=assembly_step,
+            skill=skill,
+            guidance_point_robot=guidance,
+            guidance_pose_robot=guidance_pose,
+            guidance_gripper_width=target_width,
+            debug=debug,
+        )
 
     def _step_multi_part_skill_state(
         self, annotation_inputs: Mapping[str, Any]
@@ -1636,6 +2404,8 @@ class RealSkillAnnotator(SkillAnnotator):
         }
 
     def _step_skill_state(self, annotation_inputs: Mapping[str, Any]) -> Dict[str, Any]:
+        if self.furniture_name == "lamp":
+            return self._step_lamp_real_skill_state(annotation_inputs)
         if self.furniture_name != "one_leg":
             return self._step_multi_part_skill_state(annotation_inputs)
         if self.assemble_idx >= len(self.furniture.should_be_assembled):
@@ -2099,9 +2869,24 @@ class RealSkillAnnotator(SkillAnnotator):
                 self._attached_min_gripper_width_m = min(
                     self._attached_min_gripper_width_m, width
                 )
-        gripper_event = self._gripper_event(width)
-        self._current_gripper_event = gripper_event
         active_part = self._active_part()
+        gripper_event = self._gripper_event(width, active_part)
+        if (
+            active_part is not None
+            and active_part.name == "lamp_bulb"
+            and getattr(active_part, "skill_state", None) == "pick"
+        ):
+            if width >= LAMP_REAL_BULB_PICK_REARM_WIDTH_M:
+                self._lamp_bulb_pick_armed = True
+            elif (
+                self._lamp_bulb_pick_armed
+                and not self._gripper_closed
+                and width <= LAMP_REAL_BULB_PICK_CLOSE_WIDTH_M
+            ):
+                self._gripper_closed = True
+                self._lamp_bulb_pick_armed = False
+                gripper_event = "closed"
+        self._current_gripper_event = gripper_event
 
         effective_poses = {
             part.name: self._tracked_pose(observation, part, ee_pose)

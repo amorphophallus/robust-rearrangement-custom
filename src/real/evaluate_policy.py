@@ -657,7 +657,7 @@ def _parse_args(argv=None):
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
         "--task",
-        choices=("one_leg", "round_table"),
+        choices=("one_leg", "round_table", "lamp"),
         default="one_leg",
         help="FurnitureBench task used by camera pose tracking and real annotation",
     )

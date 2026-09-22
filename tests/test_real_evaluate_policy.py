@@ -73,6 +73,12 @@ class RealEvaluatePolicyCliTest(unittest.TestCase):
         )
         self.assertEqual(args.task, "round_table")
 
+    def test_lamp_task_is_supported(self):
+        args = _parse_args(
+            ["--checkpoint", "model.pt", "--task", "lamp"]
+        )
+        self.assertEqual(args.task, "lamp")
+
     def test_execute_uses_measured_workspace_defaults(self):
         args = _parse_args(
             [
