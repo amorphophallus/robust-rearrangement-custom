@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import copy
 import math
 from typing import Dict, Optional
 
@@ -538,6 +539,96 @@ class SkillAnnotator:
         self.noise_state = None
         if self.verifier is not None:
             self.verifier.reset()
+
+    @staticmethod
+    def _snapshot_value(value):
+        if torch.is_tensor(value):
+            return value.detach().cpu().clone()
+        if isinstance(value, np.ndarray):
+            return value.copy()
+        if isinstance(value, dict):
+            return {
+                key: SkillAnnotator._snapshot_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [SkillAnnotator._snapshot_value(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(SkillAnnotator._snapshot_value(item) for item in value)
+        return copy.deepcopy(value)
+
+    @staticmethod
+    def _restore_value(value, device):
+        if torch.is_tensor(value):
+            return value.detach().clone().to(device=device)
+        if isinstance(value, np.ndarray):
+            return value.copy()
+        if isinstance(value, dict):
+            return {
+                key: SkillAnnotator._restore_value(item, device)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [SkillAnnotator._restore_value(item, device) for item in value]
+        if isinstance(value, tuple):
+            return tuple(
+                SkillAnnotator._restore_value(item, device) for item in value
+            )
+        return copy.deepcopy(value)
+
+    def state_dict(self):
+        """Return the mutable annotation FSM state needed by a state bank."""
+
+        scalar_state = {
+            name: self._snapshot_value(getattr(self, name))
+            for name in (
+                "noise_seed_offset",
+                "previous_skill",
+                "previous_guidance_point_robot",
+                "previous_guidance_pose_robot",
+                "previous_guidance_point",
+                "previous_guidance_point_clean",
+                "previous_guidance_pose",
+                "previous_guidance_pose_clean",
+                "previous_guidance_gripper_width",
+                "previous_annotation_noise",
+                "previous_skill_state",
+                "previous_assembly_step",
+                "noise_state",
+                "assemble_idx",
+            )
+        }
+        return {
+            "schema": "rr-skill-annotator-state-v1",
+            "furniture_name": self.furniture_name,
+            "annotator": scalar_state,
+            "parts": [
+                self._snapshot_value(part.__dict__)
+                for part in self.furniture.parts
+            ],
+        }
+
+    def load_state_dict(self, state, *, device):
+        if state.get("schema") != "rr-skill-annotator-state-v1":
+            raise ValueError(
+                f"Unsupported skill-annotator state: {state.get('schema')!r}"
+            )
+        if state.get("furniture_name") != self.furniture_name:
+            raise ValueError(
+                "Skill-annotator furniture mismatch: "
+                f"{state.get('furniture_name')!r} vs {self.furniture_name!r}"
+            )
+        part_states = state.get("parts", [])
+        if len(part_states) != len(self.furniture.parts):
+            raise ValueError(
+                f"Skill-annotator part count mismatch: {len(part_states)} vs "
+                f"{len(self.furniture.parts)}"
+            )
+        for name, value in state["annotator"].items():
+            setattr(self, name, self._restore_value(value, device))
+        for part, part_state in zip(self.furniture.parts, part_states):
+            part.__dict__.clear()
+            part.__dict__.update(self._restore_value(part_state, device))
 
     def _short_part_name(self, part_name: str) -> str:
         short_name = str(part_name)

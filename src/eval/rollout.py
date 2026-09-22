@@ -92,6 +92,7 @@ from src.eval.vlm_point_metrics import (
     make_point_error_record,
     merge_vlm_point_error_summaries,
 )
+from src.eval.state_bank import StateBankRecorder
 
 
 RolloutStats = collections.namedtuple(
@@ -945,6 +946,8 @@ def rollout(
     vlm_metric_episode_offset: int = 0,
     vlm_noise_projection_samples: int = DEFAULT_MONTE_CARLO_SAMPLES_PER_PAIR,
     eepose_frame: str = ROBOT_BASE,
+    state_bank_recorder: Optional[StateBankRecorder] = None,
+    state_bank_episode_offset: int = 0,
 ) -> Optional[RolloutSaveValues]:
     use_vlm = annotation_source == "vlm"
     if annotation_source not in {"scripted", "vlm"}:
@@ -990,6 +993,7 @@ def rollout(
         or grasp_part_annotate
         or provide_skill_input
         or collect_skill_stats
+        or state_bank_recorder is not None
         or (
             perturb_runner is not None
             and perturb_runner.enabled
@@ -1014,6 +1018,16 @@ def rollout(
         else [{} for _ in range(env.num_envs)]
     )
     initial_annotations = oracle_initial_annotations
+    if state_bank_recorder is not None:
+        if annotation_source != "scripted":
+            raise ValueError("State-bank capture requires annotation_source='scripted'")
+        state_bank_recorder.capture(
+            env,
+            annotations=oracle_initial_annotations,
+            observation=video_obs,
+            frame_index=0,
+            episode_offset=state_bank_episode_offset,
+        )
     initial_skills = [bundle.get("skill") for bundle in initial_annotations]
     initial_skill_states = [bundle.get("skill_state") for bundle in initial_annotations]
     initial_assembly_steps = [bundle.get("assembly_step") for bundle in initial_annotations]
@@ -1318,6 +1332,14 @@ def rollout(
             if collect_skill_annotations
             else [{} for _ in range(env.num_envs)]
         )
+        if state_bank_recorder is not None:
+            state_bank_recorder.capture(
+                env,
+                annotations=current_oracle_annotations,
+                observation=video_obs,
+                frame_index=step_idx + 1,
+                episode_offset=state_bank_episode_offset,
+            )
         oracle_current_skills = [
             bundle.get("skill") for bundle in current_oracle_annotations
         ]
@@ -1688,6 +1710,11 @@ def calculate_success_rate(
     tracking_metric_type: Optional[str] = None,
     vlm_noise_projection_samples: int = DEFAULT_MONTE_CARLO_SAMPLES_PER_PAIR,
     eepose_frame: str = ROBOT_BASE,
+    state_bank_out_dir: Optional[Path] = None,
+    state_bank_skill_offsets: tuple[int, ...] = (0,),
+    state_bank_stride: int = 0,
+    state_bank_include_preview: bool = True,
+    state_bank_source_metadata: Optional[dict] = None,
 ) -> RolloutStats:
 
     use_target_mode = target_successes is not None and target_successes > 0
@@ -1738,6 +1765,17 @@ def calculate_success_rate(
     tracking_incomplete_episode_count = 0
     saved_rollouts_count = 0
     guidance_bank_records: list[dict] = []
+    state_bank_recorder = (
+        StateBankRecorder(
+            state_bank_out_dir,
+            skill_offsets=state_bank_skill_offsets,
+            stride=state_bank_stride,
+            include_preview=state_bank_include_preview,
+            source_metadata=state_bank_source_metadata,
+        )
+        if state_bank_out_dir is not None
+        else None
+    )
 
     save_rollouts = rollout_save_dir is not None or save_rollouts_to_wandb
 
@@ -1822,6 +1860,8 @@ def calculate_success_rate(
             vlm_metric_episode_offset=n_total_rollouts,
             vlm_noise_projection_samples=vlm_noise_projection_samples,
             eepose_frame=eepose_frame,
+            state_bank_recorder=state_bank_recorder,
+            state_bank_episode_offset=n_total_rollouts,
         )
 
         # Calculate the success rate

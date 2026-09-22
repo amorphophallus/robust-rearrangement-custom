@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import os
 import random
 import re
@@ -64,6 +65,14 @@ from wandb import Api
 from wandb.sdk.wandb_run import Run
 
 _wandb_api: Optional[Api] = None
+
+
+def _sha256_file(path: Path, chunk_size: int = 16 * 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class LocalCheckpointWrapper:
@@ -223,6 +232,17 @@ def validate_args(args: argparse.Namespace):
         assert args.vlm_timeout_seconds > 0
         assert args.vlm_query_interval >= 0
         assert args.vlm_noise_projection_samples > 0
+    if args.state_bank_out_dir is not None:
+        assert args.annotation_source == "scripted", (
+            "--state-bank-out-dir requires --annotation-source scripted"
+        )
+        assert all(value >= 0 for value in args.state_bank_skill_offsets), (
+            "--state-bank-skill-offsets must be non-negative"
+        )
+        assert args.state_bank_stride >= 0, "--state-bank-stride must be non-negative"
+        assert args.state_bank_skill_offsets or args.state_bank_stride > 0, (
+            "state-bank capture needs offsets or a positive stride"
+        )
 
 
 def resolve_rollout_after_success_by_task(
@@ -904,6 +924,33 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Write clean per-skill guidance donors to <dir>/<task>.json.",
+    )
+    parser.add_argument(
+        "--state-bank-out-dir",
+        type=str,
+        default=None,
+        help=(
+            "Capture restorable scripted-provenance FurnitureBench intermediate "
+            "states into this new or empty directory."
+        ),
+    )
+    parser.add_argument(
+        "--state-bank-skill-offsets",
+        type=int,
+        nargs="+",
+        default=[0, 8, 16, 32],
+        help="Zero-based frame offsets from each skill-state entry to capture.",
+    )
+    parser.add_argument(
+        "--state-bank-stride",
+        type=int,
+        default=0,
+        help="Also capture every N frames within a skill; 0 disables stride capture.",
+    )
+    parser.add_argument(
+        "--state-bank-no-preview",
+        action="store_true",
+        help="Do not embed raw wrist/front RGB previews in state records.",
     )
 
     parser.add_argument("--save-rollouts-suffix", type=str, default="")
@@ -1692,6 +1739,29 @@ if __name__ == "__main__":
                         ),
                         vlm_noise_projection_samples=(
                             args.vlm_noise_projection_samples
+                        ),
+                        state_bank_out_dir=(
+                            Path(args.state_bank_out_dir)
+                            if args.state_bank_out_dir
+                            else None
+                        ),
+                        state_bank_skill_offsets=tuple(args.state_bank_skill_offsets),
+                        state_bank_stride=args.state_bank_stride,
+                        state_bank_include_preview=not args.state_bank_no_preview,
+                        state_bank_source_metadata=(
+                            {
+                                "policy_kind": "rl_expert",
+                                "checkpoint_path": str(
+                                    Path(checkpoint_path).expanduser().resolve()
+                                ),
+                                "checkpoint_sha256": _sha256_file(
+                                    Path(checkpoint_path).expanduser().resolve()
+                                ),
+                                "command": [sys.executable, *sys.argv],
+                                "annotation_source": args.annotation_source,
+                            }
+                            if args.state_bank_out_dir
+                            else None
                         ),
                     )
 
