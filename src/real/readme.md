@@ -37,12 +37,13 @@ camera transforms, and rejects a non-240x320 input instead of silently resizing
 it.
 
 Copy the complete block below. Change only `RR_RUN`; supported runs are
-`real40` and `real10_sim400`.
+`real40`, `real40_sim400`, and `real10_sim400`.
 
 ```bash
 cd /home/hz/code/robust-rearrangement-custom
 
 RR_RUN=real40
+RR_TASK=one_leg
 RR_PYTHON=/home/hz/miniconda3/envs/rr-real/bin/python
 RR_CHECKPOINT_ROOT="$PWD/checkpoints/rr_real_sim_modelscope_0912"
 RR_INTERFACE_CFG=/home/hz/code/YueHu_deoxys/deoxys/config/charmander.yml
@@ -50,6 +51,9 @@ RR_INTERFACE_CFG=/home/hz/code/YueHu_deoxys/deoxys/config/charmander.yml
 case "$RR_RUN" in
   real40)
     RR_CHECKPOINT="$RR_CHECKPOINT_ROOT/real40/rr_modelscope0912_real40_b256_ws1_seed2026091213_timeline10hz/rr_modelscope0912_real40_b256_ws1_seed2026091213_timeline10hz_2026-09-14_15-56-42.245167/actor_chkpt_last.pt"
+    ;;
+  real40_sim400)
+    RR_CHECKPOINT="$RR_CHECKPOINT_ROOT/real40_sim400/rr_modelscope0912_real40_sim400_b256_seed2026091211/rr_modelscope0912_real40_sim400_b256_seed2026091211/actor_chkpt_last.pt"
     ;;
   real10_sim400)
     RR_CHECKPOINT="$RR_CHECKPOINT_ROOT/real10_sim400/rr_modelscope0912_real10_sim400_b256_ws1_seed2026091212_timeline10hz/rr_modelscope0912_real10_sim400_b256_ws1_seed2026091212_timeline10hz_2026-09-14_16-08-18.727013/actor_chkpt_last.pt"
@@ -64,21 +68,28 @@ test -f "$RR_CHECKPOINT" || { printf 'missing checkpoint: %s\n' "$RR_CHECKPOINT"
 
 "$RR_PYTHON" -m src.real.evaluate_policy \
   --checkpoint "$RR_CHECKPOINT" \
+  --task "$RR_TASK" \
   --interface-cfg "$RR_INTERFACE_CFG" \
   --query-interval-steps 2 \
   --max-steps 100 \
-  --show-input-dashboard \
-  --save-input-video
+  --show-input-dashboard
 ```
 
 `--query-interval-steps` remains a normal CLI setting. The recommended value
 for this 5 Hz real-robot command is `2`; replace it with another positive value
 when comparing query cadences. It is not hard-coded in the evaluator.
 
-`--save-input-video` writes every successful policy query from `b` through `e`
-to a four-panel MP4 containing front RGB, wrist RGB, front PromptDA depth, and
-wrist PromptDA depth. The file is created next to the JSONL log with the suffix
-`-rollout-XXX-rgbd-grid.mp4`.
+要运行 round-table，将 `RR_TASK=round_table`，并把 `RR_CHECKPOINT` 换成对应的
+round-table checkpoint。eval 会用同一任务名初始化 RealSense 零件位姿追踪和
+`RealSkillAnnotationSession`；当 checkpoint 需要 skill 或彩色 guidance point 时，
+policy query 前会运行 round-table real annotation。
+
+视频不需要额外参数。按 `b` 后自动录制每次成功 policy query 的最终输入，
+按 `e` 结束 rollout 后再按 `s` 才正式保存。2×2 MP4 包含送入 policy 的
+post-transform front RGB、wrist RGB、front PromptDA depth 和 wrist PromptDA
+depth。文件保存在 JSONL 日志同目录，后缀为
+`-rollout-XXX-rgbd-grid.mp4`。如果没有按 `s` 就开始下一条或退出，上一条
+临时视频会被丢弃。
 
 This is a dry-run: it connects to the cameras and robot and performs policy
 inference, but does not send robot or gripper actions. Run it from the

@@ -13,6 +13,7 @@ from src.real.input_dashboard import (
     EvalInputVideoRecorder,
     VIDEO_FRAME_HEIGHT,
     VIDEO_FRAME_WIDTH,
+    _draw_tabletop_cad_overlay,
     render_input_dashboard,
     render_rgbd_video_frame,
 )
@@ -38,7 +39,7 @@ class RealInputDashboardTest(unittest.TestCase):
         }
 
     def _observation(self):
-        return {
+        observation = {
             "color_image1": np.full((240, 320, 3), 32, dtype=np.uint8),
             "color_image2": np.full((240, 320, 3), 96, dtype=np.uint8),
             "depth_image1": np.full((240, 320), 0.7, dtype=np.float32),
@@ -65,7 +66,32 @@ class RealInputDashboardTest(unittest.TestCase):
             },
             "parts_founds": np.ones(6, dtype=bool),
             "parts_pose_valid": np.ones(6, dtype=bool),
-            "real_annotation_debug": {"part_pose_sources": {"leg": "apriltag"}},
+            "real_annotation_debug": {
+                "part_pose_sources": {"square_table_top": "held_last"},
+                "effective_part_poses_april": {
+                    "square_table_top": [0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 1.0]
+                },
+            },
+        }
+        part_poses = np.zeros((6, 7), dtype=np.float32)
+        part_poses[:, 6] = 1.0
+        part_poses[0, :3] = np.asarray([0.0, 0.0, 0.8], dtype=np.float32)
+        observation["parts_poses"] = part_poses.reshape(-1)
+        observation["camera_to_april"] = np.eye(4, dtype=np.float32)
+        return observation
+
+    def _camera_info(self):
+        return {
+            "front": {
+                "record_intrinsics": {
+                    "fx": 220.0,
+                    "fy": 220.0,
+                    "ppx": 160.0,
+                    "ppy": 120.0,
+                    "width": 320,
+                    "height": 240,
+                }
+            }
         }
 
     def test_renders_four_inputs_without_mutating_policy_rgb(self):
@@ -103,6 +129,18 @@ class RealInputDashboardTest(unittest.TestCase):
         self.assertEqual(frame.dtype, np.uint8)
         self.assertGreater(int(frame.max()), 0)
         np.testing.assert_array_equal(observation["color_image2"], front_before)
+
+    def test_draws_tabletop_cad_pose_without_mutating_policy_rgb(self):
+        observation = self._observation()
+        image = np.full((240, 320, 3), 127, dtype=np.uint8)
+        before = image.copy()
+
+        overlaid = _draw_tabletop_cad_overlay(
+            image, observation, self._camera_info()
+        )
+
+        np.testing.assert_array_equal(image, before)
+        self.assertFalse(np.array_equal(overlaid, before))
 
     def test_invalid_depth_pixels_do_not_break_rendering(self):
         observation = self._observation()
@@ -142,7 +180,7 @@ class RealInputDashboardTest(unittest.TestCase):
         self.assertFalse(actor.camera2_transform._forward_hooks)
 
     def test_renders_front_wrist_rgbd_video_grid(self):
-        frame = render_rgbd_video_frame(self._observation())
+        frame = render_rgbd_video_frame(self._policy_inputs())
         self.assertEqual(
             frame.shape,
             (VIDEO_FRAME_HEIGHT, VIDEO_FRAME_WIDTH, 3),
@@ -154,14 +192,37 @@ class RealInputDashboardTest(unittest.TestCase):
             path = Path(directory) / "query-rgbd.mp4"
             recorder = EvalInputVideoRecorder(enabled=True, fps=2.5)
             recorder.start(path)
-            self.assertTrue(recorder.submit(self._observation()))
-            self.assertTrue(recorder.submit(self._observation()))
+            self.assertTrue(recorder.submit(self._policy_inputs()))
+            self.assertTrue(recorder.submit(self._policy_inputs()))
             result = recorder.close()
 
             self.assertIsNone(result["error"])
             self.assertEqual(result["frame_count"], 2)
             self.assertTrue(path.is_file())
             self.assertGreater(path.stat().st_size, 0)
+
+    def test_captures_policy_inputs_for_video_without_showing_dashboard(self):
+        actor = SimpleNamespace(
+            camera1_transform=torch.nn.Identity(),
+            camera2_transform=torch.nn.Identity(),
+        )
+        dashboard = EvalInputDashboard(
+            enabled=False,
+            actor=actor,
+            capture_policy_inputs=True,
+        )
+        wrist = torch.rand(1, 4, 224, 224)
+        front = torch.rand(1, 4, 224, 224)
+
+        actor.camera1_transform(wrist)
+        actor.camera2_transform(front)
+        captured = dashboard.policy_inputs_snapshot()
+
+        torch.testing.assert_close(captured["wrist"], wrist)
+        torch.testing.assert_close(captured["front"], front)
+        dashboard.close()
+        self.assertFalse(actor.camera1_transform._forward_hooks)
+        self.assertFalse(actor.camera2_transform._forward_hooks)
 
 
 if __name__ == "__main__":

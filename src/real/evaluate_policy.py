@@ -2,7 +2,7 @@
 
 This first hardware version intentionally supports one narrow contract:
 
-* one-arm FurnitureBench tasks (initially ``one_leg``);
+* one-arm FurnitureBench tasks ``one_leg`` and ``round_table``;
 * Deoxys ``OSC_POSE`` with native absolute position + absolute axis-angle;
 * online Prompt Depth Anything for both cameras;
 * RR checkpoints trained with ``control.control_mode=pos``;
@@ -655,7 +655,12 @@ def _parse_args(argv=None):
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--task", choices=("one_leg",), default="one_leg")
+    parser.add_argument(
+        "--task",
+        choices=("one_leg", "round_table"),
+        default="one_leg",
+        help="FurnitureBench task used by camera pose tracking and real annotation",
+    )
     parser.add_argument("--interface-cfg", default="config/charmander.yml")
     parser.add_argument("--front-camera-serial", default="327122071654")
     parser.add_argument("--wrist-camera-serial", default="001622071252")
@@ -706,14 +711,6 @@ def _parse_args(argv=None):
         help=(
             "show one OpenCV page with every RGB-D, annotation, proprioceptive "
             "and action value used by each policy query"
-        ),
-    )
-    parser.add_argument(
-        "--save-input-video",
-        action="store_true",
-        help=(
-            "save every successful query's front/wrist RGB-D inputs as one "
-            "2x2 MP4 from rollout begin to end"
         ),
     )
     parser.add_argument("--log-path", type=Path, default=None)
@@ -810,7 +807,7 @@ def _initialize_policy_runtime(args):
             "task": args.task,
             "annotation_mode": _annotation_mode(cfg),
             "input_dashboard_enabled": args.show_input_dashboard,
-            "input_video_enabled": args.save_input_video,
+            "input_video_mode": "record_each_rollout_then_save_with_s",
             "frequency": args.frequency,
             "execution_frequency_hz": args.frequency,
             "action_period_ms": period_ns / 1e6,
@@ -933,9 +930,10 @@ def main(argv=None) -> int:
         enabled=args.show_input_dashboard,
         checkpoint=args.checkpoint.expanduser().resolve(),
         actor=actor,
+        capture_policy_inputs=True,
     )
     video_recorder = EvalInputVideoRecorder(
-        enabled=args.save_input_video,
+        enabled=True,
         fps=args.frequency / args.query_interval_steps,
     )
     annotation_session = None
@@ -947,6 +945,7 @@ def main(argv=None) -> int:
     rollout_generation = 0
     inference_inflight = False
     pending_dashboard = None
+    pending_video = None
     executed_steps = 0
     rollout_executed_steps = 0
     rollout_index = 0
@@ -966,6 +965,7 @@ def main(argv=None) -> int:
     signal.signal(signal.SIGTERM, request_stop)
     try:
         camera_info = camera.metadata()
+        dashboard.set_camera_info(camera_info)
         worker = PromptDepthWorker(
             PromptDepthAnythingEstimator(
                 model=args.prompt_depth_model,
@@ -1060,15 +1060,86 @@ def main(argv=None) -> int:
                 annotation_session.reset()
                 event_log.write("annotation_reset", reason=reason)
 
+        def rollout_video_path(index):
+            return event_log.path.with_name(
+                f"{event_log.path.stem}-rollout-{index:03d}-rgbd-grid.mp4"
+            )
+
+        def discard_pending_video(reason):
+            nonlocal pending_video
+            if pending_video is None:
+                return
+            pending_path = Path(pending_video["pending_path"])
+            try:
+                if pending_path.exists():
+                    pending_path.unlink()
+                event_log.write(
+                    "input_video_discarded",
+                    rollout_index=pending_video["rollout_index"],
+                    path=str(pending_path),
+                    reason=reason,
+                )
+            except OSError as exc:
+                event_log.write(
+                    "input_video_discard_failed",
+                    rollout_index=pending_video["rollout_index"],
+                    path=str(pending_path),
+                    reason=reason,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            pending_video = None
+
+        def save_pending_video():
+            nonlocal pending_video
+            if rollout_active:
+                print("SAVE refused: press e before s", flush=True)
+                return
+            if pending_video is None:
+                print("SAVE ignored: no ended rollout is waiting", flush=True)
+                return
+            pending_path = Path(pending_video["pending_path"])
+            final_path = Path(pending_video["final_path"])
+            try:
+                if final_path.exists():
+                    raise FileExistsError(f"video already exists: {final_path}")
+                pending_path.rename(final_path)
+            except OSError as exc:
+                event_log.write(
+                    "input_video_save_failed",
+                    rollout_index=pending_video["rollout_index"],
+                    pending_path=str(pending_path),
+                    final_path=str(final_path),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                print(f"SAVE VIDEO failed: {exc}", flush=True)
+                return
+            event_log.write(
+                "input_video_saved",
+                rollout_index=pending_video["rollout_index"],
+                path=str(final_path),
+                frame_count=pending_video["frame_count"],
+                fps=pending_video["fps"],
+            )
+            print(f"SAVE VIDEO {final_path}", flush=True)
+            pending_video = None
+
         def begin_rollout():
             nonlocal rollout_active, rollout_started_monotonic
             nonlocal rollout_executed_steps, rollout_index
             nonlocal consecutive_rejections, next_query_ns, next_hold_ns
             nonlocal last_prompt_token, last_target_pose, last_hold_status_ns
             nonlocal last_reserved_pose, rollout_generation, pending_dashboard
+            nonlocal pending_video
             if rollout_active:
                 print("BEGIN ignored: rollout is already active", flush=True)
                 return
+            if pending_video is not None:
+                print(
+                    "BEGIN discarding the previous unsaved video; press s after e "
+                    "to keep a rollout",
+                    flush=True,
+                )
+                discard_pending_video("next_rollout_started")
             action_queues.clear()
             validated_actions.clear()
             failed_channels.clear()
@@ -1082,11 +1153,12 @@ def main(argv=None) -> int:
             last_prompt_token = None
             last_hold_status_ns = 0
             pending_dashboard = None
-            video_path = event_log.path.with_name(
-                f"{event_log.path.stem}-rollout-{rollout_index:03d}-rgbd-grid.mp4"
+            final_video_path = rollout_video_path(rollout_index)
+            pending_video_path = final_video_path.with_name(
+                f".{final_video_path.stem}.pending.mp4"
             )
             try:
-                started_video_path = video_recorder.start(video_path)
+                started_video_path = video_recorder.start(pending_video_path)
                 if started_video_path is not None:
                     event_log.write(
                         "input_video_started",
@@ -1095,7 +1167,12 @@ def main(argv=None) -> int:
                         fps=video_recorder.fps,
                     )
             except Exception as exc:
-                video_recorder.close()
+                failed_video = video_recorder.close()
+                failed_path = failed_video.get("path")
+                if failed_path is not None:
+                    failed_path = Path(failed_path)
+                    if failed_path.exists():
+                        failed_path.unlink()
                 event_log.write(
                     "input_video_failed",
                     rollout_index=rollout_index,
@@ -1148,13 +1225,31 @@ def main(argv=None) -> int:
         def end_rollout(reason):
             nonlocal rollout_active, rollout_started_monotonic
             nonlocal last_target_pose, last_reserved_pose, next_hold_ns
-            nonlocal quit_requested
+            nonlocal quit_requested, pending_video
             if video_recorder.path is not None:
+                video_result = video_recorder.close()
                 event_log.write(
                     "input_video_stopped",
                     rollout_index=rollout_index,
-                    **video_recorder.close(),
+                    **video_result,
                 )
+                pending_path = video_result.get("path")
+                if (
+                    pending_path is not None
+                    and video_result.get("error") is None
+                    and int(video_result.get("frame_count", 0)) > 0
+                ):
+                    pending_video = {
+                        "rollout_index": rollout_index,
+                        "pending_path": pending_path,
+                        "final_path": str(rollout_video_path(rollout_index)),
+                        "frame_count": int(video_result["frame_count"]),
+                        "fps": float(video_result["fps"]),
+                    }
+                    event_log.write("input_video_pending_save", **pending_video)
+                else:
+                    if pending_path is not None and Path(pending_path).exists():
+                        Path(pending_path).unlink()
             action_queues.clear()
             validated_actions.clear()
             failed_channels.clear()
@@ -1189,14 +1284,16 @@ def main(argv=None) -> int:
             rollout_started_monotonic = None
             print(
                 f"END rollout={rollout_index} reason={reason} "
-                f"steps={rollout_executed_steps}; state=IDLE",
+                f"steps={rollout_executed_steps}; state=IDLE; "
+                "press s to save the RGB-D video",
                 flush=True,
             )
             if args.auto_begin:
                 quit_requested = True
 
         print(
-            "READY state=IDLE keys: r=reset joints, b=begin, e=end, q=quit; "
+            "READY state=IDLE keys: r=reset joints, b=begin, e=end, "
+            "s=save ended rollout video, q=quit; "
             f"execution_frequency={args.frequency:g} Hz",
             flush=True,
         )
@@ -1256,6 +1353,8 @@ def main(argv=None) -> int:
                     else:
                         reset_annotation("operator_end_idle")
                         print("END state=IDLE; annotation reset", flush=True)
+                elif key == "s":
+                    save_pending_video()
                 elif key == "q":
                     if rollout_active:
                         end_rollout("operator_quit")
@@ -1602,7 +1701,10 @@ def main(argv=None) -> int:
                                 next_query_ns, time.time_ns() + period_ns
                             )
                         observation = request.observation
-                        video_recorder.submit(observation)
+                        if video_recorder.active:
+                            video_recorder.submit(
+                                dashboard.policy_inputs_snapshot()
+                            )
                         skill = observation.get("skill")
                         gripper_prediction = np.sign(chunk[:, -1])
                         near_gripper_prediction = gripper_prediction[
@@ -1884,7 +1986,18 @@ def main(argv=None) -> int:
         if video_recorder is not None:
             video_result = video_recorder.close()
             if video_result["path"] is not None:
-                event_log.write("input_video_finalized", **video_result)
+                unfinished_path = Path(video_result["path"])
+                if unfinished_path.exists():
+                    unfinished_path.unlink()
+                event_log.write(
+                    "input_video_discarded",
+                    path=str(unfinished_path),
+                    reason="evaluator_exit_during_rollout",
+                    frame_count=video_result["frame_count"],
+                    error=video_result["error"],
+                )
+        if pending_video is not None:
+            discard_pending_video("evaluator_exit_without_save")
         if robot is not None:
             try:
                 if args.execute and last_target_pose is not None:

@@ -38,7 +38,7 @@ class RealEvaluatePolicyCliTest(unittest.TestCase):
         self.assertEqual(args.min_ee_z, 0.005)
         self.assertEqual(args.max_translation_step_m, 0.05)
         self.assertFalse(args.show_input_dashboard)
-        self.assertFalse(args.save_input_video)
+        self.assertEqual(args.task, "one_leg")
         self.assertEqual(args.query_interval_steps, 4)
 
     def test_query_interval_is_always_cli_controlled(self):
@@ -60,11 +60,18 @@ class RealEvaluatePolicyCliTest(unittest.TestCase):
         )
         self.assertTrue(args.show_input_dashboard)
 
-    def test_input_video_is_opt_in(self):
+    def test_removed_save_input_video_flag_is_rejected(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                _parse_args(
+                    ["--checkpoint", "model.pt", "--save-input-video"]
+                )
+
+    def test_round_table_task_is_supported(self):
         args = _parse_args(
-            ["--checkpoint", "model.pt", "--save-input-video"]
+            ["--checkpoint", "model.pt", "--task", "round_table"]
         )
-        self.assertTrue(args.save_input_video)
+        self.assertEqual(args.task, "round_table")
 
     def test_execute_uses_measured_workspace_defaults(self):
         args = _parse_args(

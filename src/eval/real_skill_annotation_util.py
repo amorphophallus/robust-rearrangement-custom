@@ -46,7 +46,7 @@ from src.common.guidance import GUIDANCE_SCHEMA_VERSION
 
 
 ANNOTATION_SOURCE = "real_skill_annotation_util"
-ANNOTATION_VERSION = 15
+ANNOTATION_VERSION = 19
 ANNOTATION_STATUS_KEY = "annotation_status"
 ANNOTATION_STATUS_ANNOTATED = "annotated"
 ANNOTATION_STATUS_UNANNOTATED = "unannotated"
@@ -67,6 +67,8 @@ _TABLETOP_SOCKET_SIGNS = (
 # leg-center-to-EE separation with one quarter of the leg's longest dimension,
 # applied along robot/world +Z with no lateral leg-pose term.
 LEG_TO_EE_LENGTH_FRACTION = 0.25
+ONE_LEG_REAL_PLACE_ORIENTATION_THRESHOLD_RAD = float(np.deg2rad(20.0))
+REAL_INSERT_TO_SCREW_TIMEOUT_S = 3.0
 
 
 def _pose_vector_to_matrix(pose: np.ndarray) -> np.ndarray:
@@ -221,6 +223,8 @@ class RealSkillAnnotator(SkillAnnotator):
     attached_detection_gate_m: float = 0.040
     relocalization_gate_m: float = 0.030
     relocalization_frames: int = 3
+    release_motion_threshold_m: float = 0.003
+    insert_to_screw_timeout_s: float = REAL_INSERT_TO_SCREW_TIMEOUT_S
     def __post_init__(self):
         if self.furniture_name not in SUPPORTED_FURNITURE:
             raise ValueError(
@@ -238,6 +242,8 @@ class RealSkillAnnotator(SkillAnnotator):
         }
         self._gripper_closed = False
         self._attached_part_name: Optional[str] = None
+        self._attached_min_gripper_width_m: Optional[float] = None
+        self._current_release_started_part_name: Optional[str] = None
         self._initial_part_pose_robot: Dict[str, np.ndarray] = {}
         self._current_gripper_event: Optional[str] = None
         self._placed_part_names = set()
@@ -245,17 +251,49 @@ class RealSkillAnnotator(SkillAnnotator):
         self._place_rigid_reference_ee_pose_robot: Optional[np.ndarray] = None
         self._place_rigid_reference_part_pose_robot: Optional[np.ndarray] = None
         self._place_rigid_reference_frame: Optional[int] = None
+        self._one_leg_original_default_assembled_pose: Optional[np.ndarray] = None
+        self._one_leg_selected_socket_label: Optional[int] = None
+        self._insert_started_time_ns: Dict[str, int] = {}
+        self._screw_assembled_latched = set()
+        self._current_observation_time_ns = 0
+        if self.furniture_name == "one_leg":
+            _, operated_part_idx = self.furniture.should_be_assembled[0]
+            operated_part = self.furniture.parts[operated_part_idx]
+            self._one_leg_original_default_assembled_pose = np.asarray(
+                operated_part.default_assembled_pose, dtype=np.float32
+            ).copy()
+            operated_part.skill_place_part_ori_threshold = (
+                ONE_LEG_REAL_PLACE_ORIENTATION_THRESHOLD_RAD
+            )
         self._obstacle_pose_source = "pickle_appended"
         self._frame_idx = -1
         self.stats = RealAnnotationStats()
 
     def reset(self):
+        if (
+            self.furniture_name == "one_leg"
+            and getattr(self, "_one_leg_original_default_assembled_pose", None)
+            is not None
+        ):
+            _, operated_part_idx = self.furniture.should_be_assembled[0]
+            self.furniture.parts[operated_part_idx].default_assembled_pose = (
+                self._one_leg_original_default_assembled_pose.copy()
+            )
         super().reset()
+        if self.furniture_name == "one_leg":
+            _, operated_part_idx = self.furniture.should_be_assembled[0]
+            self.furniture.parts[
+                operated_part_idx
+            ].skill_place_part_ori_threshold = (
+                ONE_LEG_REAL_PLACE_ORIENTATION_THRESHOLD_RAD
+            )
         self._tracked_parts = {
             part.name: _TrackedPart() for part in self.furniture.parts
         }
         self._gripper_closed = False
         self._attached_part_name = None
+        self._attached_min_gripper_width_m = None
+        self._current_release_started_part_name = None
         self._initial_part_pose_robot = {}
         self._current_gripper_event = None
         self._placed_part_names = set()
@@ -263,9 +301,58 @@ class RealSkillAnnotator(SkillAnnotator):
         self._place_rigid_reference_ee_pose_robot = None
         self._place_rigid_reference_part_pose_robot = None
         self._place_rigid_reference_frame = None
+        self._one_leg_selected_socket_label = None
+        self._insert_started_time_ns = {}
+        self._screw_assembled_latched = set()
+        self._current_observation_time_ns = 0
         self._obstacle_pose_source = "pickle_appended"
         self._frame_idx = -1
         self.stats = RealAnnotationStats()
+
+    @staticmethod
+    def _observation_time_ns(
+        observation: Mapping[str, Any], frame_idx: int
+    ) -> int:
+        """Use sensor/master time online and deterministic 10 Hz time as fallback."""
+
+        for key in (
+            "observation_target_wall_time_ns",
+            "step_timestamp_ns",
+            "front_source_wall_time_ns",
+        ):
+            value = observation.get(key)
+            if value is not None:
+                return int(value)
+        return int(frame_idx) * 100_000_000
+
+    def _insert_timeout_status(self, part_name: str) -> Tuple[float, bool]:
+        started_ns = self._insert_started_time_ns.setdefault(
+            part_name, self._current_observation_time_ns
+        )
+        elapsed_s = max(
+            0.0,
+            (self._current_observation_time_ns - started_ns) / 1e9,
+        )
+        return elapsed_s, elapsed_s >= self.insert_to_screw_timeout_s
+
+    @staticmethod
+    def _with_gripper_width(
+        annotation_inputs: Mapping[str, Any], width_m: float
+    ) -> Dict[str, Any]:
+        updated = dict(annotation_inputs)
+        source = annotation_inputs["gripper_width"]
+        updated["gripper_width"] = torch.as_tensor(
+            width_m, dtype=source.dtype, device=source.device
+        )
+        return updated
+
+    def _insert_gripper_threshold(self, part) -> float:
+        key = getattr(part, "_gripper_width_key", None)
+        if key is None:
+            key = "square_table" if self.furniture_name == "one_leg" else self.furniture_name
+        return float(
+            furniture_bench_config["robot"]["max_gripper_width"][key] - 0.001
+        )
 
     def _gripper_event(self, width: float) -> Optional[str]:
         if not self._gripper_closed and width <= self.close_width_m:
@@ -478,7 +565,17 @@ class RealSkillAnnotator(SkillAnnotator):
         )
         socket_robots = (table_pose_robot @ socket_locals.T).T[:, :3]
         socket_scores = socket_robots[:, 0] + socket_robots[:, 1]
-        selected_index = int(torch.argmax(socket_scores).item())
+        if (
+            self.furniture_name == "one_leg"
+            and self._one_leg_selected_socket_label is not None
+        ):
+            selected_index = next(
+                idx
+                for idx, (label, _, _) in enumerate(_TABLETOP_SOCKET_SIGNS)
+                if label == self._one_leg_selected_socket_label
+            )
+        else:
+            selected_index = int(torch.argmax(socket_scores).item())
         socket_label = _TABLETOP_SOCKET_SIGNS[selected_index][0]
         socket_local = socket_locals[selected_index, :3].clone()
 
@@ -523,6 +620,26 @@ class RealSkillAnnotator(SkillAnnotator):
             "guidance_robot": guidance_robot,
         }
 
+    def _ensure_one_leg_selected_socket_target(
+        self,
+        operated_part,
+        assemble_to: str,
+        annotation_inputs: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """Make the real one-leg FSM target the same socket as guidance."""
+
+        details = self._tabletop_place_target_details(
+            operated_part, assemble_to, annotation_inputs
+        )
+        if self._one_leg_selected_socket_label is None:
+            target_pose = self._one_leg_original_default_assembled_pose.copy()
+            socket_local = details["socket_local"].detach().cpu().numpy()
+            target_pose[0, 3] = socket_local[0]
+            target_pose[2, 3] = socket_local[2]
+            operated_part.default_assembled_pose = target_pose
+            self._one_leg_selected_socket_label = int(details["socket_label"])
+        return details
+
     def _round_table_leg_place_target_details(
         self,
         operated_part,
@@ -546,6 +663,26 @@ class RealSkillAnnotator(SkillAnnotator):
             "leg_length_m": leg_length_m,
             "z_offset_m": 0.25 * leg_length_m,
             "guidance_robot": guidance_robot,
+        }
+
+    def _round_table_base_assembly_target_details(
+        self,
+        operated_part,
+        assemble_to: str,
+        annotation_inputs: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """Return the desired assembled base pose and its center point."""
+        leg_pose_robot = self._part_pose_robot_from_inputs(
+            assemble_to, annotation_inputs
+        )
+        target_base_pose_robot = leg_pose_robot @ torch.as_tensor(
+            operated_part.default_assembled_pose,
+            device=leg_pose_robot.device,
+            dtype=leg_pose_robot.dtype,
+        )
+        return {
+            "target_base_pose_robot": target_base_pose_robot,
+            "guidance_robot": target_base_pose_robot[:3, 3].clone(),
         }
 
     def _obstacle_poses(self, observation: Mapping[str, Any]) -> Dict[str, np.ndarray]:
@@ -634,6 +771,7 @@ class RealSkillAnnotator(SkillAnnotator):
         tracker.pending_ee_to_part_robot = None
         tracker.pending_detection_count = 0
         self._attached_part_name = None
+        self._attached_min_gripper_width_m = None
         if self._place_rigid_reference_part_name == detached_part_name:
             self._place_rigid_reference_part_name = None
             self._place_rigid_reference_ee_pose_robot = None
@@ -974,22 +1112,18 @@ class RealSkillAnnotator(SkillAnnotator):
             setattr(part, name, value)
 
     @staticmethod
-    def _rotation_error_ignoring_local_axis(
+    def _rotation_error_ignoring_parent_axis(
         current_rotation: torch.Tensor,
         target_rotation: torch.Tensor,
         *,
         ignored_axis: int,
     ) -> torch.Tensor:
-        """Compare the local axis direction while ignoring twist around it."""
-        current_axis = current_rotation[:, ignored_axis]
-        target_axis = target_rotation[:, ignored_axis]
-        cosine = torch.clamp(
-            torch.dot(current_axis, target_axis)
-            / (torch.linalg.norm(current_axis) * torch.linalg.norm(target_axis)),
-            -1.0,
-            1.0,
-        )
-        return torch.acos(cosine)
+        """Ignore one axis-angle component in the shared parent frame."""
+        relative_rotation = current_rotation @ target_rotation.T
+        axis_angle = C.matrix_to_axis_angle(relative_rotation)
+        axis_angle = axis_angle.clone()
+        axis_angle[ignored_axis] = 0.0
+        return torch.linalg.norm(axis_angle)
 
     @staticmethod
     def _part_pose_robot_from_inputs(
@@ -1039,7 +1173,7 @@ class RealSkillAnnotator(SkillAnnotator):
             planar_error = position_error[[0, 1]].abs().sum()
             axial_error = position_error[2].abs()
             orientation_error = (
-                RealSkillAnnotator._rotation_error_ignoring_local_axis(
+                RealSkillAnnotator._rotation_error_ignoring_parent_axis(
                     current_relative[:3, :3],
                     target_relative[:3, :3],
                     ignored_axis=2,
@@ -1123,6 +1257,7 @@ class RealSkillAnnotator(SkillAnnotator):
             debug.update(active_part=part1.name, phase="pre_assemble")
 
         assembled = self._assembled(annotation_inputs, part1_idx, part2_idx)
+        assembled_for_transition = assembled
         part1_complete = getattr(part1, "pre_assemble_done", True) or (
             getattr(part1, "skill_state", None) == "done"
         )
@@ -1130,6 +1265,71 @@ class RealSkillAnnotator(SkillAnnotator):
             before = getattr(part2, "skill_state", None)
             snapshot = self._part_skill_snapshot(part2)
             state_inputs = annotation_inputs
+            base_pick_distance_ok = True
+            if before == "pick" and part2.name == "round_table_base":
+                base_pose_robot = self._part_pose_robot_from_inputs(
+                    part2.name, annotation_inputs
+                )
+                base_pick_ee_distance_m = float(
+                    torch.linalg.norm(
+                        annotation_inputs["ee_pos"] - base_pose_robot[:3, 3]
+                    ).item()
+                )
+                base_pick_distance_threshold_m = float(
+                    part2.pick_distance_threshold
+                )
+                base_pick_distance_ok = (
+                    base_pick_ee_distance_m < base_pick_distance_threshold_m
+                )
+                debug.update(
+                    {
+                        "base_pick_ee_distance_m": base_pick_ee_distance_m,
+                        "base_pick_ee_distance_threshold_m": (
+                            base_pick_distance_threshold_m
+                        ),
+                        "base_pick_ee_distance_ok": base_pick_distance_ok,
+                    }
+                )
+            screw_release_ready = False
+            if before == "screw" and part2.name == "round_table_leg":
+                if assembled:
+                    self._screw_assembled_latched.add(part2.name)
+                screw_release_ready = (
+                    self._current_gripper_event == "opened"
+                    or self._current_release_started_part_name == part2.name
+                    or not self._gripper_closed
+                )
+                assembled_for_transition = (
+                    part2.name in self._screw_assembled_latched
+                    and screw_release_ready
+                )
+                debug.update(
+                    {
+                        "screw_assembled_latched": (
+                            part2.name in self._screw_assembled_latched
+                        ),
+                        "screw_release_ready": screw_release_ready,
+                        "screw_completion_policy": (
+                            "assembled_once_then_gripper_release"
+                        ),
+                    }
+                )
+            insert_elapsed_s = 0.0
+            insert_timeout_reached = False
+            if before == "insert":
+                insert_elapsed_s, insert_timeout_reached = (
+                    self._insert_timeout_status(part2.name)
+                )
+                gripper_threshold = self._insert_gripper_threshold(part2)
+                state_inputs = self._with_gripper_width(
+                    state_inputs,
+                    min(
+                        float(state_inputs["gripper_width"].item()),
+                        gripper_threshold - 0.001,
+                    ),
+                )
+            else:
+                self._insert_started_time_ns.pop(part2.name, None)
             selected_place_geometry = None
             if before == "place":
                 live_geometry = self._multi_part_place_geometry(
@@ -1163,8 +1363,23 @@ class RealSkillAnnotator(SkillAnnotator):
                 guidance_pose_robot,
                 guidance_gripper_width,
             ) = self._update_operated_part(
-                part2, state_inputs, part1.name, assembled
+                part2, state_inputs, part1.name, assembled_for_transition
             )
+            timeout_transition = False
+            if before == "insert" and insert_timeout_reached:
+                timeout_inputs = self._with_gripper_width(
+                    state_inputs, gripper_threshold + 0.001
+                )
+                (
+                    skill_state,
+                    skill,
+                    guidance_point_robot,
+                    guidance_pose_robot,
+                    guidance_gripper_width,
+                ) = self._update_operated_part(
+                    part2, timeout_inputs, part1.name, assembled
+                )
+                timeout_transition = getattr(part2, "skill_state", None) == "screw"
             if before == "place" and part2.name == "round_table_leg":
                 real_geometry = selected_place_geometry
                 shared_state = skill_state
@@ -1234,9 +1449,33 @@ class RealSkillAnnotator(SkillAnnotator):
                         },
                     }
                 )
+            if (
+                before == "pick"
+                and part2.name == "round_table_base"
+                and skill_state in {"place", "insert"}
+                and not base_pick_distance_ok
+            ):
+                self._restore_part_skill(part2, snapshot)
+                skill_state = before
+                skill = part2.get_skill_label()
+                guidance_point_robot = part2.get_guidance_point()
+                guidance_pose_robot = part2.get_guidance_pose()
+                guidance_gripper_width = part2.get_guidance_gripper_width()
+                debug["base_pick_transition_blocked_by_ee_distance"] = True
+            release_transition = (
+                timeout_transition
+                or (
+                    before == "screw"
+                    and (
+                        self._current_gripper_event == "opened"
+                        or self._current_release_started_part_name == part2.name
+                    )
+                )
+            )
             transition_blocked = (
                 skill_state != before
                 and not self._transition_pose_reliable(part2.name)
+                and not release_transition
             )
             if (
                 part2.name == "lamp_hood"
@@ -1257,6 +1496,22 @@ class RealSkillAnnotator(SkillAnnotator):
             elif before == "pick" and skill_state == "place":
                 self._start_place_rigid_reference(part2, annotation_inputs)
                 debug["place_rigid_reference_frame"] = self._place_rigid_reference_frame
+            if getattr(part2, "skill_state", None) == "insert":
+                self._insert_started_time_ns.setdefault(
+                    part2.name, self._current_observation_time_ns
+                )
+            elif before == "insert":
+                self._insert_started_time_ns.pop(part2.name, None)
+            debug.update(
+                {
+                    "insert_to_screw_policy": "elapsed_observation_time",
+                    "insert_elapsed_s": insert_elapsed_s,
+                    "insert_timeout_s": self.insert_to_screw_timeout_s,
+                    "insert_timeout_reached": insert_timeout_reached,
+                    "insert_to_screw_timeout_transition": timeout_transition,
+                    "assembled_for_transition": assembled_for_transition,
+                }
+            )
             debug.update(
                 active_part=part2.name,
                 phase="assemble",
@@ -1264,11 +1519,16 @@ class RealSkillAnnotator(SkillAnnotator):
                 state_before=before,
                 state_after=skill_state,
             )
-            if skill_state == "done" and assembled:
+            if skill_state == "done" and assembled_for_transition:
+                self._screw_assembled_latched.discard(part2.name)
                 self.assemble_idx += 1
                 self._reset_next_pair(self.assemble_idx)
 
-        if part1_complete and part2.name == "round_table_leg" and skill == "place":
+        if (
+            part1_complete
+            and part2.name == "round_table_leg"
+            and skill in {"place", "insert"}
+        ):
             place_target = self._round_table_leg_place_target_details(
                 part2, part1.name, annotation_inputs
             )
@@ -1293,6 +1553,36 @@ class RealSkillAnnotator(SkillAnnotator):
                     .detach()
                     .cpu()
                     .tolist(),
+                    "leg_guidance_applies_to_skill": skill,
+                }
+            )
+
+        if (
+            part1_complete
+            and part2.name == "round_table_base"
+            and skill in {"place", "insert", "screw"}
+        ):
+            base_target = self._round_table_base_assembly_target_details(
+                part2, part1.name, annotation_inputs
+            )
+            guidance_point_robot = base_target["guidance_robot"]
+            if guidance_pose_robot is not None:
+                guidance_pose_robot = guidance_pose_robot.clone()
+                guidance_pose_robot[:3, 3] = guidance_point_robot
+            debug.update(
+                {
+                    "base_target_policy": "assembled_base_pose_center_from_leg",
+                    "base_target_assembled_pose_robot": base_target[
+                        "target_base_pose_robot"
+                    ]
+                    .detach()
+                    .cpu()
+                    .tolist(),
+                    "base_target_guidance_robot": guidance_point_robot
+                    .detach()
+                    .cpu()
+                    .tolist(),
+                    "base_guidance_applies_to_skill": skill,
                 }
             )
 
@@ -1416,8 +1706,13 @@ class RealSkillAnnotator(SkillAnnotator):
                 debug["push_target_tabletop_z_robot"] = push_tabletop_z
             released_after_push = (
                 skill_state == "push"
-                and not self._gripper_closed
-                and self._attached_part_name == part1.name
+                and (
+                    (
+                        not self._gripper_closed
+                        and self._attached_part_name == part1.name
+                    )
+                    or self._current_release_started_part_name == part1.name
+                )
             )
             if released_after_push:
                 part1.skill_state = "done"
@@ -1433,8 +1728,31 @@ class RealSkillAnnotator(SkillAnnotator):
             getattr(part1, "skill_state", None) == "done"
         )
         if part1_complete:
+            selected_socket = self._ensure_one_leg_selected_socket_target(
+                part2, part1.name, annotation_inputs
+            )
+            debug["fsm_target_socket_label"] = self._one_leg_selected_socket_label
+            debug["fsm_target_socket_local"] = (
+                selected_socket["socket_local"].detach().cpu().tolist()
+            )
             part_state_before_update = getattr(part2, "skill_state", None)
             state_annotation_inputs = annotation_inputs
+            insert_elapsed_s = 0.0
+            insert_timeout_reached = False
+            if part_state_before_update == "insert":
+                insert_elapsed_s, insert_timeout_reached = (
+                    self._insert_timeout_status(part2.name)
+                )
+                gripper_threshold = self._insert_gripper_threshold(part2)
+                state_annotation_inputs = self._with_gripper_width(
+                    state_annotation_inputs,
+                    min(
+                        float(state_annotation_inputs["gripper_width"].item()),
+                        gripper_threshold - 0.001,
+                    ),
+                )
+            else:
+                self._insert_started_time_ns.pop(part2.name, None)
             raw_place_geometry = None
             if part_state_before_update in {"place", "insert", "screw"}:
                 raw_place_geometry = self._place_geometry_debug(
@@ -1481,27 +1799,6 @@ class RealSkillAnnotator(SkillAnnotator):
                 # leg was dropped. Missing real contact forces must not
                 # reset the state before the width transition is checked.
                 state_annotation_inputs["part_contact_forces"][part2.name] = None
-            if (
-                part_state_before_update in {"insert", "screw"}
-                or self._current_gripper_event == "opened"
-            ):
-                gripper_threshold = float(
-                    furniture_bench_config["robot"]["max_gripper_width"][
-                        part2._gripper_width_key
-                    ]
-                    - 0.001
-                )
-                current_width = float(
-                    state_annotation_inputs["gripper_width"].item()
-                )
-                debug.update(
-                    {
-                        "insert_to_screw_gripper_width_m": current_width,
-                        "insert_to_screw_gripper_threshold_m": gripper_threshold,
-                        "insert_to_screw_gripper_ok": current_width
-                        >= gripper_threshold,
-                    }
-                )
             (
                 skill_state,
                 skill,
@@ -1511,6 +1808,21 @@ class RealSkillAnnotator(SkillAnnotator):
             ) = self._update_operated_part(
                 part2, state_annotation_inputs, part1.name, assembled
             )
+            timeout_transition = False
+            if part_state_before_update == "insert" and insert_timeout_reached:
+                timeout_inputs = self._with_gripper_width(
+                    state_annotation_inputs, gripper_threshold + 0.001
+                )
+                (
+                    skill_state,
+                    skill,
+                    guidance_point_robot,
+                    guidance_pose_robot,
+                    guidance_gripper_width,
+                ) = self._update_operated_part(
+                    part2, timeout_inputs, part1.name, assembled
+                )
+                timeout_transition = getattr(part2, "skill_state", None) == "screw"
             if (
                 part_state_before_update == "pick"
                 and getattr(part2, "skill_state", None) == "place"
@@ -1520,6 +1832,43 @@ class RealSkillAnnotator(SkillAnnotator):
                 debug["place_rigid_reference_frame"] = (
                     self._place_rigid_reference_frame
                 )
+                direct_geometry = self._place_geometry_debug(
+                    part2, annotation_inputs, part1.name
+                )
+                debug.update(
+                    {
+                        f"pick_direct_{key}": value
+                        for key, value in direct_geometry.items()
+                    }
+                )
+                if direct_geometry["place_geometry_ok"]:
+                    (
+                        skill_state,
+                        skill,
+                        guidance_point_robot,
+                        guidance_pose_robot,
+                        guidance_gripper_width,
+                    ) = self._update_operated_part(
+                        part2, annotation_inputs, part1.name, assembled
+                    )
+                    debug["pick_to_insert_direct"] = (
+                        getattr(part2, "skill_state", None) == "insert"
+                    )
+            if getattr(part2, "skill_state", None) == "insert":
+                self._insert_started_time_ns.setdefault(
+                    part2.name, self._current_observation_time_ns
+                )
+            elif part_state_before_update == "insert":
+                self._insert_started_time_ns.pop(part2.name, None)
+            debug.update(
+                {
+                    "insert_to_screw_policy": "elapsed_observation_time",
+                    "insert_elapsed_s": insert_elapsed_s,
+                    "insert_timeout_s": self.insert_to_screw_timeout_s,
+                    "insert_timeout_reached": insert_timeout_reached,
+                    "insert_to_screw_timeout_transition": timeout_transition,
+                }
+            )
             if (
                 part_state_before_update == "place"
                 and getattr(part2, "skill_state", None) == "insert"
@@ -1730,9 +2079,26 @@ class RealSkillAnnotator(SkillAnnotator):
         frame_idx: int,
     ) -> Dict[str, Any]:
         self._frame_idx = frame_idx
+        self._current_observation_time_ns = self._observation_time_ns(
+            observation, frame_idx
+        )
         self.stats.frame_count += 1
         ee_pose = _ee_pose_robot(observation)
         width = float(observation["robot_state"]["gripper_width"])
+        self._current_release_started_part_name = None
+        if self._attached_part_name is not None:
+            if self._attached_min_gripper_width_m is None:
+                self._attached_min_gripper_width_m = width
+            elif (
+                width - self._attached_min_gripper_width_m
+                >= self.release_motion_threshold_m
+            ):
+                self._current_release_started_part_name = self._attached_part_name
+                self._detach_part()
+            else:
+                self._attached_min_gripper_width_m = min(
+                    self._attached_min_gripper_width_m, width
+                )
         gripper_event = self._gripper_event(width)
         self._current_gripper_event = gripper_event
         active_part = self._active_part()
@@ -1746,6 +2112,8 @@ class RealSkillAnnotator(SkillAnnotator):
             attached_on_this_frame = self._attach_active_part(
                 active_part, ee_pose, effective_poses
             )
+            if attached_on_this_frame:
+                self._attached_min_gripper_width_m = width
 
         annotation_inputs = self._annotation_inputs(
             observation, ee_pose, effective_poses
@@ -1776,9 +2144,15 @@ class RealSkillAnnotator(SkillAnnotator):
                 "gripper_closed": self._gripper_closed,
                 "attached_on_this_frame": attached_on_this_frame,
                 "attached_part": self._attached_part_name,
+                "release_started_part": self._current_release_started_part_name,
+                "release_motion_threshold_m": self.release_motion_threshold_m,
                 "part_pose_sources": {
                     name: tracker.source
                     for name, tracker in self._tracked_parts.items()
+                },
+                "effective_part_poses_april": {
+                    name: np.asarray(pose, dtype=np.float32).tolist()
+                    for name, pose in effective_poses.items()
                 },
             }
         )
@@ -1895,7 +2269,9 @@ def _real_annotation_metadata(
             annotator.assemble_idx
             >= len(annotator.furniture.should_be_assembled)
         ),
-        "insert_transition_policy": "gripper_width >= max_gripper_width - 0.001",
+        "insert_transition_policy": (
+            f"elapsed observation time >= {annotator.insert_to_screw_timeout_s:g}s"
+        ),
         "sam2_override_enabled": pose_provider is not None,
         "stats": stats.as_dict(),
     }

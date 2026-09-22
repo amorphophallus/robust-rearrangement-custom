@@ -13,6 +13,8 @@ from src.eval.real_skill_annotation_util import (
     ANNOTATION_STATUS_KEY,
     DEFAULT_POSE_TRACKING_POLICY,
     LEG_TO_EE_LENGTH_FRACTION,
+    ONE_LEG_REAL_PLACE_ORIENTATION_THRESHOLD_RAD,
+    REAL_INSERT_TO_SCREW_TIMEOUT_S,
     RealSkillAnnotator,
     RealSkillAnnotationSession,
     _parse_args,
@@ -132,12 +134,14 @@ def _multi_task_observation(annotator, *, width=0.08, ee_pose=None):
         part_pose[:3, :3] = np.asarray(part.reset_ori[0], dtype=np.float32)[:3, :3]
         part_pose[:3, 3] = np.asarray(part.reset_pos[0], dtype=np.float32)[:3]
         poses.append(_matrix_to_pose_vector(part_pose))
+    if annotator.furniture_name == "one_leg":
+        poses.append(PART_POSES[-7:].copy())
     if ee_pose is None:
         ee_pose = annotator.april_to_robot @ _pose_vector_to_matrix(poses[0])
     return {
         "parts_poses": np.concatenate(poses),
-        "parts_founds": np.ones(len(poses), dtype=bool),
-        "parts_pose_valid": np.ones(len(poses), dtype=bool),
+        "parts_founds": np.ones(len(annotator.furniture.parts), dtype=bool),
+        "parts_pose_valid": np.ones(len(annotator.furniture.parts), dtype=bool),
         "camera_to_april": CAMERA_TO_APRIL.copy(),
         "robot_state": {
             "ee_pose": np.asarray(ee_pose, dtype=np.float32).copy(),
@@ -263,6 +267,7 @@ class RealSkillAnnotationUtilTest(unittest.TestCase):
 
     def test_round_table_and_lamp_insert_screw_and_pair_completion(self):
         for task, pair_idx, expected_next_idx in (
+            ("one_leg", 0, 1),
             ("round_table", 0, 1),
             ("round_table", 1, 2),
             ("lamp", 0, 1),
@@ -275,6 +280,7 @@ class RealSkillAnnotationUtilTest(unittest.TestCase):
                 self.assertEqual(placed["skill"], "place")
                 self.assertTrue(annotator._tracked_parts[part2.name].attached)
                 moved = _move_attached_part_to_target(annotator, grasp, part2)
+                moved["step_timestamp_ns"] = 1_000_000_000
                 inserted = annotator.annotate_observation(
                     moved, _camera_info(), frame_idx=3
                 )
@@ -285,17 +291,50 @@ class RealSkillAnnotationUtilTest(unittest.TestCase):
                 )
                 opened = copy.deepcopy(moved)
                 opened["robot_state"]["gripper_width"] = 0.08
-                screw = annotator.annotate_observation(
+                opened["step_timestamp_ns"] = 2_000_000_000
+                still_insert = annotator.annotate_observation(
                     opened, _camera_info(), frame_idx=4
                 )
+                self.assertEqual(still_insert["skill"], "insert")
+                self.assertFalse(
+                    still_insert["debug"]["insert_to_screw_timeout_transition"]
+                )
+                timed_out = copy.deepcopy(opened)
+                timed_out["robot_state"]["gripper_width"] = 0.01
+                timed_out["step_timestamp_ns"] = int(
+                    (1.0 + REAL_INSERT_TO_SCREW_TIMEOUT_S) * 1e9
+                )
+                screw = annotator.annotate_observation(
+                    timed_out, _camera_info(), frame_idx=5
+                )
                 self.assertEqual(screw["skill"], "screw")
+                self.assertTrue(
+                    screw["debug"]["insert_to_screw_timeout_transition"]
+                )
                 self.assertEqual(annotator.assemble_idx, pair_idx)
                 detected = _detect_assembled_part(
-                    annotator, opened, part1, part2
+                    annotator, timed_out, part1, part2
                 )
-                annotator.annotate_observation(
-                    detected, _camera_info(), frame_idx=5
+                completed = annotator.annotate_observation(
+                    detected, _camera_info(), frame_idx=6
                 )
+                if task == "round_table" and pair_idx == 0:
+                    self.assertEqual(annotator.assemble_idx, pair_idx)
+                    self.assertEqual(completed["skill"], "screw")
+                    self.assertTrue(
+                        completed["debug"]["screw_assembled_latched"]
+                    )
+                    self.assertFalse(
+                        completed["debug"]["screw_release_ready"]
+                    )
+                    released = copy.deepcopy(detected)
+                    released["robot_state"]["gripper_width"] = 0.08
+                    completed = annotator.annotate_observation(
+                        released, _camera_info(), frame_idx=7
+                    )
+                    self.assertTrue(
+                        completed["debug"]["screw_release_ready"]
+                    )
                 self.assertEqual(annotator.assemble_idx, expected_next_idx)
 
     def test_round_table_aligned_part_can_go_directly_from_pick_to_insert(self):
@@ -323,6 +362,81 @@ class RealSkillAnnotationUtilTest(unittest.TestCase):
                 )
                 self.assertEqual(bundle["skill"], "insert")
                 self.assertEqual(part2.skill_state, "insert")
+
+    def test_one_leg_uses_selected_guidance_socket_for_fsm_target(self):
+        annotator = RealSkillAnnotator("one_leg")
+        table_idx, leg_idx = annotator.furniture.should_be_assembled[0]
+        table = annotator.furniture.parts[table_idx]
+        leg = annotator.furniture.parts[leg_idx]
+        table.pre_assemble_done = True
+        initial = _observation()
+        annotator.annotate_observation(initial, _camera_info(), frame_idx=0)
+        grasp = _observation(gripper_width=0.01)
+        annotator.annotate_observation(grasp, _camera_info(), frame_idx=1)
+        placed = annotator.annotate_observation(
+            grasp, _camera_info(), frame_idx=2
+        )
+
+        selected = np.asarray(placed["debug"]["place_target_socket_local"])
+        self.assertEqual(
+            placed["debug"]["fsm_target_socket_label"],
+            placed["debug"]["place_target_socket_label"],
+        )
+        self.assertAlmostEqual(float(leg.default_assembled_pose[0, 3]), selected[0])
+        self.assertAlmostEqual(float(leg.default_assembled_pose[2, 3]), selected[2])
+
+    def test_one_leg_real_orientation_threshold_does_not_change_sim(self):
+        real = RealSkillAnnotator("one_leg")
+        _, real_leg_idx = real.furniture.should_be_assembled[0]
+        real_leg = real.furniture.parts[real_leg_idx]
+        sim = SkillAnnotator("one_leg")
+        _, sim_leg_idx = sim.furniture.should_be_assembled[0]
+        sim_leg = sim.furniture.parts[sim_leg_idx]
+
+        self.assertAlmostEqual(
+            real_leg.skill_place_part_ori_threshold,
+            ONE_LEG_REAL_PLACE_ORIENTATION_THRESHOLD_RAD,
+        )
+        self.assertAlmostEqual(sim_leg.skill_place_part_ori_threshold, 0.15)
+        real.reset()
+        _, reset_leg_idx = real.furniture.should_be_assembled[0]
+        self.assertAlmostEqual(
+            real.furniture.parts[reset_leg_idx].skill_place_part_ori_threshold,
+            ONE_LEG_REAL_PLACE_ORIENTATION_THRESHOLD_RAD,
+        )
+
+    def test_one_leg_aligned_part_can_go_directly_from_pick_to_insert(self):
+        annotator = RealSkillAnnotator("one_leg")
+        table_idx, leg_idx = annotator.furniture.should_be_assembled[0]
+        table = annotator.furniture.parts[table_idx]
+        leg = annotator.furniture.parts[leg_idx]
+        table.pre_assemble_done = True
+        observation = _observation()
+        annotator.annotate_observation(observation, _camera_info(), frame_idx=0)
+
+        table_pose_april = _pose_vector_to_matrix(
+            observation["parts_poses"][table_idx * 7 : (table_idx + 1) * 7]
+        )
+        target_leg_pose_april = table_pose_april @ np.asarray(
+            leg.default_assembled_pose, dtype=np.float32
+        )
+        aligned = copy.deepcopy(observation)
+        aligned["parts_poses"][leg_idx * 7 : (leg_idx + 1) * 7] = (
+            _matrix_to_pose_vector(target_leg_pose_april)
+        )
+        aligned["parts_founds"][leg_idx] = True
+        aligned["robot_state"]["ee_pose"] = (
+            annotator.april_to_robot @ target_leg_pose_april
+        )
+        aligned["robot_state"]["gripper_width"] = 0.01
+        annotator.annotate_observation(aligned, _camera_info(), frame_idx=1)
+        bundle = annotator.annotate_observation(
+            aligned, _camera_info(), frame_idx=2
+        )
+
+        self.assertEqual(bundle["skill"], "insert")
+        self.assertEqual(leg.skill_state, "insert")
+        self.assertTrue(bundle["debug"]["pick_to_insert_direct"])
 
     def test_round_table_leg_real_place_uses_top_local_xy_and_z(self):
         annotator = RealSkillAnnotator("round_table")
@@ -387,14 +501,122 @@ class RealSkillAnnotationUtilTest(unittest.TestCase):
         self.assertAlmostEqual(
             inserted["debug"]["real_place_axial_error_m"], 0.010, places=5
         )
-
-        yaw = torch.tensor(
-            [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+        np.testing.assert_allclose(
+            inserted["guidance_point"], placed["guidance_point"], atol=1e-6
         )
-        ignored_yaw_error = annotator._rotation_error_ignoring_local_axis(
-            yaw, torch.eye(3), ignored_axis=2
+        np.testing.assert_allclose(
+            inserted["guidance_pose"][:3, 3],
+            placed["guidance_pose"][:3, 3],
+            atol=1e-6,
+        )
+        self.assertEqual(
+            inserted["debug"]["leg_guidance_applies_to_skill"], "insert"
+        )
+
+        target_rotation = torch.as_tensor(
+            leg.default_assembled_pose[:3, :3], dtype=torch.float32
+        )
+        tabletop_z_rotation = torch.tensor(
+            [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            dtype=torch.float32,
+        )
+        ignored_yaw_error = annotator._rotation_error_ignoring_parent_axis(
+            tabletop_z_rotation @ target_rotation,
+            target_rotation,
+            ignored_axis=2,
         )
         self.assertAlmostEqual(float(ignored_yaw_error), 0.0, places=6)
+
+    def test_round_table_base_pick_requires_ee_near_base(self):
+        annotator = RealSkillAnnotator("round_table")
+        annotator.assemble_idx = 1
+        leg_idx, base_idx = annotator.furniture.should_be_assembled[1]
+        leg = annotator.furniture.parts[leg_idx]
+        base = annotator.furniture.parts[base_idx]
+        leg.pre_assemble_done = True
+
+        observation = _multi_task_observation(annotator)
+        base_pose_april = _pose_vector_to_matrix(
+            observation["parts_poses"][base_idx * 7 : (base_idx + 1) * 7]
+        )
+        base_pose_robot = annotator.april_to_robot @ base_pose_april
+        far_ee_pose = base_pose_robot.copy()
+        far_ee_pose[0, 3] += 0.15
+        observation["robot_state"]["ee_pose"] = far_ee_pose
+        annotator.annotate_observation(
+            observation, _camera_info(), frame_idx=0
+        )
+
+        closed_far = copy.deepcopy(observation)
+        closed_far["robot_state"]["gripper_width"] = 0.01
+        annotator.annotate_observation(
+            closed_far, _camera_info(), frame_idx=1
+        )
+        blocked = annotator.annotate_observation(
+            closed_far, _camera_info(), frame_idx=2
+        )
+        self.assertEqual(blocked["skill"], "pick")
+        self.assertEqual(base.skill_state, "pick")
+        self.assertFalse(blocked["debug"]["base_pick_ee_distance_ok"])
+        self.assertTrue(
+            blocked["debug"]["base_pick_transition_blocked_by_ee_distance"]
+        )
+
+        opened_near = copy.deepcopy(observation)
+        opened_near["robot_state"]["ee_pose"] = base_pose_robot
+        annotator.annotate_observation(
+            opened_near, _camera_info(), frame_idx=3
+        )
+        closed_near = copy.deepcopy(opened_near)
+        closed_near["robot_state"]["gripper_width"] = 0.01
+        annotator.annotate_observation(
+            closed_near, _camera_info(), frame_idx=4
+        )
+        allowed = annotator.annotate_observation(
+            closed_near, _camera_info(), frame_idx=5
+        )
+        self.assertTrue(allowed["debug"]["base_pick_ee_distance_ok"])
+        self.assertEqual(allowed["skill"], "place")
+        self.assertEqual(base.skill_state, "place")
+
+        leg_pose_april = _pose_vector_to_matrix(
+            closed_near["parts_poses"][leg_idx * 7 : (leg_idx + 1) * 7]
+        )
+        target_base_pose_robot = (
+            annotator.april_to_robot
+            @ leg_pose_april
+            @ np.asarray(base.default_assembled_pose, dtype=np.float32)
+        )
+        expected_target_point = target_base_pose_robot[:3, 3]
+        np.testing.assert_allclose(
+            allowed["guidance_point"], expected_target_point, atol=1e-6
+        )
+        self.assertEqual(
+            allowed["debug"]["base_target_policy"],
+            "assembled_base_pose_center_from_leg",
+        )
+
+        base.skill_state = "insert"
+        inserted = annotator.annotate_observation(
+            closed_near, _camera_info(), frame_idx=6
+        )
+        self.assertEqual(inserted["skill"], "insert")
+        np.testing.assert_allclose(
+            inserted["guidance_point"], expected_target_point, atol=1e-6
+        )
+
+        base.skill_state = "screw"
+        screw = annotator.annotate_observation(
+            closed_near, _camera_info(), frame_idx=7
+        )
+        self.assertEqual(screw["skill"], "screw")
+        np.testing.assert_allclose(
+            screw["guidance_point"], expected_target_point, atol=1e-6
+        )
+        self.assertEqual(
+            screw["debug"]["base_target_policy"],
+            "assembled_base_pose_center_from_leg",
+        )
 
     def test_unseated_release_returns_from_place_to_pick(self):
         for task, pair_idx, confirmation_frames in (
@@ -655,6 +877,50 @@ class RealSkillAnnotationUtilTest(unittest.TestCase):
             third["debug"]["part_pose_sources"]["square_table_top"],
             "ee_propagated",
         )
+        effective = np.asarray(
+            third["debug"]["effective_part_poses_april"]["square_table_top"]
+        )
+        displacement = np.linalg.norm(effective[:3] - PART_POSES[:3])
+        self.assertAlmostEqual(float(displacement), 0.02, places=5)
+
+    def test_release_motion_detaches_before_pose_propagation(self):
+        annotator = RealSkillAnnotator("one_leg")
+        annotator.annotate_observation(
+            _observation(), _camera_info(), frame_idx=0
+        )
+        annotator.annotate_observation(
+            _observation(gripper_width=0.01, table_found=False),
+            _camera_info(),
+            frame_idx=1,
+        )
+        attached = annotator.annotate_observation(
+            _observation(
+                gripper_width=0.01, table_found=False, ee_x=0.4777
+            ),
+            _camera_info(),
+            frame_idx=2,
+        )
+        released = annotator.annotate_observation(
+            _observation(
+                gripper_width=0.03, table_found=False, ee_x=0.4977
+            ),
+            _camera_info(),
+            frame_idx=3,
+        )
+
+        attached_pose = np.asarray(
+            attached["debug"]["effective_part_poses_april"]["square_table_top"]
+        )
+        released_pose = np.asarray(
+            released["debug"]["effective_part_poses_april"]["square_table_top"]
+        )
+        np.testing.assert_allclose(released_pose, attached_pose, atol=1e-6)
+        self.assertEqual(released["debug"]["release_started_part"], "square_table_top")
+        self.assertEqual(
+            released["debug"]["part_pose_sources"]["square_table_top"],
+            "held_last",
+        )
+        self.assertIsNone(released["debug"]["attached_part"])
 
     def test_real_push_guidance_uses_tracked_tabletop_height(self):
         annotator = RealSkillAnnotator("one_leg")

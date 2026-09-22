@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -20,6 +21,16 @@ _MUTED = (165, 165, 165)
 _ACCENT = (80, 210, 255)
 VIDEO_FRAME_WIDTH = 1280
 VIDEO_FRAME_HEIGHT = 960
+_TABLETOP_PART_INDEX = 0
+_TABLETOP_MESH_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "assets"
+    / "furniture"
+    / "mesh"
+    / "square_table"
+    / "square_table_top.obj"
+)
+_TABLETOP_AXIS_LENGTH_M = 0.08
 
 
 def _to_numpy(value: Any) -> np.ndarray:
@@ -107,6 +118,194 @@ def _depth_to_bgr(depth: Any) -> tuple[np.ndarray, str]:
     return colored, stats
 
 
+@lru_cache(maxsize=1)
+def _tabletop_mesh_vertices() -> np.ndarray:
+    vertices = []
+    with _TABLETOP_MESH_PATH.open("r", encoding="utf-8", errors="ignore") as file:
+        for line in file:
+            if line.startswith("v "):
+                values = line.split()
+                vertices.append(
+                    [float(values[1]), float(values[2]), float(values[3])]
+                )
+    if not vertices:
+        raise ValueError(f"No CAD vertices found in {_TABLETOP_MESH_PATH}")
+    return np.asarray(vertices, dtype=np.float64)
+
+
+def _pose_vector_to_matrix(pose: Any) -> np.ndarray:
+    vector = np.asarray(pose, dtype=np.float64).reshape(-1)
+    if vector.shape != (7,) or not np.isfinite(vector).all():
+        raise ValueError(f"Expected finite xyz+xyzw pose, got {vector.shape}")
+    x, y, z, w = vector[3:]
+    norm = float(np.linalg.norm([x, y, z, w]))
+    if norm < 1e-9:
+        raise ValueError("Pose quaternion has zero norm")
+    x, y, z, w = np.asarray([x, y, z, w]) / norm
+    rotation = np.asarray(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ],
+        dtype=np.float64,
+    )
+    matrix = np.eye(4, dtype=np.float64)
+    matrix[:3, :3] = rotation
+    matrix[:3, 3] = vector[:3]
+    return matrix
+
+
+def _front_projection(
+    points_local: np.ndarray,
+    observation: Mapping[str, Any],
+    camera_info: Mapping[str, Any],
+    image_shape: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    debug = observation.get("real_annotation_debug") or {}
+    effective_poses = debug.get("effective_part_poses_april") or {}
+    if "square_table_top" in effective_poses:
+        tabletop_pose = effective_poses["square_table_top"]
+    else:
+        parts_poses = np.asarray(
+            observation.get("parts_poses"), dtype=np.float64
+        ).reshape(-1, 7)
+        if parts_poses.shape[0] <= _TABLETOP_PART_INDEX:
+            raise ValueError("Observation has no tabletop pose")
+        tabletop_pose = parts_poses[_TABLETOP_PART_INDEX]
+    tabletop_pose_april = _pose_vector_to_matrix(tabletop_pose)
+    camera_to_april = np.asarray(
+        observation.get("camera_to_april"), dtype=np.float64
+    )
+    if camera_to_april.shape != (4, 4):
+        raise ValueError("Observation camera_to_april must have shape (4, 4)")
+
+    front = camera_info.get("front")
+    if not isinstance(front, Mapping):
+        raise ValueError("Camera metadata has no front camera")
+    values = front.get("record_intrinsics", front.get("intrinsics"))
+    if not isinstance(values, Mapping):
+        raise ValueError("Front camera metadata has no intrinsics")
+    intrinsics = np.asarray(
+        [
+            [values["fx"], 0.0, values.get("ppx", values.get("cx"))],
+            [0.0, values["fy"], values.get("ppy", values.get("cy"))],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    record_width = float(values["width"])
+    record_height = float(values["height"])
+
+    points_h = np.concatenate(
+        [points_local, np.ones((points_local.shape[0], 1), dtype=np.float64)],
+        axis=1,
+    )
+    points_camera = (
+        np.linalg.inv(camera_to_april) @ tabletop_pose_april @ points_h.T
+    ).T[:, :3]
+    visible = np.isfinite(points_camera).all(axis=1) & (points_camera[:, 2] > 1e-4)
+    projected = np.full((points_local.shape[0], 2), np.nan, dtype=np.float64)
+    if np.any(visible):
+        pixels_h = (intrinsics @ points_camera[visible].T).T
+        pixels = pixels_h[:, :2] / pixels_h[:, 2:3]
+        height, width = image_shape
+        pixels[:, 0] *= width / record_width
+        pixels[:, 1] *= height / record_height
+        projected[visible] = pixels
+    return projected, visible
+
+
+def _draw_tabletop_cad_overlay(
+    image: np.ndarray,
+    observation: Mapping[str, Any],
+    camera_info: Optional[Mapping[str, Any]],
+) -> np.ndarray:
+    """Draw the tabletop pose used by the FSM without mutating policy input."""
+
+    output = image.copy()
+    if camera_info is None:
+        return output
+    try:
+        mesh_pixels, visible = _front_projection(
+            _tabletop_mesh_vertices(),
+            observation,
+            camera_info,
+            output.shape[:2],
+        )
+        finite_pixels = mesh_pixels[visible]
+        if finite_pixels.shape[0] < 3:
+            return output
+        hull = cv2.convexHull(
+            np.round(finite_pixels).astype(np.int32).reshape(-1, 1, 2)
+        )
+        debug = observation.get("real_annotation_debug") or {}
+        source = (debug.get("part_pose_sources") or {}).get(
+            "square_table_top", "unknown"
+        )
+        color = (
+            (80, 220, 80)
+            if source in {"detected", "relocalized_detection"}
+            else (0, 180, 255)
+        )
+        cv2.polylines(output, [hull], True, color, 2, cv2.LINE_AA)
+
+        axes_local = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [_TABLETOP_AXIS_LENGTH_M, 0.0, 0.0],
+                [0.0, _TABLETOP_AXIS_LENGTH_M, 0.0],
+                [0.0, 0.0, _TABLETOP_AXIS_LENGTH_M],
+            ],
+            dtype=np.float64,
+        )
+        axes_pixels, axes_visible = _front_projection(
+            axes_local, observation, camera_info, output.shape[:2]
+        )
+        if np.all(axes_visible):
+            origin = tuple(np.round(axes_pixels[0]).astype(int))
+            for label, endpoint, axis_color in zip(
+                ("X", "Y", "Z"),
+                axes_pixels[1:],
+                ((0, 0, 255), (0, 255, 0), (255, 0, 0)),
+            ):
+                end = tuple(np.round(endpoint).astype(int))
+                cv2.arrowedLine(
+                    output,
+                    origin,
+                    end,
+                    axis_color,
+                    2,
+                    cv2.LINE_AA,
+                    tipLength=0.15,
+                )
+                cv2.putText(
+                    output,
+                    label,
+                    end,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.42,
+                    axis_color,
+                    1,
+                    cv2.LINE_AA,
+                )
+        text_anchor = tuple(np.min(hull[:, 0, :], axis=0).astype(int))
+        text_y = max(16, int(text_anchor[1]) - 7)
+        cv2.putText(
+            output,
+            f"tabletop CAD: {source}",
+            (max(2, int(text_anchor[0])), text_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
+    except (KeyError, TypeError, ValueError, np.linalg.LinAlgError):
+        return output
+    return output
+
+
 def _policy_camera_arrays(
     policy_inputs: Mapping[str, Any], camera: str
 ) -> tuple[np.ndarray, Optional[np.ndarray]]:
@@ -178,14 +377,18 @@ def _draw_image_panel(
     canvas[y + 32 : y + height - 30, x + 10 : x + width - 10] = image_area
 
 
-def render_rgbd_video_frame(observation: Mapping[str, Any]) -> np.ndarray:
-    """Render front/wrist RGB-D query inputs as one 2x2 BGR frame."""
+def render_rgbd_video_frame(policy_inputs: Mapping[str, Any]) -> np.ndarray:
+    """Render the exact post-transform front/wrist RGB-D encoder inputs."""
 
+    front_rgb, front_depth = _policy_camera_arrays(policy_inputs, "front")
+    wrist_rgb, wrist_depth = _policy_camera_arrays(policy_inputs, "wrist")
+    if front_depth is None or wrist_depth is None:
+        raise ValueError("RGB-D video requires four-channel policy inputs")
     sources = (
-        ("FRONT RGB", _rgb_to_bgr(observation["color_image2"])),
-        ("WRIST RGB", _rgb_to_bgr(observation["color_image1"])),
-        ("FRONT DEPTH", _depth_to_bgr(observation["depth_image2"])[0]),
-        ("WRIST DEPTH", _depth_to_bgr(observation["depth_image1"])[0]),
+        ("FRONT RGB - FINAL POLICY INPUT", _rgb_to_bgr(front_rgb)),
+        ("WRIST RGB - FINAL POLICY INPUT", _rgb_to_bgr(wrist_rgb)),
+        ("FRONT DEPTH - FINAL POLICY INPUT", _depth_to_bgr(front_depth)[0]),
+        ("WRIST DEPTH - FINAL POLICY INPUT", _depth_to_bgr(wrist_depth)[0]),
     )
     tile_width = VIDEO_FRAME_WIDTH // 2
     tile_height = VIDEO_FRAME_HEIGHT // 2
@@ -256,18 +459,15 @@ class EvalInputVideoRecorder:
         self._thread.start()
         return self.path
 
-    def submit(self, observation: Mapping[str, Any]) -> bool:
+    def submit(self, policy_inputs: Mapping[str, Any]) -> bool:
         if not self.active or self.error is not None:
             return False
-        frame_inputs = {
-            key: np.asarray(observation[key]).copy()
-            for key in (
-                "color_image1",
-                "color_image2",
-                "depth_image1",
-                "depth_image2",
-            )
-        }
+        frame_inputs = {}
+        for camera in ("front", "wrist"):
+            if camera not in policy_inputs:
+                self.error = f"missing captured {camera} policy input"
+                return False
+            frame_inputs[camera] = _to_numpy(policy_inputs[camera]).copy()
         self._queue.put(frame_inputs)
         return True
 
@@ -421,6 +621,7 @@ def render_input_dashboard(
     immutable_coverage_ms: float = 0.0,
     occupied_preserved: int = 0,
     warmstart_mapped_count: int = 0,
+    camera_info: Optional[Mapping[str, Any]] = None,
 ) -> np.ndarray:
     """Render one query using the exact post-transform encoder inputs."""
 
@@ -475,7 +676,9 @@ def render_input_dashboard(
         policy_inputs, "wrist"
     )
     wrist_size = f"{wrist_rgb_array.shape[1]}x{wrist_rgb_array.shape[0]}"
-    front_rgb = _rgb_to_bgr(front_rgb_array)
+    front_rgb = _draw_tabletop_cad_overlay(
+        _rgb_to_bgr(front_rgb_array), observation, camera_info
+    )
     wrist_rgb = _rgb_to_bgr(wrist_rgb_array)
     if front_depth_array is None or wrist_depth_array is None:
         raise ValueError("RGB-D dashboard requires four-channel policy inputs")
@@ -578,15 +781,18 @@ class EvalInputDashboard:
         enabled: bool,
         checkpoint: Optional[Path] = None,
         actor: Any = None,
+        capture_policy_inputs: bool = False,
     ):
         self.enabled = bool(enabled)
+        self.capture_policy_inputs = bool(enabled or capture_policy_inputs)
         self.checkpoint = checkpoint
         self.window_name = "RR real eval query inputs"
+        self.camera_info: Optional[Mapping[str, Any]] = None
         self._policy_inputs: dict[str, Any] = {}
         self._hooks = []
-        if self.enabled:
+        if self.capture_policy_inputs:
             if actor is None:
-                raise ValueError("enabled policy dashboard requires actor")
+                raise ValueError("policy input capture requires actor")
             self._hooks = [
                 actor.camera1_transform.register_forward_hook(
                     self._capture_policy_input("wrist")
@@ -595,6 +801,14 @@ class EvalInputDashboard:
                     self._capture_policy_input("front")
                 ),
             ]
+
+    def policy_inputs_snapshot(self) -> dict[str, Any]:
+        """Copy the most recent exact transform outputs after inference."""
+
+        return {
+            camera: value.detach().cpu().clone()
+            for camera, value in self._policy_inputs.items()
+        }
 
     def _capture_policy_input(self, camera: str):
         def capture(_module, _inputs, output):
@@ -610,6 +824,9 @@ class EvalInputDashboard:
             hook.remove()
         self._hooks.clear()
 
+    def set_camera_info(self, camera_info: Mapping[str, Any]) -> None:
+        self.camera_info = camera_info
+
     def show(self, observation: Mapping[str, Any], **query: Any) -> Optional[str]:
         if not self.enabled:
             return None
@@ -618,6 +835,7 @@ class EvalInputDashboard:
                 observation,
                 policy_inputs=self._policy_inputs,
                 checkpoint=self.checkpoint,
+                camera_info=self.camera_info,
                 **query,
             )
             cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
