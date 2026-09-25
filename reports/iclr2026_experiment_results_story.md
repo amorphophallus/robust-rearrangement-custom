@@ -20,7 +20,7 @@ Long-horizon furniture assembly requires robots to switch across tasks and stage
 
 ### 2.1 多任务 condition 主实验（Main multi-seed）
 
-详细数据来源、checkpoint 对应关系、逐 seed 成功数、评估输入契约和排除规则见 [main experiment review](./main_3seed_experiment_review_0913.md)。
+详细数据来源、checkpoint 对应关系、逐 seed 成功数、评估输入契约和排除规则见 [main experiment review](./main_3seed_experiment_review_0913.md)；主表 24 个注册输入及每项对应的 log JSON 路径见 [`main_experiment_registered_20260925.csv`](./data/main_experiment_registered_20260925.csv)。
 
 设置：DiT policy 在 FurnitureBench 的 `one_leg`、`round_table`、`lamp` 三个任务上训练；每个 checkpoint/task 评估 36 rollout。Overall 先在每个训练 seed 内对 108 个 rollout 汇总，再在同一 condition 的训练 seed 间计算 mean ± sample standard deviation。原始 RGB/RGB-D checkpoint 因错误 lineage 被排除，新第三 seed 已按 aligned `center-crop-224`、positive-meters depth 与 reward-only success 口径补入；现在所有行均登记三个 train seed。RGB/RGB-D 的三个 train seed 均使用 eval seed 0/1 逐 task conservative min。
 
@@ -28,8 +28,8 @@ Long-horizon furniture assembly requires robots to switch across tasks and stage
 
 | Condition | n_train | one_leg | round_table | lamp | Overall |
 |---|---:|---:|---:|---:|---:|
-| RGB-D + GP | 3 | 82.41 ± 4.24% | 41.67 ± 12.11% | 33.33 ± 7.35% | 52.47 ± 4.66% |
-| RGB-D + colored GP | 3 | 87.04 ± 4.24% | 50.00 ± 22.22% | 35.19 ± 3.21% | 57.41 ± 5.78% |
+| RGB-D + GP | 3 | 85.19 ± 6.99% | 52.78 ± 15.47% | 33.33 ± 7.35% | 57.10 ± 5.10% |
+| RGB-D + colored GP | 3 | 83.33 ± 2.78% | 58.33 ± 12.11% | 34.26 ± 1.60% | 58.64 ± 4.57% |
 | RGB-D + GP + skill | 3 | **88.89 ± 4.81%** | **56.48 ± 11.23%** | **44.44 ± 10.02%** | **63.27 ± 4.18%** |
 | RGB-D + skill | 3 | 77.78 ± 2.78% | 49.07 ± 1.60% | 34.26 ± 1.60% | 53.70 ± 1.60% |
 | RGB-D | 3 | 82.41 ± 1.60% | 49.07 ± 1.60% | 25.93 ± 5.78% | 52.47 ± 1.93% |
@@ -43,9 +43,9 @@ Long-horizon furniture assembly requires robots to switch across tasks and stage
 
 **Experimental setting.** We evaluate DiT policies on one-leg, round-table and lamp with 36 rollouts per checkpoint and task. All registered conditions use three training runs. The original RGB and RGB-D checkpoints are excluded because they belong to an erroneous data/checkpoint lineage; their three valid replacement runs use the per-task minimum over evaluation seeds 0 and 1.
 
-**Results.** In the controlled two-run lineage, RGB-D reaches `51.39±0.65%` overall success. Skill-only reaches `54.17±1.96%`, coloured GP reaches `59.72±5.89%`, and GP+skill reaches `63.43±5.89%`. The average gain of these three semantic conditions is `+2.78 pp` on one-leg, `+8.33 pp` on round-table and `+12.04 pp` on lamp. In the broader registered table, GP+skill has the highest point estimate (`63.27±4.18%`) and coloured GP the second highest (`57.41±5.78%`), with unequal `n_train` and mixed lineages limiting strict ranking claims.
+**Results.** In the controlled two-run lineage, RGB-D reaches `51.39±0.65%` overall success. Skill-only reaches `54.17±1.96%`, coloured GP reaches `59.72±5.89%`, and GP+skill reaches `63.43±5.89%`. The average gain of these three semantic conditions is `+2.78 pp` on one-leg, `+8.33 pp` on round-table and `+12.04 pp` on lamp. In the broader registered table, GP+skill has the highest point estimate (`63.27±4.18%`) and coloured GP the second (`58.64±4.57%`); the latter includes a user-requested max selection over two formal round_table trials, so mixed lineages and registration rules limit strict ranking claims.
 
-Holding GP fixed, adding skill improves one-leg, round-table and lamp by `+6.48`, `+14.81` and `+11.11 pp`. Holding skill fixed, adding GP improves the same tasks by `+11.11`, `+7.41` and `+10.18 pp`. Coloured GP improves over GP by `+4.63`, `+8.33` and `+1.86 pp`. These ablations support complementary spatial and semantic information; GP+skill is an information-rich reference, while coloured GP is the scalable visual interface.
+The controlled lineage remains the appropriate ablation for spatial and semantic information. In the broader registered table, GP+skill minus GP is `+3.70`, `+3.70` and `+11.11 pp`, while coloured GP minus GP is mixed (`−1.86`, `+5.55`, `+0.93 pp`) and includes the max-selected retry. GP+skill is an information-rich reference, while coloured GP is the scalable visual interface; the broad-table differences are not causal estimates.
 
 **Interpretation and boundary.** The evidence supports combining a spatial target with semantic context, with the largest same-lineage gain on lamp. It does not support a claim that RGB or RGB-D collapses to a single task, because the checkpoint that motivated that interpretation has been removed. Grasp rotation does not provide a clear additional gain and remains a round-table-specific failure mode. Clean endpoint success cannot establish causal condition use; paired interventions and stage-level analysis remain necessary.
 
@@ -249,11 +249,11 @@ Screw 是非均匀收益的反例：GP 的 pooled Screw 为 `78.29% (238/304)`�
 
 | Condition | AutoMate ID SR（99 train tasks） | AutoMate OOD SR（`00755`） | FB overall（joint formal） | FB Δ vs main |
 | --- | ---: | ---: | ---: | ---: |
-| RGB | 739/1188 = 62.2% | 3/12 = 25.0% | 50/108 = 46.3% | −3.40 pp |
-| RGB-D | 761/1188 = 64.1% | 9/12 = 75.0% | **67/108 = 62.0%** | **+7.72 pp** |
+| RGB | 739/1188 = 62.2% | 3/12 = 25.0% | 50/108 = 46.3% | −1.85 pp |
+| RGB-D | 761/1188 = 64.1% | 9/12 = 75.0% | **67/108 = 62.0%** | **+9.57 pp** |
 | RGB-D+skill | 750/1188 = 63.1% | 8/12 = 66.7% | 65/108 = 60.2% | +6.48 pp |
-| RGB-D+GP | 754/1188 = 63.5% | **10/12 = 83.3%** | 50/108 = 46.3% | −6.17 pp |
-| RGB-D+TAGPoint | **773/1188 = 65.1%** | **10/12 = 83.3%** | 58/108 = 53.7% | −3.70 pp |
+| RGB-D+GP | 754/1188 = 63.5% | **10/12 = 83.3%** | 50/108 = 46.3% | −10.80 pp |
+| RGB-D+TAGPoint | **773/1188 = 65.1%** | **10/12 = 83.3%** | 58/108 = 53.7% | −4.94 pp |
 | RGB-D+GP+skill | 703/1188 = 59.2% | 8/12 = 66.7% | 57/108 = 52.8% | −10.49 pp |
 | RGB-D+grasp | 748/1188 = 63.0% | 9/12 = 75.0% | 47/108 = 43.5% | −2.78 pp |
 | RGB-D+colored grasp | 755/1188 = 63.6% | 8/12 = 66.7% | 44/108 = 40.7% | −6.79 pp |
@@ -262,7 +262,7 @@ Screw 是非均匀收益的反例：GP 的 pooled Screw 为 `78.29% (238/304)`�
 
 联合策略在 99 个 AutoMate 训练 assembly 上达到 `59.2–65.1%`，表明同一个视觉行为克隆策略在约百任务规模仍保留广泛的 assembly 能力；TAGPoint 的 ID 成功率最高，为 `65.1%`。在单个 held-out `00755` 上，GP 与 TAGPoint 均达到 `83.3%`，但这一 OOD 观察目前只有一个任务、每个 condition 12 条 rollout，不能外推为稳定的跨几何泛化排名。
 
-联合训练对 FurnitureBench 的影响具有明显的 condition dependence：RGB-D 与 skill 分别相对 main experiment 提高 `+7.72` 与 `+6.48 pp`，其余六种接口下降 `2.78–10.49 pp`，八种 condition 的平均变化为 `−2.39 pp`。因此，大规模 AutoMate 数据没有一致提升所有 FurnitureBench condition，也没有使原有长时程任务能力整体失效。更准确的结论是：joint policy 获得了 99-task AutoMate 能力，同时以较小的平均损失保留 FurnitureBench 能力，但不同接口受到的正迁移或干扰不同。由于当前 AutoMate annotation 只有 Insert，该实验验证的是 assembly identity 与任务家族的规模扩展，而不是五种 skill 的跨环境迁移。
+联合训练对 FurnitureBench 的影响具有明显的 condition dependence：RGB-D 与 skill 分别相对 main experiment 提高 `+9.57` 与 `+6.48 pp`，其余六种接口下降 `1.85–10.80 pp`，八种 condition 的平均变化为 `−2.70 pp`。因此，大规模 AutoMate 数据没有一致提升所有 FurnitureBench condition，也没有使原有长时程任务能力整体失效。更准确的结论是：joint policy 获得了 99-task AutoMate 能力，同时以较小的平均损失保留 FurnitureBench 能力，但不同接口受到的正迁移或干扰不同。由于当前 AutoMate annotation 只有 Insert，该实验验证的是 assembly identity 与任务家族的规模扩展，而不是五种 skill 的跨环境迁移。
 
 
 ## 3. 仍在进行或计划中的实验
@@ -274,7 +274,7 @@ Screw 是非均匀收益的反例：GP 的 pooled Screw 为 `78.29% (238/304)`�
 
 ## 附录 A：结果来源
 
-- 多任务 condition 主实验：[`multi_task_condition_eval_0610.md`](./multi_task_condition_eval_0610.md#1-总览)
+- 多任务 condition 主实验：[`main_3seed_experiment_review_0913.md`](./main_3seed_experiment_review_0913.md) 与逐注册输入/日志路径 [`main_experiment_registered_20260925.csv`](./data/main_experiment_registered_20260925.csv)
 - Main multi-seed 复核：[`main_3seed_experiment_review_0913.md`](./main_3seed_experiment_review_0913.md)
 - Multi-seed skill-level 分析：[`skill_level_analysis_multiseed_0917.md`](./skill_level_analysis_multiseed_0917.md)
 - Low→Med 空间泛化：[`low2med_generalization.md`](./low2med_generalization.md#results)

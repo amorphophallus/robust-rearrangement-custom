@@ -1,6 +1,6 @@
 # Main experiment 多 seed 结果与 ICLR 结论复核
 
-更新时间：2026-09-21（Asia/Shanghai）
+更新时间：2026-09-25（Asia/Shanghai）
 
 ## 1. 范围与统计口径
 
@@ -9,9 +9,10 @@
 当前统计口径如下：
 
 - `rgb` 与 `rgbd` 的原始 main checkpoint 使用了错误的数据/checkpoint lineage，现从主结果、均值、方差和论文结论中全部排除。两行正式表使用通过统一评估契约的 `2026090701`、`2026090702`、`2026091701`，因此 `n_train=3`。
-- `rgbd_gp` 沿用原 main experiment 的三个既有 seed；其余五个带 condition 的方法合并原 main seed 与两个补训 seed，因此 `n_train=3`。
+- `rgbd_gp` 的登记三项为新 `2026092201` checkpoint 与原 main 的 `autumn-dust-13`、`icy-vortex-9`；`rgbd_colored_gp` 的登记三项为新 `2026092201` 与 supplemental `2026090701/02`。其余方法沿用此前登记的三项，因此所有行均为 `n_train=3`。
 - `2026090701/02` 已按 aligned wrist、positive-meters depth（RGB 除外）和 reward-only success 评估，又以独立 `eval seed=1` 复测，并对 `eval seed=0/1` 逐格取较小成功数。`2026091701` 也已在相同 camera/depth/success contract 下完成 `eval seed=0/1`，逐 task 取 conservative min 后进入正式表；第 13 节记录完整协议和数据来源。两个 grasp condition 按可追溯历史评估逐格取最大成功数，来源见第 12.3 节。
 - 由于部分 condition 仍混合历史与 supplemental lineage，且 grasp condition 使用不同的历史逐格 max 口径，表中排序是当前登记结果，不解释为严格的 paired causal effect。RGB/RGB-D 的三个 train seed 现均使用 `eval seed=0/1` 逐格 conservative min。
+- `rgbd_colored_gp/2026092201/round_table` 在两次同协议 36-rollout formal trial 中按用户指定取成功数最大值：原 `15/36`、retry `19/36`，登记为 `19/36`；两份原始 JSON 与选择 receipt 均保留。主表全部 24 个 train-seed 三 task 输入、注册规则和原始 log JSON 路径见 [`main_experiment_registered_20260925.csv`](./data/main_experiment_registered_20260925.csv)。表中 mean 和 sample std 均由该 CSV 的成功数重算，不从文档手填百分比。
 
 旧 RGB/RGB-D checkpoint 及其 `0/36` 结果只保留在后文 provenance 审计中，不再用于“退化到单任务”“seed-dependent collapse”或任何方法结论。
 
@@ -19,8 +20,8 @@
 
 | Condition | n_train | one_leg | round_table | lamp | Overall |
 |---|---:|---:|---:|---:|---:|
-| `rgbd_gp` | 3 | 82.41 ± 4.24% | 41.67 ± 12.11% | 33.33 ± 7.35% | 52.47 ± 4.66% |
-| `rgbd_colored_gp` | 3 | 87.04 ± 4.24% | 50.00 ± 22.22% | 35.19 ± 3.21% | 57.41 ± 5.78% |
+| `rgbd_gp` | 3 | 85.19 ± 6.99% | 52.78 ± 15.47% | 33.33 ± 7.35% | 57.10 ± 5.10% |
+| `rgbd_colored_gp` | 3 | 83.33 ± 2.78% | 58.33 ± 12.11% | 34.26 ± 1.60% | 58.64 ± 4.57% |
 | `rgbd_gp_skill` | 3 | **88.89 ± 4.81%** | **56.48 ± 11.23%** | **44.44 ± 10.02%** | **63.27 ± 4.18%** |
 | `rgbd_skill` | 3 | 77.78 ± 2.78% | 49.07 ± 1.60% | 34.26 ± 1.60% | 53.70 ± 1.60% |
 | `rgbd` | 3 | 82.41 ± 1.60% | 49.07 ± 1.60% | 25.93 ± 5.78% | 52.47 ± 1.93% |
@@ -30,16 +31,16 @@
 
 Overall 先在每个 train seed 内汇总三个 task 的成功数（总分母 108），再在同一 condition 的 train seed 间计算 mean ± sample std。当前 overall 点估计排序为：
 
-`rgbd_gp_skill` (63.27) > `rgbd_colored_gp` (57.41) > `rgbd_skill` (53.70) > `rgbd` (52.47) = `rgbd_gp` (52.47) > `rgb` (48.15) > `rgbd_grasp_part_colored` (47.53) > `rgbd_grasp_part` (46.30)。各行现均登记三个 train seed，但 lineage 和登记规则仍不完全一致；小差异不解释为精确方法排序。
+`rgbd_gp_skill` (63.27) > `rgbd_colored_gp` (58.64) > `rgbd_gp` (57.10) > `rgbd_skill` (53.70) > `rgbd` (52.47) > `rgb` (48.15) > `rgbd_grasp_part_colored` (47.53) > `rgbd_grasp_part` (46.30)。各行现均登记三个 train seed，但 lineage 和登记规则仍不完全一致；尤其 colored-GP 新 seed 的 round_table 使用了两 trial 的 max 注册，小差异不解释为精确方法排序。
 
 ## 3. 逐 seed 成功率
 
-每个 task 单元格按登记的 train seed 顺序列出成功率（成功数/36）。RGB/RGB-D 的顺序为 `2026090701`、`2026090702`、`2026091701`。
+每个 task 单元格按登记的 train seed 顺序列出成功率（成功数/36）。`rgbd_gp` 顺序为 `2026092201`、`autumn-dust-13`、`icy-vortex-9`；`rgbd_colored_gp` 为 `2026092201`、`2026090701`、`2026090702`；RGB/RGB-D 为 `2026090701`、`2026090702`、`2026091701`。其余 source mapping 见上述 CSV。
 
 | Condition | n_train | one_leg | round_table | lamp |
 |---|---:|---:|---:|---:|
-| `rgbd_gp` | 3 | 83.33% (30/36)<br>77.78% (28/36)<br>86.11% (31/36) | 33.33% (12/36)<br>36.11% (13/36)<br>55.56% (20/36) | 27.78% (10/36)<br>41.67% (15/36)<br>30.56% (11/36) |
-| `rgbd_colored_gp` | 3 | 91.67% (33/36)<br>86.11% (31/36)<br>83.33% (30/36) | 27.78% (10/36)<br>72.22% (26/36)<br>50.00% (18/36) | 38.89% (14/36)<br>33.33% (12/36)<br>33.33% (12/36) |
+| `rgbd_gp` | 3 | 91.67% (33/36)<br>77.78% (28/36)<br>86.11% (31/36) | 66.67% (24/36)<br>36.11% (13/36)<br>55.56% (20/36) | 27.78% (10/36)<br>41.67% (15/36)<br>30.56% (11/36) |
+| `rgbd_colored_gp` | 3 | 80.56% (29/36)<br>86.11% (31/36)<br>83.33% (30/36) | 52.78% (19/36)<br>72.22% (26/36)<br>50.00% (18/36) | 36.11% (13/36)<br>33.33% (12/36)<br>33.33% (12/36) |
 | `rgbd_gp_skill` | 3 | 83.33% (30/36)<br>91.67% (33/36)<br>91.67% (33/36) | 50.00% (18/36)<br>69.44% (25/36)<br>50.00% (18/36) | 55.56% (20/36)<br>41.67% (15/36)<br>36.11% (13/36) |
 | `rgbd_skill` | 3 | 77.78% (28/36)<br>80.56% (29/36)<br>75.00% (27/36) | 47.22% (17/36)<br>50.00% (18/36)<br>50.00% (18/36) | 33.33% (12/36)<br>36.11% (13/36)<br>33.33% (12/36) |
 | `rgbd` | 3 | 83.33% (30/36)<br>80.56% (29/36)<br>83.33% (30/36) | 50.00% (18/36)<br>47.22% (17/36)<br>50.00% (18/36) | 19.44% (7/36)<br>27.78% (10/36)<br>30.56% (11/36) |
@@ -88,17 +89,17 @@ Overall 先在每个 train seed 内汇总三个 task 的成功数（总分母 10
 
 当前结果支持把 **“GP + 语义信息”看作最好的 condition 家族**，成员包括 `GP+skill` 与 `colored GP`：
 
-- `rgbd_gp_skill` 在三 seed 主表 overall 为 `63.27±4.18%`，当前第一；`rgbd_colored_gp` 为 `57.41±5.78%`，当前第二。
-- **固定 GP，比较 `GP+skill` 与 `GP`：skill 的增益。** 在已有 spatial GP 上加入 skill 后，one_leg、round_table、lamp、overall 分别提高 `+6.48、+14.81、+11.11、+10.80 pp`。这给出“语义 skill 在空间目标之上提供额外信息”的直接 ablation。
+- `rgbd_gp_skill` 在三 seed 主表 overall 为 `63.27±4.18%`，当前第一；`rgbd_colored_gp` 为 `58.64±4.57%`，当前第二。
+- **固定 GP，比较 `GP+skill` 与 `GP`：skill 的登记差。** 在当前混合-lineage 注册表中，one_leg、round_table、lamp、overall 分别为 `+3.70、+3.70、+11.11、+6.17 pp`。这不是严格 paired ablation，因其中 GP 采用新的 `2026092201` 替换项。
 - **固定 skill，比较 `GP+skill` 与 `skill`：GP 的增益。** 在已有 skill label 上加入 GP 后，one_leg、round_table、lamp、overall 分别提高 `+11.11、+7.41、+10.18、+9.57 pp`。这表明离散阶段标签不足以定位操作对象，空间 point 本身仍然必要。
-- Colored GP 相对纯 GP 的 one_leg、round_table、lamp、overall 提高 `+4.63、+8.33、+1.86、+4.94 pp`，与上述 skill ablation 的方向一致：GP 上的语义信息能够带来额外收益。
+- Colored GP 相对纯 GP 的 one_leg、round_table、lamp、overall 差为 `−1.86、+5.55、+0.93、+1.54 pp`。round_table 新 seed 使用 max 注册，且两行的 seed lineage 不同，因此该登记差不能作为颜色语义的严格因果效应。
 
 `GP+skill` 的定位不是最终可扩展方案，而是 colored GP 的一个**理论成功率上限/探索性 oracle**：显式 one-hot skill 提供清晰语义，但 skill 类别数在训练时固定，加入新技能需要扩展并重新学习离散词表，拓展性较差。Colored GP 把语义编码进标记颜色；RGB 三个 8-bit 通道各有 256 个取值（理论组合空间为 `256^3`），颜色码、距离、阶段或置信度都可以继续设计，而不必把接口固定成当前 skill 数量。因此论文主线应是：**GP 提供空间信息，颜色提供可设计的语义信息；GP+skill 用作这种语义增强能够达到何种效果的上限参照。**
 
 ### 5.3 Skill-only、colored、grasp 和其他结论
 
 - **Skill-only：** overall 只比无 condition RGB-D 高 `2.78 pp`，one_leg 还低 `4.17 pp`，说明离散语义本身有帮助但不充分；它缺少“应该对哪里操作”的空间定位。与 GP+skill 的比较进一步支持 GP 的必要性。
-- **Colored GP：** 它相对纯 GP overall 提高 `4.94 pp`，说明语义颜色不是无效装饰；但低于 GP+skill 的上限，且 round_table 的 seed 方差较大。颜色到底编码了什么、各 skill-level 的贡献是多少，留到后续 skill-level analysis 讨论。
+- **Colored GP：** 它在当前注册表 overall 比纯 GP 高 `1.54 pp`，但该差混合 lineage，且 round_table 对新 seed 使用 max 规则；它只作为登记结果，不单独说明颜色语义的因果收益。颜色的机制仍交由 paired permutation/skill-level analysis。
 - **Grasp-part：** 原先看到的 `0/36` 不是因为 RGB/RGB-D 的 min 规则被误套，而是 aligned 复测本身为 0。按用户指定对全部 task 逐格恢复历史 max 后，round_table 的普通 grasp 两个新 seed 为 `1/36、1/36`，colored grasp 为 `4/36、4/36`；来源见第 12.3 节。它仍是明确的 round_table 特定失败，需要另做 grasp-level 分析。
 - **RGB/RGB-D：** 原 main checkpoint 已判定为错误 lineage 并从统计与结论中排除。新 `2026091701` 的 canonical eval seed 0 为 RGB `53/108`、RGB-D `65/108`；corrected eval seed 1 为 `53/108`、`59/108`，逐 task conservative min 后分别登记 `48/108`、`59/108`。旧 legacy-resize 结果 `42/108`、`0/108` 已降级为输入契约错误的 diagnostic。合入第三 train seed 后，正式主表 RGB 为 `48.15±3.34%`，RGB-D 为 `52.47±1.93%`。
 
@@ -108,9 +109,9 @@ Overall 先在每个 train seed 内汇总三个 task 的成功数（总分母 10
 
 **Experimental setting.** We evaluate DiT policies on one-leg, round-table and lamp in FurnitureBench, with 36 rollouts per checkpoint and task. All registered conditions use three training runs. The original RGB and RGB-D checkpoints are excluded because they belong to an erroneous data/checkpoint lineage; their three valid replacement runs use the per-task minimum over evaluation seeds 0 and 1.
 
-**Results.** In the controlled two-run lineage, RGB-D reaches `51.39±0.65%` overall success. Skill-only reaches `54.17±1.96%`, coloured GP reaches `59.72±5.89%`, and GP+skill reaches `63.43±5.89%`. Averaged over the three semantic conditions, the gain over RGB-D is `+2.78 pp` on one-leg, `+8.33 pp` on round-table and `+12.04 pp` on lamp. In the broader registered table, GP+skill remains the highest point estimate (`63.27±4.18%`) and coloured GP the second highest (`57.41±5.78%`), although the mixed lineages and unequal `n_train` limit strict ranking claims.
+**Results.** In the controlled two-run lineage, RGB-D reaches `51.39±0.65%` overall success. Skill-only reaches `54.17±1.96%`, coloured GP reaches `59.72±5.89%`, and GP+skill reaches `63.43±5.89%`. Averaged over the three semantic conditions, the gain over RGB-D is `+2.78 pp` on one-leg, `+8.33 pp` on round-table and `+12.04 pp` on lamp. In the broader registered table, GP+skill remains the highest point estimate (`63.27±4.18%`) and coloured GP the second (`58.64±4.57%`), although the mixed lineages and colored-GP max registration limit strict ranking claims.
 
-The main table provides two complementary ablations of spatial and semantic information. Holding GP fixed, adding skill (`GP+skill` versus `GP`) improves one-leg, round-table and lamp by `+6.48`, `+14.81` and `+11.11 pp`. Holding skill fixed, adding GP (`GP+skill` versus `skill-only`) improves the same tasks by `+11.11`, `+7.41` and `+10.18 pp`. Coloured GP gives the same directional result relative to GP (`+4.63`, `+8.33` and `+1.86 pp`). GP+skill is an information-rich reference with a fixed vocabulary, whereas coloured GP supplies a more extensible visual semantic interface.
+The main table provides a stable spatial ablation only for the controlled lineage. In the broader registered table, GP+skill minus GP is `+3.70`, `+3.70` and `+11.11 pp` across the three tasks, while colored GP minus GP is mixed (`−1.86`, `+5.55`, `+0.93 pp`) and includes a max-selected round_table retry. GP+skill remains an information-rich reference with a fixed vocabulary, whereas colored GP supplies a more extensible visual semantic interface; neither broad-table difference is a strict causal estimator.
 
 **Interpretation and boundary.** The evidence supports combining a spatial target with semantic context, with the largest same-lineage benefit on the hardest lamp task. It does not support a claim that RGB or RGB-D collapses to a single task, because the checkpoint that motivated that interpretation has been removed. Extending a clean point with grasp rotation does not provide a clear further gain and remains a round-table-specific failure mode. Clean endpoint success also cannot establish causal use of a condition channel; paired colour permutation, skill swapping, GP removal/delay and stage-level analyses remain necessary.
 
@@ -184,7 +185,7 @@ Clean success rate 只测量在分布内、正确 condition 下的最终完成�
 | `GP+skill > GP = colored GP = skill` | **改写** | 不再保留等号排序。当前应写“GP + 语义信息是最佳家族”：GP+skill 第一、colored GP 第二；二者相对 GP 的提高说明语义信息有效。具体 skill-level 机制后续分析。 |
 | GP+skill 是最终方案 | **改为上限参照** | 固定 one-hot skill 数量不易扩展；GP+skill 用于探索 colored GP 的理论成功率上限。Colored GP 的三通道 8-bit 颜色码可继续设计，是更可扩展的研究方向。 |
 | `skill = GP` | **不成立为等价结论** | GP+skill 比 skill-only overall 高 `9.57 pp`，支持空间 GP 的作用；skill-only 只提供离散阶段，不提供操作位置。 |
-| colored GP 没提供预期语义信息 | **撤回** | Colored GP 相对 GP overall 高 `4.94 pp`，与 GP+skill 相对 GP 的方向一致，支持“GP 上的语义信息有用”；因果使用方式仍需 permutation/skill-level analysis。 |
+| colored GP 没提供预期语义信息 | **不以主表登记差作机制证据** | 当前 registered overall 比 GP 高 `1.54 pp`，但 task 差异混合且 round_table 为 max-selected retry；颜色语义是否被使用仍需 paired permutation/skill-level analysis。 |
 | RGB-D/RGB 因 round_table 数据更长而只会 round_table | **撤回** | 该判断依赖已排除的错误 checkpoint，不能用于描述有效 RGB/RGB-D baseline。第三 seed 的 canonical eval seed 0 中 RGB/RGB-D 分别为 `53/108`、`65/108`，corrected conservative min 为 `48/108`、`59/108`，三项任务均有成功；旧 RGB-D `0/108` 已确认是 wrist contract 错误的 diagnostic。 |
 | skill-only 的 one_leg 问题来自 Place | **撤回为总体结论** | 新两 seed one_leg 为 `29/36、27/36`，不存在稳定崩溃；阶段性原因交给 skill-level analysis。 |
 
