@@ -1,11 +1,159 @@
 # VLM + DiT guidance point 评测报告
 
+## Main-exp 三 training-seed 复测（已完成）
+
+### rgbd+GP：两个补充 training seed 已完成（2026-09-25）
+
+Base 上的 legacy-compatible formal 已完成 `6/6` cells、`72/72` rollouts，并通过 strict validator：`validated 6 cells x 12 rollouts = 72 rollouts`。两个补充 checkpoint 分别为 `rare-monkey-4`（SHA256 `108cfc6c...ac278545`）和 `autumn-dust-13`（SHA256 `ad5d1bf0...1d8cb258`）。正式 summary 位于 `/home/huyue/projects/robust-rearrangement-custom/logs/vlm_rgbd_gp_new2_0925/formal/summaries`，验证记录位于同一 run root 的 `validation.txt`。
+
+| Training seed / checkpoint | one_leg | round_table | lamp | Overall |
+| --- | ---: | ---: | ---: | ---: |
+| 论文旧 seed / `icy-vortex-9` | 86.1% (31/36) | 44.4% (16/36) | 44.4% (16/36) | 58.3% (63/108) |
+| `rare-monkey-4` | 91.7% (11/12) | 41.7% (5/12) | 50.0% (6/12) | 61.1% (22/36) |
+| `autumn-dust-13` | 83.3% (10/12) | 25.0% (3/12) | 8.3% (1/12) | 38.9% (14/36) |
+| **3-seed mean ± sample std** | **87.0 ± 4.2%** | **37.0 ± 10.5%** | **34.3 ± 22.6%** | **52.8 ± 12.1%** |
+| Conservative minimum | 83.3% | 25.0% | 8.3% | 38.9% |
+
+统计以 training seed 等权：先计算每个 seed 的 task rate 和同一 seed 的三任务 pooled Overall，再在三个 seed 上取 mean/sample std 或 minimum；不按 rollout 数量把旧 seed 的 `36/task` 与新 seed 的 `12/task` 混合加权。相对论文旧单-seed表，三-seed均值在 one_leg、round_table、lamp、Overall 上分别变化 `+0.9/-7.4/-10.2/-5.6 pp`。较大的 lamp seed variance 主要来自 `autumn-dust-13` 的 `1/12`，因此旧单-seed的 `44.4%` 不能继续代表稳定的跨-training-seed结论。
+
+补充 formal 严格使用历史 policy runtime：raw camera `240×320`；wrist RGB bilinear full-frame resize、depth nearest full-frame resize至 `224×224`（resolved `legacy-224`）；front center crop `224×224`；Isaac raw signed depth；显式 `robot-base` eepose；Point VLM v3/`skill_point` revision `ckpt_new-final-0063cce240e6`；invalid query 复用同 rollout 上一次有效输出；`max-saved-rollouts=0`。两补充 seed 共 `6571` 次 VLM query attempt，其中 invalid `22` 次（`0.33%`），reuse 标记 `176` 次（占 attempt `2.68%`；一次 invalid query 可在后续缓存 step 产生多次 reuse 标记）。
+
+限制：论文旧 seed 使用 VLM revision `9d36062d461e6d07f78d6148bea8039e1e019f92`，补充 seed 使用后续修复 null/invalid 输出的 `ckpt_new-final-0063cce240e6`。三者的 policy 输入几何、query cadence、schema 和历史 depth/eepose 语义已对齐，但上游 VLM 权重 revision 并不完全相同。因此该 mean±std 应标注为 **protocol-compatible, cross-VLM-revision training-seed summary**，不能声称为严格固定同一 VLM checkpoint 的纯 training-seed 方差。
+
+### VLM 完整三 training-seed 表（final，2026-09-26）
+
+下表按 training seed 等权计算 mean ± sample std。`rgbd+colored GP` 的两个新 training-seed/task cell 使用 `max(eval seed 0, eval seed 1)`；复跑的 `6 cells × 12 rollouts = 72 rollouts` 已全部完成并通过 strict validation。该行是 **best-of-two/max-selected** 统计，存在乐观选择偏差，不能解释为单次无偏评测；其余 condition 使用一次 formal 结果。
+
+| Policy condition | One-leg | Round-table | Lamp | Overall |
+| --- | ---: | ---: | ---: | ---: |
+| rgbd+GP | 87.04 ± 4.24% | 37.04 ± 10.52% | 34.26 ± 22.62% | 52.78 ± 12.11% |
+| rgbd+colored GP (best-of-two) | 84.26 ± 1.60% | **44.44 ± 4.81%** | **41.67 ± 8.33%** | **56.79 ± 2.14%** |
+| rgbd+GP+skill | 80.56 ± 4.81% | 31.48 ± 16.97% | 26.85 ± 11.23% | 46.30 ± 8.93% |
+| rgbd+grasp-part | 79.63 ± 8.02% | 12.96 ± 22.45% | 34.26 ± 26.40% | 42.28 ± 18.39% |
+| rgbd+grasp-part-colored | 82.41 ± 9.75% | 15.74 ± 20.48% | 25.00 ± 14.43% | 41.05 ± 8.99% |
+
+| Policy condition | One-leg min | Round-table min | Lamp min | Overall min |
+| --- | ---: | ---: | ---: | ---: |
+| rgbd+GP | 83.33% | 25.00% | 8.33% | 38.89% |
+| rgbd+colored GP (best-of-two) | 83.33% | **41.67%** | **33.33%** | **55.56%** |
+| rgbd+GP+skill | 75.00% | 16.67% | 16.67% | 36.11% |
+| rgbd+grasp-part | 75.00% | 0.00% | 8.33% | 27.78% |
+| rgbd+grasp-part-colored | 72.22% | 0.00% | 16.67% | 33.33% |
+
+#### 三 seed 原始成功数（聚合输入）
+
+| Condition | Training seed / checkpoint | One-leg | Round-table | Lamp | Overall |
+| --- | --- | ---: | ---: | ---: | ---: |
+| rgbd+GP | paper seed / `icy-vortex-9` | 31/36 | 16/36 | 16/36 | 63/108 |
+| rgbd+GP | `rare-monkey-4` (`3146500576`) | 11/12 | 5/12 | 6/12 | 22/36 |
+| rgbd+GP | `autumn-dust-13` (`709028286`) | 10/12 | 3/12 | 1/12 | 14/36 |
+| rgbd+colored GP | paper seed / `absurd-voice-2` | 31/36 | 15/36 | 18/36 | 64/108 |
+| rgbd+colored GP | `2026090701` (max-selected) | 10/12 | 6/12 | 4/12 | 20/36 |
+| rgbd+colored GP | `2026090702` (max-selected) | 10/12 | 5/12 | 5/12 | 20/36 |
+| rgbd+GP+skill | paper seed / `fresh-tree-11` | 30/36 | 10/36 | 14/36 | 54/108 |
+| rgbd+GP+skill | `2026090701` | 9/12 | 2/12 | 2/12 | 13/36 |
+| rgbd+GP+skill | `2026090702` | 10/12 | 6/12 | 3/12 | 19/36 |
+| rgbd+grasp-part | paper seed | 32/36 | 14/36 | 22/36 | 68/108 |
+| rgbd+grasp-part | `2026090701` | 9/12 | 0/12 | 4/12 | 13/36 |
+| rgbd+grasp-part | `2026090702` | 9/12 | 0/12 | 1/12 | 10/36 |
+| rgbd+grasp-part-colored | paper seed | 26/36 | 14/36 | 15/36 | 55/108 |
+| rgbd+grasp-part-colored | `2026090701` | 10/12 | 0/12 | 2/12 | 12/36 |
+| rgbd+grasp-part-colored | `2026090702` | 11/12 | 1/12 | 2/12 | 14/36 |
+
+统计口径固定为 training-seed 等权：每个 task 先得到每个 training seed 的成功率，再在三 seed 上计算均值与 sample standard deviation（分母 `n-1`）；Overall 先在**同一个** training seed 内汇总三 task，再跨 training seed 统计。旧 seed 的 `36/task` 与新 seed 的 `12/task` 不按 rollout 数混合加权。
+
+#### 数据溯源与完整性
+
+- 历史论文 seed：原始 summary 的绝对路径、字节数和 SHA256 见本文“复现来源与审计清单”中的 15-cell formal source manifest；对应 VLM revision 为 `9d36062d461e6d07f78d6148bea8039e1e019f92`，RR commit 为 `f62eff3a461e4b6f4ae4c1d2fa2e17c67abc7e6a`。
+- Main-exp 新 seed 一次 formal：Base run root `/home/huyue/projects/robust-rearrangement-custom/logs/vlm_main_new2_aligned_0923`；`validation.txt` SHA256 `9288d58bdd3f532bd1eea4831b04354a296924f95076c9cef8f33cb6211ebde1`，内容确认 `validated 24 cells x 12 rollouts = 288 rollouts`。其中本表使用 colored-GP 原轮 6 cells、GP+skill 6 cells、grasp-part 6 cells、grasp-part-colored 6 cells。
+- Legacy rgbd+GP 新 seed formal：Base run root `/home/huyue/projects/robust-rearrangement-custom/logs/vlm_rgbd_gp_new2_0925`；`validation.txt` SHA256 `a5e9b0ba4a02c2c2a2142e6a9ffd091ace5e5ae0e1ed70ecbdfe1d4fb909b5cc`，内容确认 `validated 6 cells x 12 rollouts = 72 rollouts`。
+- Colored-GP 独立复跑：Base run root `/home/huyue/projects/robust-rearrangement-custom/logs/vlm_colored_gp_repeat_max_0925`；`validation_and_max.txt` SHA256 `965ed3a4b3b57658bfecb105d603981bada763ff68f19eb92c44b3d466888e95`，确认 `validated 6 rgbd_colored_gp repeat cells x 12 rollouts = 72 rollouts`。选择清单 `max_selected_cells.tsv` SHA256 `ec9c20e285ea7b885492848626f3eeb3bb81c423ddf0182e71854d28cb09ace4`；最终聚合 `max_selected_3seed.md` SHA256 `2c3d857187594d012d537e3418119ad000d629e6cdecf26d4d59bacee15b23f6`。
+- Colored-GP 选择规则逐格固定为 `max(original eval seed 0, repeat eval seed 1)`：`2026090701` 的 one-leg 为 tie `10/10`，round-table 为 `3→6`，lamp 为 `2→4`；`2026090702` 的 one-leg 为 tie `10/10`，round-table 为 `4→5`，lamp 为 `3→5`。原始 summary 均保留，未物理覆盖。
+
+| Condition / seed | Policy checkpoint SHA256 |
+| --- | --- |
+| rgbd+GP / `rare-monkey-4` | `108cfc6cacedca2c89481ffdb76418b9b14c86a28359b733261eee64ac278545` |
+| rgbd+GP / `autumn-dust-13` | `ad5d1bf0556c61e8b44bb6c37bf710707d5e5ee2e2ccfec978cf27fa1d8cb258` |
+| colored-GP / `2026090701` | `8cf877db1f7f0145f16abe147a3a820ad0f44d9cfa14e0a5d3c40ff7102938d3` |
+| colored-GP / `2026090702` | `f78a9b9c4eba5984a859bf2fe66d7c24b928757193886fee479a9db76242ebaa` |
+| GP+skill / `2026090701` | `3ae65535826f6ecc1fc8fb91429ffdfa320b8c2bb4c74db59ded44d341223500` |
+| GP+skill / `2026090702` | `3cc350662b7268ca0a31e5dd0ed852d398785ea6492145ac81615ffb129db00e` |
+| grasp-part / `2026090701` | `002e172b8c7663d1a864e5115ce671ecdeb6ff20a78eb8bb1ad02d98668bb4ce` |
+| grasp-part / `2026090702` | `c8fd4415329ee0e737ef9456216495a3ad1051c71b2f4ec8edf729bb573f3fac` |
+| grasp-part-colored / `2026090701` | `53ebd5c144244a4fca7161ac4d203074fe5934a763993f99a2cd446e0c5a519c` |
+| grasp-part-colored / `2026090702` | `83bfb5a81e18087c9bf8808a3f857b45fb2c037200849f83d35e1b0cdf11fa51` |
+
+Main-exp 新 seed 的 policy 协议为 raw `240×320`、wrist `center-crop-224`、`positive_meters` depth、`robot-base` eepose、front original；Point VLM 为 `ckpt_new-final-0063cce240e6`（v3/`skill_point`），Grasp VLM 为 `ckpts_ver2-final-05e40f3158cf`（v4/`skill_point_rotation6d`）。Legacy rgbd+GP 使用历史 runtime：wrist `legacy-224` full-frame resize、front center crop、`legacy_signed` depth、`robot-base` eepose，并使用 Point VLM。所有新 seed 均为 `n_envs=3`、每 cell `12` rollout、low randomness、最多 `1000` steps、invalid reuse previous、`max-saved-rollouts=0`。
+
+Base 运行时仓库 HEAD 为 `406e0c9736348ded430625339717559965dd4d16`，但评测兼容层存在未提交改动，因此不能仅用 commit 声称代码完全可复现；实际运行文件以 SHA256 锚定：`engine.py a13e641a...6633a`、`native_sft.py a891ae08...3f0b`、`evaluate_model.py 0f6ac60d...8341`、`rollout.py c0e77069...26f8`、`vlm_guidance.py c0c9fc2a...054b`、`vlm_point_metrics.py 3a2c91e1...6b4e`。Main-exp validator SHA256 为 `9afb6ac7...66ee7`，colored-GP selector/validator 为 `3736a12b...b7e0`，复跑 pipeline 为 `c75df5d6...27d0f`。每份 summary 内同时保留完整 resolved `eval_command`、checkpoint path、training config、相机/depth/eepose contract、VLM revision、invalid/reuse 计数与成功数。
+
+<details>
+<summary>新 seed 聚合输入 summary 的逐文件 SHA256</summary>
+
+下表 root alias：`A=/home/huyue/projects/robust-rearrangement-custom/logs/vlm_main_new2_aligned_0923`，`B=/home/huyue/projects/robust-rearrangement-custom/logs/vlm_rgbd_gp_new2_0925`，`C=/home/huyue/projects/robust-rearrangement-custom/logs/vlm_colored_gp_repeat_max_0925`。
+
+| Root | Summary（相对路径） | SHA256 |
+| --- | --- | --- |
+| A | `point_formal_2new/summaries/rgbd_colored_gp__2026090701__one_leg.json` | `e5430bbb1fe86a237baac42b48eb2bbcb3d34aa74a19abd36f98a64861dd807d` |
+| A | `point_formal_2new/summaries/rgbd_colored_gp__2026090701__round_table.json` | `3a9ebe00a32b932008ef802f29ba375654a548686e0fee11565a41c8a2a6b8b5` |
+| A | `point_formal_2new/summaries/rgbd_colored_gp__2026090701__lamp.json` | `5a69e81c4a4629143ae69f85711370c3ceb87f91f22438f7503243b141fe8a21` |
+| A | `point_formal_2new/summaries/rgbd_colored_gp__2026090702__one_leg.json` | `64e55486f2080ebe82ef4b5e16ccea993cc77188a06f440bac87edc95d5132a6` |
+| A | `point_formal_2new/summaries/rgbd_colored_gp__2026090702__round_table.json` | `f95beea6f1c085db0b092ec5dff17655eede72d050f2e1b8034f8c437d692057` |
+| A | `point_formal_2new/summaries/rgbd_colored_gp__2026090702__lamp.json` | `4396fd0fa9ee747a35ac3fea4dc9a66c3684d8d84e6221e10b1e2ee04f942dd8` |
+| C | `repeat_seed1/summaries/rgbd_colored_gp__2026090701__one_leg.json` | `b09f6ca188b91656ee317f3d7441a29e0feaec09f1acd13c10a2628d39b9341f` |
+| C | `repeat_seed1/summaries/rgbd_colored_gp__2026090701__round_table.json` | `f865d5df071d8882d2d1ee8549019421ca937cb9ff0d2ad34703ec9f9cb549ac` |
+| C | `repeat_seed1/summaries/rgbd_colored_gp__2026090701__lamp.json` | `e4622635e9a40142dcd3f5ac14a42dffa2ec60b22a30df19257fbfa5065ee1f3` |
+| C | `repeat_seed1/summaries/rgbd_colored_gp__2026090702__one_leg.json` | `d6fad10be3c72d421a477e0d0487480ead3a9502344ff637501ab7e46137c163` |
+| C | `repeat_seed1/summaries/rgbd_colored_gp__2026090702__round_table.json` | `42d0c98bf4cacc42d0de88697d0d3bb1e87a4498dae017285b81b138629dea67` |
+| C | `repeat_seed1/summaries/rgbd_colored_gp__2026090702__lamp.json` | `02a9a48733219cfbd1244d9724aa50222ae532d67d1e5bb3ed0abbbeeff3bd35` |
+| A | `point_formal_2new/summaries/rgbd_gp_skill__2026090701__one_leg.json` | `61c38a2fc3a3788064e1800ea5f800c41e5e7f250d3a7b45afd0cea36199a8f1` |
+| A | `point_formal_2new/summaries/rgbd_gp_skill__2026090701__round_table.json` | `7922dd978ba60e764861be403baebf3d675c435919f5e19d4419156203beec7f` |
+| A | `point_formal_2new/summaries/rgbd_gp_skill__2026090701__lamp.json` | `e331743245af644d441c858cd3a53f6bee7c62129c73a037d98cff6a0396b8b4` |
+| A | `point_formal_2new/summaries/rgbd_gp_skill__2026090702__one_leg.json` | `8c63be90c886fbcc45da8e73baec129e97d6dd058b5a579126e06fca16012cc2` |
+| A | `point_formal_2new/summaries/rgbd_gp_skill__2026090702__round_table.json` | `86b6a549b0ade830e25e352b8cd7f2c35062fe95d60ddbae8e63d18277b1ed5b` |
+| A | `point_formal_2new/summaries/rgbd_gp_skill__2026090702__lamp.json` | `e7e4e13e6af0327e805f15a11965d516b346ddc70fa02e790ddf23812215a5f3` |
+| A | `grasp_formal_2new/summaries/rgbd_grasp_part__2026090701__one_leg.json` | `4bcb2f7525e64e3c063e97712c85e807553ab6bc7230039adc7cadad5aa4dfaf` |
+| A | `grasp_formal_2new/summaries/rgbd_grasp_part__2026090701__round_table.json` | `9fe1d47fc7061212332990cb1d4b97f13519a0848c2490b9ffd15ee21160b380` |
+| A | `grasp_formal_2new/summaries/rgbd_grasp_part__2026090701__lamp.json` | `0ba7300fbcca9eb70b689e2c9594d45576d9c6e9f169dfd09bd7037fb5746bc3` |
+| A | `grasp_formal_2new/summaries/rgbd_grasp_part__2026090702__one_leg.json` | `7eb1e0ee9b6dca431affe4ff541d0ef6a06e54314e62d9ee92b5b635860f72c5` |
+| A | `grasp_formal_2new/summaries/rgbd_grasp_part__2026090702__round_table.json` | `2a74f6a84defe08fde66df82cea3bdb24ee3c294742636340386ebbad9998b9d` |
+| A | `grasp_formal_2new/summaries/rgbd_grasp_part__2026090702__lamp.json` | `397c9c25448f7812ca6c90e2628b3b435d6f16f049b4e9a10ec8fbc346b499f5` |
+| A | `grasp_formal_2new/summaries/rgbd_grasp_part_colored__2026090701__one_leg.json` | `6faec9d4dd80aca2a2245721db132a0517e15d6ca724a7ef9281f8d68eb9c6c7` |
+| A | `grasp_formal_2new/summaries/rgbd_grasp_part_colored__2026090701__round_table.json` | `ba4257719e5974f23d76acbbaa26805f6856588ba08c21fbb0a4a1d181711ec8` |
+| A | `grasp_formal_2new/summaries/rgbd_grasp_part_colored__2026090701__lamp.json` | `82e56760bba03cc51b5b91207180891ce5a09fc09e479e94409901520740b863` |
+| A | `grasp_formal_2new/summaries/rgbd_grasp_part_colored__2026090702__one_leg.json` | `d00565838ec6de500b81be56e8eb769110f2f12965efd4c610b5962a6ca5cc60` |
+| A | `grasp_formal_2new/summaries/rgbd_grasp_part_colored__2026090702__round_table.json` | `10778ff995ed2fab6fbd0d56eddd39cb00f283d0a72972b998249dcd96e27dc8` |
+| A | `grasp_formal_2new/summaries/rgbd_grasp_part_colored__2026090702__lamp.json` | `2e2484c8772ce0c09db6e6f9c2effdb9db1617c3a96592393e17f564269eec4b` |
+| B | `formal/summaries/rgbd_gp__3146500576__one_leg.json` | `0a222dd771f7101adbecd4e71c0ade3b63b7504cf0183f86e74184c289b81f0c` |
+| B | `formal/summaries/rgbd_gp__3146500576__round_table.json` | `0d0c9cad863826435767cdc01c29b669c8aa55f090b36f64f7b993590cdf5831` |
+| B | `formal/summaries/rgbd_gp__3146500576__lamp.json` | `a828a8927da33dff8f1898f0ae687b6d313bd17fae1238674f93ad81c865e7c5` |
+| B | `formal/summaries/rgbd_gp__709028286__one_leg.json` | `ea2f828c7db2ff69577b35f976403cfe141482c4a8bfd7a3567ff29a02ec27ff` |
+| B | `formal/summaries/rgbd_gp__709028286__round_table.json` | `89480b40ca187e88a8249bd3a214bdf85000d50cf89f326f45c548e33b1fe0b9` |
+| B | `formal/summaries/rgbd_gp__709028286__lamp.json` | `9e9a493d81618a2da930e55bd6175af4fd35fcf69e23b13acd61a19a8d3c5feb` |
+
+</details>
+
+本节是当前论文主实验的唯一三-seed 结论入口；下方历史 `324`-rollout 单-seed 诊断、误差表和旧 success 表仅保留为追溯证据，**不得**与本轮结果拼接或用来进行 condition 排名。本轮只补测两个新 training seed，并将已登记的历史 seed 作为第三个 seed：对每个 condition/task，表中保守值取三个 training seed 的最小 success rate；`Overall` 取**同一个** training seed 跨三个 task 的 pooled success rate 后再取最小值，不能从不同 seed 的 task 最小值混合而成。
+
+废弃的上一轮 30-cell **diagnostic** 队列不得进入论文表：2026-09-23 protocol reaudit 确认其中旧 GP checkpoint 被错误地喂入 positive-meters depth，VLM revision 未锁定，invalid-output 策略也与旧 seed 不同。本文 final 三-seed 表只使用上方列出的 aligned/legacy-compatible formal 与 colored-GP validated repeat。
+
+### 上一轮执行设置（尚未构成合格复现契约）
+
+- Point VLM 是 ModelScope `zhouhangzhu/hy_furniture_weights` 的 `ckpt_new/final`；Base 实际 manifest revision 为 `ckpt_new-final-0063cce240e6`，`model.safetensors` SHA256 为 `0063cce240e681b8c7be2732054980b69dd8caeccbabd0e87f22467ede77750d`。这是 Point track 的最新 final，不混用 grasp 的 `vkpts_ver2`。
+- 相机预处理按 policy interface 保持不变：`rgbd+GP` 使用 legacy 路径（请求 `legacy-resize`，解析为 `legacy-224`）、front preset `original`，并显式使用旧环境真实语义 `eepose-frame=robot-base`；禁止把当前 `original=sim-local` alias 当作旧实现。Point 的两个补充 condition 与两个 Grasp condition 使用 robot-base 的 `center-crop-224`。原始 RGBD 为 `240×320`，policy 输入为 `224×224`。
+- VLM 返回无法解析为预期 JSON object 时，记为 `invalid prediction`；例如 `[{"skill":"pick"},{"skill":"screw"}]` 是 JSON array 而非要求的 object。它会保留 `parse_error`，绝不回退 shadow/oracle skill 或 GT point。已完成的 Point formal 使用历史空 guidance 行为；本轮 Grasp formal 按当前显式决策，在已有有效预测时复用同一 rollout 的上一条有效 query，并分别登记 raw-query invalid rate 与实际复用率；首条无前序有效 query 的 invalid 仍为空 guidance。其余正常输出仍逐项检查 skill、point 的形状/有限性/图像边界，以及 grasp pose 的 rotation 结构。
+- 评测代码在 r218 以 commit `406e0c9736348ded430625339717559965dd4d16`（`fix: harden vlm evaluation protocol`）完成 client tests：`15 passed`；Base 已同步该 commit。该改动确保 `--max-saved-rollouts 0` 被转发，并把上述 invalid 输出显式写入 task summary。
+
+### 执行状态归档
+
+Protocol-mismatched diagnostic 队列及其自动 finalizer 已停用，结果不进入三-seed表。有效流程均已结束：main-exp aligned formal `24/24` cells、legacy rgbd+GP formal `6/6` cells、colored-GP repeat `6/6` cells，三组 strict validation 均通过。
+
 ## 验证链路（旧数据 / smoke / matched diagnostics / formal）
 
-### 旧 324-rollout：invalid
+### 旧 324-rollout：保留为 1-seed 基准，等待同协议新 seed
 
-- 判定：`invalid`。旧 324 个 VLM rollout 和旧 scripted-GT 对照均缺少 --save-depth-image；当前 evaluate_model.py 会因此不把 depth_image1/depth_image2 加入 RGBD policy observation，所以旧结果不能用于判断 checkpoint、VLM 或 condition 优劣。
-- 旧数据只保留作故障溯源，不 resume、不拼接、不用于 condition 排名。缺少 `--save-depth-image` 会同时令 RGBD policy observation 缺少 depth；此外旧 one_leg 使用 700 steps，旧 rgbd+GP checkpoint 也与本轮固定 checkpoint 不同。
+- 2026-09-23 重新核对 authoritative manifest 后，撤回“缺少 `--save-depth-image`”的判断。`formal_composite/manifest.json` 的 expanded command 和 `rgbd_gp__one_leg.json` 的 `eval_command` 都明确包含该参数；旧 evaluator 没有启用 positive-meters 转换，因此 policy 消费的是 legacy signed depth。
+- 旧 formal 的固定项为 VLM revision `9d36062d461e6d07f78d6148bea8039e1e019f92`、RR commit `f62eff3a461e4b6f4ae4c1d2fa2e17c67abc7e6a`、每格 36 rollout、`n_envs=3`、low randomness、1000 steps、query interval `0`（跟随 action horizon）和严格 invalid-output 检查。只有新 seed 复现这些 VLM 接口语义，同时按各 checkpoint 的 main-exp camera/depth/eepose contract 适配 policy 输入后，才能与该 seed 合并。
 
 ### ckpt_new 300-sample grounding gate
 
