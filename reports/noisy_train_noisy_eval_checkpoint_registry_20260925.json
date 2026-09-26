@@ -1,0 +1,69 @@
+{
+  "schema": "rr-noisy-train-noisy-eval-checkpoint-registry-v1",
+  "comparison_assumption": "n0, n2, and n4 training sets are treated as samples from the same task/demo distribution, per the fixed experiment protocol",
+  "train_conditions": [
+    {
+      "train_noise_level": "n0",
+      "label": "TAGPoint trained with clean guidance",
+      "checkpoints": [
+        {
+          "train_seed": "main-formal",
+          "path": "checkpoints/joint_0906/formal/rgbd_colored_gp/actor_chkpt_last.pt",
+          "wrist_image_transform": "center-crop-224"
+        },
+        {
+          "train_seed": "2026090701",
+          "path": "checkpoints/main_supplement_0906/seed2026090701/rgbd_colored_gp/actor_chkpt_last.pt",
+          "wrist_image_transform": "center-crop-224"
+        },
+        {
+          "train_seed": "2026090702",
+          "path": "checkpoints/main_supplement_0906/seed2026090702/rgbd_colored_gp/actor_chkpt_last.pt",
+          "wrist_image_transform": "center-crop-224"
+        }
+      ]
+    },
+    {
+      "train_noise_level": "n2",
+      "label": "TAGPoint trained with 6 mm/axis guidance noise",
+      "checkpoints": [
+        {
+          "train_seed": "2026092201",
+          "path": "/mnt/nas/datasets_tmp/rr_furniturebench_noisy_train_scripted_100per_task_v1/training/checkpoints/n2/seed2026092201/rgbd_colored_gp/fb_main_noisy_n2_rgbd_colored_gp_seed2026092201_formal/actor_chkpt_last.pt",
+          "wrist_image_transform": "center-crop-224"
+        },
+        {
+          "train_seed": "2026092202",
+          "path": "/mnt/nas/datasets_tmp/rr_furniturebench_noisy_train_scripted_100per_task_v1/training/checkpoints/n2/seed2026092202/rgbd_colored_gp/fb_main_noisy_n2_rgbd_colored_gp_seed2026092202_formal/actor_chkpt_last.pt",
+          "wrist_image_transform": "center-crop-224"
+        },
+        {
+          "train_seed": "2026092203",
+          "path": "/mnt/nas/datasets_tmp/rr_furniturebench_noisy_train_scripted_100per_task_v1/training/checkpoints/n2/seed2026092203/rgbd_colored_gp/fb_main_noisy_n2_rgbd_colored_gp_seed2026092203_formal/actor_chkpt_last.pt",
+          "wrist_image_transform": "center-crop-224"
+        }
+      ]
+    },
+    {
+      "train_noise_level": "n4",
+      "label": "TAGPoint trained with 24 mm/axis guidance noise",
+      "checkpoints": [
+        {
+          "train_seed": "2026092201",
+          "path": "/mnt/nas/datasets_tmp/rr_furniturebench_noisy_train_scripted_100per_task_v1/training/checkpoints/n4/seed2026092201/rgbd_colored_gp/fb_main_noisy_n4_rgbd_colored_gp_seed2026092201_formal/actor_chkpt_last.pt",
+          "wrist_image_transform": "center-crop-224"
+        },
+        {
+          "train_seed": "2026092202",
+          "path": "/mnt/nas/datasets_tmp/rr_furniturebench_noisy_train_scripted_100per_task_v1/training/checkpoints/n4/seed2026092202/rgbd_colored_gp/fb_main_noisy_n4_rgbd_colored_gp_seed2026092202_formal/actor_chkpt_last.pt",
+          "wrist_image_transform": "center-crop-224"
+        },
+        {
+          "train_seed": "2026092203",
+          "path": "/mnt/nas/datasets_tmp/rr_furniturebench_noisy_train_scripted_100per_task_v1/training/checkpoints/n4/seed2026092203/rgbd_colored_gp/fb_main_noisy_n4_rgbd_colored_gp_seed2026092203_formal/actor_chkpt_last.pt",
+          "wrist_image_transform": "center-crop-224"
+        }
+      ]
+    }
+  ]
+}

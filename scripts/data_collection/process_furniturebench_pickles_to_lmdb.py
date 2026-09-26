@@ -64,6 +64,12 @@ def build_parser():
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--provenance-json", type=Path, default=None)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--require-fixed-guidance-noise", action="store_true")
+    parser.add_argument(
+        "--guidance-noise-level",
+        choices=("clean", "n2", "n4"),
+        default="clean",
+    )
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -138,11 +144,15 @@ def main():
         command.extend(("--provenance-json", str(args.provenance_json.expanduser().resolve())))
     if args.overwrite:
         command.append("--overwrite")
+    if args.require_fixed_guidance_noise:
+        command.append("--require-fixed-guidance-noise")
+    command.extend(("--guidance-noise-level", args.guidance_noise_level))
 
     print(f"repo_root={repo_root}")
     print(f"source_pickle_image_annotation_mode=none")
     print(f"annotation_source={args.annotation_source}")
     print(f"lmdb_image_annotation_mode={args.image_annotation_mode}")
+    print(f"guidance_noise_level={args.guidance_noise_level}")
     print(f"command={shlex.join(command)}")
     if not args.dry_run:
         subprocess.run(

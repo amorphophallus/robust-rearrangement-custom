@@ -1,0 +1,376 @@
+{
+  "high_noise_levels": [
+    "n3",
+    "n4",
+    "n5",
+    "n6"
+  ],
+  "noise_levels": [
+    "n0",
+    "n1",
+    "n2",
+    "n3",
+    "n4",
+    "n5",
+    "n6"
+  ],
+  "noise_std_mm_per_axis": [
+    0,
+    3,
+    6,
+    12,
+    24,
+    48,
+    96
+  ],
+  "plotted_values": {
+    "full_rollout_overall_sr_percent": {
+      "Train N0": [
+        77.77777777777779,
+        69.44444444444444,
+        61.111111111111114,
+        52.77777777777778,
+        52.77777777777778,
+        38.88888888888889,
+        55.55555555555556
+      ],
+      "Train N2": [
+        66.66666666666666,
+        69.44444444444444,
+        61.111111111111114,
+        61.111111111111114,
+        55.55555555555556,
+        63.888888888888886,
+        61.111111111111114
+      ],
+      "Train N4": [
+        63.888888888888886,
+        69.44444444444444,
+        63.888888888888886,
+        63.888888888888886,
+        55.55555555555556,
+        69.44444444444444,
+        61.111111111111114
+      ]
+    },
+    "state_bank_delta_x_cm": {
+      "Train N0": [
+        null,
+        0.8544736439088445,
+        1.1131683275391633,
+        1.3265891300681187,
+        1.4252401707429705,
+        1.7484950733693887,
+        2.0081047569331463
+      ],
+      "Train N2": [
+        null,
+        1.3549230582118392,
+        1.4463113090186897,
+        1.3352203027022411,
+        1.146976416123518,
+        1.2471045954645679,
+        1.384867426463597
+      ],
+      "Train N4": [
+        null,
+        1.357086988521666,
+        1.4059005110960057,
+        1.4510999222813303,
+        1.2785558244833939,
+        1.3084916434046292,
+        1.3004660284664595
+      ]
+    },
+    "state_bank_e_gt_cm": {
+      "Train N0": [
+        3.6349346042283184,
+        3.573130500234599,
+        3.666746767845752,
+        3.7089764493984974,
+        3.8590475909243795,
+        4.091300944587026,
+        4.431061729297445
+      ],
+      "Train N2": [
+        3.3979638466814372,
+        3.6478013655648533,
+        3.6958716918251047,
+        3.6089560730930654,
+        3.685251242446899,
+        3.611649116410938,
+        3.6720517993136657
+      ],
+      "Train N4": [
+        3.711821332735124,
+        3.5748604752667,
+        3.9215396354851224,
+        3.519429460619365,
+        3.5861611741663197,
+        3.7954435420477246,
+        3.4505063799816402
+      ]
+    }
+  },
+  "schema": "rr-noisy-training-robustness-curves-v1",
+  "sources": {
+    "full_rollout_summaries": [
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n0/one_leg.json",
+        "sha256": "49735893ace824daaf4c828009742deaf3d4a77df96a69daf0862757354992ed"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n0/round_table.json",
+        "sha256": "8989ce96c781e56614157d5d00c418d94b8048cdf2b78bd58076e40463ffc592"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n0/lamp.json",
+        "sha256": "d1121ba9fe4e7b5f372c9631ac0ef8294568237a2f45907e21b3c4be9d76b65e"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n1/one_leg.json",
+        "sha256": "66ee771ea5b2baa7cce345f95ac54cb4194f43f13887cd670ff9b7ebec383216"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n1/round_table.json",
+        "sha256": "49cffbac0ba32c0ebcd382e9fb40339334bfff8a5cf51b9ba147ff175c08c9b4"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n1/lamp.json",
+        "sha256": "66f9249784a023e1eacd5a46fbb3c0a332fd94cdb58e1d482416b11f4168a2d1"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n2/one_leg.json",
+        "sha256": "6358374e63288831c89299b79c958e2b591f8ae7eb262581930ce9ed5af746b3"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n2/round_table.json",
+        "sha256": "0d22a86ad335854f455a017fe32e0c270ed7c207a809ee70048180895feaf05f"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n2/lamp.json",
+        "sha256": "9a1f670f71b6ccaf46a0065067554f9476c9da3cde7997d69290e929310fc6b1"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n3/one_leg.json",
+        "sha256": "6218a14e8c3af90a09433937029ecfc2f001ce1ee4f67ce8189d3a0711f5ba76"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n3/round_table.json",
+        "sha256": "32ec6d9bd22ee0e62ffb75e7fcb73787162e2df81393c86065a69de44f4f4b84"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n3/lamp.json",
+        "sha256": "d8c021ab19c92a460d0b241dc372189e3d5d985d2ff77acf75470659d91d8572"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n4/one_leg.json",
+        "sha256": "20efbd1229fa1321c5fc8bed2193943ca5bfcb3617a3335bf2568b5244bb79fc"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n4/round_table.json",
+        "sha256": "48bbdaf871b474413b611f42600a1491371180be2c4036a3cd8b2f3ba328abb2"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n4/lamp.json",
+        "sha256": "a9f8e2bb7659f74b9ece1845c6ece0bb039864544d2c753165af8718948a52b7"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n5/one_leg.json",
+        "sha256": "7bf0463e7aaf9e5ea06f76ac787f31bf6674d6b20078528d3f03b5ab67fd9ae2"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n5/round_table.json",
+        "sha256": "203d096e8c9ef73171725066b594f0729ae8821a79b1f2844cb85fb719775186"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n5/lamp.json",
+        "sha256": "b35eee1563955fa863d61408a050d644e544f558de42d6ea29ef06268b13d6aa"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n6/one_leg.json",
+        "sha256": "5714a442b11b6e4fa04e28f530e19d4af5cb9a3cb4c85d2f99b0c1894d3fb7ef"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n6/round_table.json",
+        "sha256": "f77aa9c17bbfe306b58822372b0b014f8adced831f776d6e9cb3977e4c815221"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n0/main-formal/n6/lamp.json",
+        "sha256": "85d6c911b3e7cfd118dbc9ca119ad1fc35a9cd577c464f938e54417838d78af1"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n0/one_leg.json",
+        "sha256": "9d986decdf61cfbcdf9e8febdf130b0aa48ba29c75581c486536cc4a7cd1a37f"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n0/round_table.json",
+        "sha256": "6fa42ecdc29722dd38147f7a0508d843472c8d731daf29eb65749cacef907492"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n0/lamp.json",
+        "sha256": "119c1df921d38305cdf5f5a2968108e14de09c27c9238670e8d91ef450968065"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n1/one_leg.json",
+        "sha256": "07a82aae440d36c439729e1ccde452879dd83bee3a4b3b6be0f179ba668b9e30"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n1/round_table.json",
+        "sha256": "a6847ba57e619a4acaabf3da9fb851b7619927a812645798c6ed7c01b1d8bc85"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n1/lamp.json",
+        "sha256": "5a77492b09cbbbc2eeb69643cba61a6f20554aac98531adeb44ef84ef8a639b9"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n2/one_leg.json",
+        "sha256": "0a2c52f0a551d1d1faecb13621d7fe8df0746a9d3bed38d99f739763e84d5faa"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n2/round_table.json",
+        "sha256": "144831dd99eb19485ea46de4f34434282dbd5d46f1933699694c36edba8203c2"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n2/lamp.json",
+        "sha256": "4dc5c416fda90a5f489ec9b464c3b8e407db93e8a8f780162a73335d089bbcce"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n3/one_leg.json",
+        "sha256": "4d29e2c87f1e759869fa3e614ca8a219984354d2c1267a73d976116fa5ffc8c4"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n3/round_table.json",
+        "sha256": "edbae952681b8d64b267376f619429a42f7cc921da4a0bf707b03326b789772f"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n3/lamp.json",
+        "sha256": "2caa0961c7aeba82afacf72541b081de15958af28f907b457b886410b2bf044c"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n4/one_leg.json",
+        "sha256": "3fa27efff267eda915f39da1eb789970c2432655c2bef6c9c3c996829dca320a"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n4/round_table.json",
+        "sha256": "9487d84ba80fd748960f08bb403a4779554719064c76137d02e070940566f02e"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n4/lamp.json",
+        "sha256": "a4ed1074165bfaa6aa80a204627fc54899acddd2eaf92eb4423931b3d87ca98b"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n5/one_leg.json",
+        "sha256": "d4625fddd827ab440af027644f4750fbd730237a6636d17f5cc915cb7bc9a6f3"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n5/round_table.json",
+        "sha256": "6ba7b1793015a9705d808845335fa413ac5805d1bd3b2da8cdaaf1fe6df007e8"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n5/lamp.json",
+        "sha256": "136e47f0ba6634f48245c41a775bebb16a977a385ac8183fcf639f8b5161745e"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n6/one_leg.json",
+        "sha256": "9ea85bf6887a7466392a8df881f8eee2069c362693530542da0336acf56b6342"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n6/round_table.json",
+        "sha256": "2159edec355e450fdbd3414cdc943420622514cc5715c4545d2cab6cebcbebe1"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n2/2026092201/n6/lamp.json",
+        "sha256": "997eb9f2bf90b85cd892eec9bd9558b6365498d1fb88b2f9d5e106c76a94aaea"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n0/one_leg.json",
+        "sha256": "58306521585b54e6ea8f2832f0f8b218690b247052ab6db912b36bb3e7032320"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n0/round_table.json",
+        "sha256": "ca4f90554eb5898c49ced1f2a677b5cddcb84cb61f908d586abd25d16f968317"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n0/lamp.json",
+        "sha256": "3a43751ed25ae0207ebe8257cc2373b387dde6499990af04d67c9b66e88a141a"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n1/one_leg.json",
+        "sha256": "c3fdbb5ca157c28dc23f7385839f347f0d9d43cbf2f17a117a048e5193679382"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n1/round_table.json",
+        "sha256": "d876290f733dd0ffe64ebd5b7635fb52a2fd1bb30bb47fb90c6ba5620b0430bb"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n1/lamp.json",
+        "sha256": "0f0c8b7a726e155b5f533b25f37f33971caef529ac981bd889ef6d6ee78d633b"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n2/one_leg.json",
+        "sha256": "d55792a689703eea9afec8a9d47f92c03e8036c4996c62dfa3ddc7e03600966e"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n2/round_table.json",
+        "sha256": "71c9829674e477e64c19a08e2a9844a9662e66cf69776828b015517ccc6640ee"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n2/lamp.json",
+        "sha256": "45f1a130738626ad6e3058f490cac6bed822d14a503c170aeccd231d3956e1fe"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n3/one_leg.json",
+        "sha256": "225066a74fce5bddc05a30a8157122691f908762c726c0aba862c483f905193b"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n3/round_table.json",
+        "sha256": "eabefa68764574d60a2a6423280d7d352c315bf4d79ab63667fc799e75ce01f2"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n3/lamp.json",
+        "sha256": "f68af2439a2ce1d14aa41e596ad950fed9c42d551ac4d3a61d9bd37663d55243"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n4/one_leg.json",
+        "sha256": "2e1d12df6836a81007c40ea89f388df8592ef2d1bf317f8e36d331e58085dd21"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n4/round_table.json",
+        "sha256": "6f09c11c60312a6e96626834feacd2be955043d3b52c485104cbad9fa498092b"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n4/lamp.json",
+        "sha256": "4dd91bd10724ceb393a5b5c3698d68a437db42a39c05abd8d926d5de5ebc6485"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n5/one_leg.json",
+        "sha256": "7e33b6cdd6281e9c2249ff31db5f03c7c050806c4eca0741fb0404032360629c"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n5/round_table.json",
+        "sha256": "56182b5d71f4a3fa145b729f2a3ebeec46d299fd62f5aa86f36403a56c4b8213"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n5/lamp.json",
+        "sha256": "51014dde830eb63bf0d244cd97682bc531096d1838ec4c0e521b7eab53cc53b2"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n6/one_leg.json",
+        "sha256": "5663f97cc248851f5b2676703bcd3b6029f6cfa0283476513d4f65098c607d06"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n6/round_table.json",
+        "sha256": "9b03dcf4b9bc6411ebc429858e06b5786ccc56fdc3a8ee8881755783a2942fae"
+      },
+      {
+        "path": "logs/noisy-train-noisy-eval-20260925/full-rollout-pilot12/summaries/n4/2026092201/n6/lamp.json",
+        "sha256": "7f24dd49d26e7eda9dd92d7a6f2616f4d5bee477ff7a5262deb6c65f5075b6b5"
+      }
+    ],
+    "state_bank_summary": {
+      "path": "logs/noisy-train-noisy-eval-20260925/state-bank-n24-m1-combined-v1/paired_summary.json",
+      "sha256": "1db7440f37c04e33c895176c4528ce213feb1aefd09e917d354d4ed4c3f711ff"
+    }
+  }
+}

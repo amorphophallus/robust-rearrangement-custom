@@ -13,6 +13,14 @@ from src.common.types import Trajectory, Observation
 from src.common.geometry import np_action_6d_to_quat
 from src.common.eepose import ROBOT_BASE, SIM_LOCAL
 from src.common.guidance import GUIDANCE_SCHEMA_VERSION
+from src.eval.annotation_noise import (
+    FIXED_GUIDANCE_POINT_NOISE_STD_M,
+    generate_fixed_guidance_point_noise,
+)
+from src.eval.skill_annotation_util import (
+    project_3d_to_2d,
+    project_3d_to_2d_nearest_in_bounds,
+)
 from src.data_collection.pickle_contract import (
     CANONICAL_IMAGE_SIZE,
     camera_calibration_to_robot_base,
@@ -238,6 +246,9 @@ def save_raw_rollout(
     guidance_frame: str = ROBOT_BASE,
     collection_metadata: dict = None,
     preserve_full_frame_images: bool = False,
+    record_fixed_guidance_noise: bool = False,
+    guidance_noise_seed: int = 0,
+    guidance_noise_episode_index: int = 0,
 ):
     source_shapes = {
         "color_image1": tuple(np.asarray(imgs1).shape[1:3]),
@@ -328,10 +339,71 @@ def save_raw_rollout(
     if vlm_annotations is None:
         vlm_annotations = [None] * len(robot_states)
 
+    fixed_noise = None
+    guidance_points_n2 = [None] * len(robot_states)
+    guidance_points_n4 = [None] * len(robot_states)
+    guidance_points_2d_n2 = [None] * len(robot_states)
+    guidance_points_2d_n4 = [None] * len(robot_states)
+    guidance_point_standard_noise = [None] * len(robot_states)
+    if record_fixed_guidance_noise:
+        if annotation_source != "scripted":
+            raise ValueError(
+                "Fixed n2/n4 guidance targets require annotation_source='scripted'."
+            )
+        if guidance_frame != ROBOT_BASE:
+            raise ValueError(
+                "Fixed n2/n4 guidance targets require robot-base clean guidance."
+            )
+        phase_keys = [
+            (assembly_step, skill_state, skill)
+            for assembly_step, skill_state, skill in zip(
+                assembly_steps, skill_states, skills
+            )
+        ]
+        fixed_noise = generate_fixed_guidance_point_noise(
+            guidance_points_clean,
+            phase_keys,
+            seed=guidance_noise_seed,
+            episode_index=guidance_noise_episode_index,
+        )
+        guidance_points_n2 = fixed_noise["n2"]
+        guidance_points_n4 = fixed_noise["n4"]
+        guidance_point_standard_noise = fixed_noise["standard_noise"]
+
+        def project_front(points):
+            projected = []
+            for frame_idx, (point, camera_info) in enumerate(
+                zip(points, camera_infos)
+            ):
+                if not isinstance(camera_info, dict):
+                    raise ValueError(
+                        f"Missing per-frame camera info at frame {frame_idx}."
+                    )
+                front_camera = camera_info.get("color_image2")
+                if not isinstance(front_camera, dict):
+                    raise ValueError(
+                        f"Missing front-camera calibration at frame {frame_idx}."
+                    )
+                projected.append(
+                    {"color_image2": project_3d_to_2d(point, front_camera)}
+                )
+            return projected
+
+        guidance_points_2d_n2 = project_front(guidance_points_n2)
+        guidance_points_2d_n4 = project_front(guidance_points_n4)
+
     if not preserve_full_frame_images:
         guidance_points_2d = [
             center_crop_point_mapping(value, source_shapes, CANONICAL_IMAGE_SIZE)
             for value in guidance_points_2d
+        ]
+        guidance_points_2d_n2 = [
+            center_crop_point_mapping(value, source_shapes, CANONICAL_IMAGE_SIZE)
+            for value in guidance_points_2d_n2
+        ]
+        guidance_points_2d_n4 = [
+            center_crop_point_mapping(value, source_shapes, CANONICAL_IMAGE_SIZE)
+            for value in guidance_points_2d_n4
         ]
         grasp_annotations_2d = [
             center_crop_grasp_mapping(value, source_shapes, CANONICAL_IMAGE_SIZE)
@@ -369,6 +441,11 @@ def save_raw_rollout(
         guidance_poses_clean,
         guidance_gripper_widths,
         guidance_points_2d,
+        guidance_points_n2,
+        guidance_points_2d_n2,
+        guidance_points_n4,
+        guidance_points_2d_n4,
+        guidance_point_standard_noise,
         grasp_annotations_2d,
         oracle_skills,
         oracle_guidance_points_2d,
@@ -392,6 +469,11 @@ def save_raw_rollout(
             guidance_pose_clean,
             guidance_gripper_width,
             guidance_point_2d,
+            guidance_point_n2,
+            guidance_point_2d_n2,
+            guidance_point_n4,
+            guidance_point_2d_n4,
+            guidance_point_noise_standard,
             grasp_annotation_2d,
             oracle_skill,
             oracle_guidance_point_2d,
@@ -434,6 +516,11 @@ def save_raw_rollout(
             "guidance_frame": guidance_frame,
             "guidance_gripper_width": guidance_gripper_width,
             "guidance_point_2d": guidance_point_2d,
+            "guidance_point_n2": guidance_point_n2,
+            "guidance_point_2d_n2": guidance_point_2d_n2,
+            "guidance_point_n4": guidance_point_n4,
+            "guidance_point_2d_n4": guidance_point_2d_n4,
+            "guidance_point_noise_standard": guidance_point_noise_standard,
             "grasp_annotation_2d": grasp_annotation_2d,
         }
         if include_vlm_metadata:
@@ -461,6 +548,26 @@ def save_raw_rollout(
             front_camera_info = camera_calibration_to_robot_base(
                 front_camera_info, robot_states[0]
             )
+
+    if record_fixed_guidance_noise:
+        if not isinstance(front_camera_info, dict):
+            raise ValueError("Missing final front-camera calibration for fixed guidance.")
+        # The source images and their 3-D scripted geometry are immutable.  If
+        # noise moves a marker outside the final 224px crop, retain that exact
+        # 3-D point and use its nearest valid image pixel for the 2-D marker.
+        for observation in observations:
+            for point_key, point_2d_key in (
+                ("guidance_point_clean", "guidance_point_2d"),
+                ("guidance_point_n2", "guidance_point_2d_n2"),
+                ("guidance_point_n4", "guidance_point_2d_n4"),
+            ):
+                point = observation.get(point_key)
+                pixel = project_3d_to_2d_nearest_in_bounds(point, front_camera_info)
+                if pixel is None:
+                    raise ValueError(
+                        f"No valid front-camera projection for {point_key}: {point!r}"
+                    )
+                observation[point_2d_key] = {"color_image2": pixel.astype(np.float32)}
 
     if action_type == "pos":
 
@@ -541,6 +648,17 @@ def save_raw_rollout(
         "guidance_schema_version": GUIDANCE_SCHEMA_VERSION,
         "collection_metadata": resolved_collection_metadata,
     }
+    if record_fixed_guidance_noise:
+        data["guidance_noise"] = {
+            "version": 1,
+            "mode": "gaussian_clip_2sigma",
+            "sampling_scope": "phase",
+            "seed": int(guidance_noise_seed),
+            "episode_index": int(guidance_noise_episode_index),
+            "shared_standard_sample_across_levels": True,
+            "levels": dict(FIXED_GUIDANCE_POINT_NOISE_STD_M),
+            "off_image_2d_policy": "nearest_in_bounds_pixel",
+        }
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S.%f")
     output_path = rollout_save_dir / ("success" if success else "failure")

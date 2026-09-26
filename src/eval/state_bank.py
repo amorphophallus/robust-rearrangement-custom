@@ -3,8 +3,10 @@
 The state contract deliberately stores Isaac Gym actor-root and DOF tensors,
 instead of reconstructing state from policy observations.  Actor-root rows are
 13-vectors ``[position, quaternion, linear velocity, angular velocity]`` and
-DOF rows are ``[position, velocity]``.  Isaac Gym does not expose its contact
-solver cache, so contact continuity must be validated empirically after restore.
+DOF rows are ``[position, velocity]``.  FurnitureBench exposes actor-root
+positions in each environment's local frame, even when parallel environments
+have nonzero layout origins.  Isaac Gym does not expose its contact solver
+cache, so contact continuity must be validated empirically after restore.
 """
 
 from __future__ import annotations
@@ -83,6 +85,7 @@ def _actor_layout(env, env_idx: int, actors_per_env: int) -> dict[str, Any]:
     return {
         "actors_per_env": int(actors_per_env),
         "global_actor_start": int(global_start),
+        "root_state_frame": "env-local",
         "env_origin": np.asarray(
             [origin.x, origin.y, origin.z], dtype=np.float32
         ),
@@ -183,9 +186,20 @@ def translate_root_state_origin(
 def _root_state_for_target_env(
     env, physics_state: Mapping[str, Any], root_state: np.ndarray, env_idx: int
 ) -> np.ndarray:
+    layout = physics_state.get("layout", {})
+    # FurnitureBench's root tensor is env-local.  Older v2 records did not
+    # declare the frame, so treat a missing marker as env-local too.  Translating
+    # those records by the visual grid origin moves actors away from the target
+    # camera when restoring a state captured from env_idx > 0 into env 0.
+    frame = layout.get("root_state_frame", "env-local")
+    if frame == "env-local":
+        return np.asarray(root_state, dtype=np.float32).copy()
+    if frame != "sim-world":
+        raise ValueError(f"Unsupported actor-root coordinate frame: {frame!r}")
+
     origin = env.isaac_gym.get_env_origin(env.envs[env_idx])
     target_origin = np.asarray([origin.x, origin.y, origin.z], dtype=np.float32)
-    saved_origin = physics_state.get("layout", {}).get(
+    saved_origin = layout.get(
         "env_origin", np.zeros(3, dtype=np.float32)
     )
     return translate_root_state_origin(
@@ -250,6 +264,113 @@ def rebuild_furniturebench_contact_cache(env, *, physics_steps: int = 1) -> None
         raise ValueError("physics_steps must be positive")
     for _ in range(int(physics_steps)):
         env.isaac_gym.simulate(env.sim)
+    env.isaac_gym.fetch_results(env.sim, True)
+    refresh_furniturebench_tensors(env, render_cameras=True)
+
+
+def settle_gripper_with_pinned_furniture(
+    env,
+    records: Iterable[Mapping[str, Any]],
+    *,
+    physics_steps: int = 3,
+    arm_dof_count: int = 7,
+) -> None:
+    """Rebuild contacts while furniture and arm joints remain pinned.
+
+    The two Franka finger joints are allowed to move into a contact-consistent
+    configuration.  After each settling step, all actor roots and arm joints
+    are restored to their saved zero-velocity state while the settled finger
+    positions are retained.  One final unpinned physics step applies the last
+    queued setters and verifies that the released state is physically stable.
+    """
+
+    from isaacgym import gymtorch
+
+    records = list(records)
+    if len(records) != int(env.num_envs):
+        raise ValueError("pinned settle requires one record for every environment")
+    if physics_steps <= 0:
+        raise ValueError("physics_steps must be positive")
+
+    root_by_env = env.root_tensor.view(int(env.num_envs), -1, 13)
+    dof_by_env = env.dof_states.view(int(env.num_envs), -1, 2)
+    if not 0 < int(arm_dof_count) < int(dof_by_env.shape[1]):
+        raise ValueError("arm_dof_count must leave at least one gripper DOF")
+    actors_per_env = int(root_by_env.shape[1])
+    saved_roots = []
+    saved_dofs = []
+    for env_idx, record in enumerate(records):
+        root_state, dof_state = state_arrays_for_restore(
+            record["physics"], restore_velocity=False
+        )
+        saved_roots.append(
+            _root_state_for_target_env(
+                env, record["physics"], root_state, env_idx
+            )
+        )
+        saved_dofs.append(dof_state)
+
+    actor_indices = torch.arange(
+        int(env.num_envs) * actors_per_env,
+        device=env.device,
+        dtype=torch.int32,
+    )
+    franka_indices = env.franka_actor_idxs_all_t.reshape(-1).to(
+        device=env.device, dtype=torch.int32
+    )
+
+    for _ in range(int(physics_steps)):
+        env.isaac_gym.simulate(env.sim)
+        env.isaac_gym.fetch_results(env.sim, True)
+        refresh_furniturebench_tensors(env, render_cameras=False)
+        settled_fingers = dof_by_env[:, arm_dof_count:, 0].clone()
+        for env_idx, (root_state, dof_state) in enumerate(
+            zip(saved_roots, saved_dofs)
+        ):
+            root_by_env[env_idx].copy_(
+                torch.as_tensor(
+                    root_state, device=env.device, dtype=root_by_env.dtype
+                )
+            )
+            dof_by_env[env_idx, :arm_dof_count].copy_(
+                torch.as_tensor(
+                    dof_state[:arm_dof_count],
+                    device=env.device,
+                    dtype=dof_by_env.dtype,
+                )
+            )
+            dof_by_env[env_idx, arm_dof_count:, 0].copy_(
+                settled_fingers[env_idx]
+            )
+            dof_by_env[env_idx, arm_dof_count:, 1].zero_()
+
+        ok = env.isaac_gym.set_actor_root_state_tensor_indexed(
+            env.sim,
+            gymtorch.unwrap_tensor(env.root_tensor),
+            gymtorch.unwrap_tensor(actor_indices),
+            actor_indices.numel(),
+        )
+        if ok is False:
+            raise RuntimeError("Isaac Gym rejected pinned actor-root restoration")
+        ok = env.isaac_gym.set_dof_state_tensor_indexed(
+            env.sim,
+            gymtorch.unwrap_tensor(env.dof_states),
+            gymtorch.unwrap_tensor(franka_indices),
+            franka_indices.numel(),
+        )
+        if ok is False:
+            raise RuntimeError("Isaac Gym rejected pinned DOF restoration")
+        env.isaac_gym.set_dof_position_target_tensor(
+            env.sim, gymtorch.unwrap_tensor(env.dof_pos.contiguous())
+        )
+        zero_effort = torch.zeros_like(env.dof_pos)
+        env.isaac_gym.set_dof_actuation_force_tensor(
+            env.sim, gymtorch.unwrap_tensor(zero_effort)
+        )
+
+    # Apply the final queued pin, then release for one step so the audit and
+    # first policy observation see an applied, physically active state.
+    env.isaac_gym.simulate(env.sim)
     env.isaac_gym.fetch_results(env.sim, True)
     refresh_furniturebench_tensors(env, render_cameras=True)
 

@@ -95,6 +95,12 @@ def build_parser():
     parser.add_argument("--rollout-after-success", action="append", default=[], metavar="TASK=N")
     parser.add_argument("--checkpoint", action="append", default=[], metavar="TASK=PATH")
     parser.add_argument("--compress-pickles", action="store_true")
+    parser.add_argument(
+        "--record-fixed-guidance-noise",
+        action="store_true",
+        help="Persist paired n2/n4 3-D and projected 2-D guidance targets.",
+    )
+    parser.add_argument("--guidance-noise-seed", type=int, default=0)
     parser.add_argument("--allow-existing-output", action="store_true")
     parser.add_argument("--vlm-base-url", default=os.environ.get("VLM_GUIDANCE_URL"))
     parser.add_argument("--vlm-query-interval", type=int, default=None)
@@ -197,6 +203,14 @@ def main():
         ]
         if args.compress_pickles:
             command.append("--compress-pickles")
+        if args.record_fixed_guidance_noise:
+            command.extend(
+                (
+                    "--record-fixed-guidance-noise",
+                    "--annotation-noise-seed",
+                    str(args.guidance_noise_seed + TASK_SEED_OFFSETS[task]),
+                )
+            )
         if args.verbose:
             command.append("--verbose")
         if args.annotation_source == "vlm":

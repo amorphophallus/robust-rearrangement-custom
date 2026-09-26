@@ -787,7 +787,11 @@ if __name__ == "__main__":
         "--wrist-image-transform",
         choices=("checkpoint", "legacy-resize", "center-crop-224"),
         default="checkpoint",
-        help="Policy-facing wrist spatial transform for checkpoint compatibility.",
+        help=(
+            "Policy-facing wrist RGB-D spatial transform. Use center-crop-224 "
+            "for checkpoints trained on canonical 224x224 center-cropped LMDBs; "
+            "checkpoint preserves the transform saved in the training config."
+        ),
     )
 
     parser.add_argument(
@@ -895,6 +899,14 @@ if __name__ == "__main__":
     parser.add_argument("--annotation-noise-pos-std-m", type=float, default=0.0)
     parser.add_argument("--annotation-noise-ori-std-deg", type=float, default=0.0)
     parser.add_argument("--annotation-noise-seed", type=int, default=0)
+    parser.add_argument(
+        "--record-fixed-guidance-noise",
+        action="store_true",
+        help=(
+            "Persist clean, n2 (6 mm), and n4 (24 mm) 3-D/2-D guidance targets "
+            "in every scripted raw pickle without drawing on source RGB."
+        ),
+    )
     parser.add_argument(
         "--annotation-noise-mode",
         type=str,
@@ -1357,6 +1369,10 @@ if __name__ == "__main__":
                 uses_grasp_part = model_uses_grasp_part(cfg)
                 resolved_eval_annotations = _resolve_eval_annotation_settings(cfg, args)
                 actor_name = cfg.actor_name if "actor_name" in cfg else cfg.actor.name
+                # The canonical dataset contract uses positive metric depth,
+                # while Isaac Gym's camera tensor is negative along camera z.
+                # Older single-FB checkpoints may not carry a complete
+                # observation_type field, so retain the RGB-D encoder fallback.
                 cfg_observation_type = str(cfg.get("observation_type", ""))
                 cfg_vision_model = str(
                     cfg.get("vision_encoder", {}).get("model", "")
@@ -1396,7 +1412,9 @@ if __name__ == "__main__":
                     actor.camera1_transform.spatial_transform = (
                         LEGACY_224_SPATIAL_TRANSFORM
                     )
-                resolved_wrist_image_transform = actor.camera1_transform.spatial_transform
+                resolved_wrist_image_transform = (
+                    actor.camera1_transform.spatial_transform
+                )
                 resolved_wrist_policy_size = (
                     [240, 320]
                     if resolved_wrist_image_transform == "none"
@@ -1740,6 +1758,8 @@ if __name__ == "__main__":
                         vlm_noise_projection_samples=(
                             args.vlm_noise_projection_samples
                         ),
+                        record_fixed_guidance_noise=args.record_fixed_guidance_noise,
+                        guidance_noise_seed=args.annotation_noise_seed,
                         state_bank_out_dir=(
                             Path(args.state_bank_out_dir)
                             if args.state_bank_out_dir
@@ -1808,7 +1828,9 @@ if __name__ == "__main__":
                         "wrist_image_policy_size": resolved_wrist_policy_size,
                         "eval_depth_positive_meters": depth_positive_meters,
                         "eval_depth_contract": (
-                            "positive_meters" if depth_positive_meters else "not_applicable"
+                            "positive_meters"
+                            if depth_positive_meters
+                            else "not_applicable"
                         ),
                         "action_type": args.action_type,
                         "annotation_source": args.annotation_source,
@@ -2044,7 +2066,9 @@ if __name__ == "__main__":
                         "wrist_image_policy_size": resolved_wrist_policy_size,
                         "eval_depth_positive_meters": depth_positive_meters,
                         "eval_depth_contract": (
-                            "positive_meters" if depth_positive_meters else "not_applicable"
+                            "positive_meters"
+                            if depth_positive_meters
+                            else "not_applicable"
                         ),
                         "action_type": args.action_type,
                         "annotation_source": args.annotation_source,

@@ -1,0 +1,77 @@
+{
+  "schema": "rr-clean-skill-level-checkpoints-v1",
+  "conditions": [
+    {
+      "id": "rgb",
+      "label": "RGB",
+      "checkpoints": [
+        {"train_seed": "2026090701", "path": "checkpoints/main_supplement_0906/seed2026090701/rgb/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026090702", "path": "checkpoints/main_supplement_0906/seed2026090702/rgb/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026091701", "path": "checkpoints/main_retrain_0917/seed2026091701/rgb/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"}
+      ]
+    },
+    {
+      "id": "rgbd",
+      "label": "RGB-D",
+      "checkpoints": [
+        {"train_seed": "2026090701", "path": "checkpoints/main_supplement_0906/seed2026090701/rgbd/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026090702", "path": "checkpoints/main_supplement_0906/seed2026090702/rgbd/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026091701", "path": "checkpoints/main_retrain_0917/seed2026091701/rgbd/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"}
+      ]
+    },
+    {
+      "id": "rgbd_skill",
+      "label": "RGB-D+skill",
+      "checkpoints": [
+        {"train_seed": "main-formal", "path": "checkpoints/joint_0906/formal/rgbd_skill/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026090701", "path": "checkpoints/main_supplement_0906/seed2026090701/rgbd_skill/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026090702", "path": "checkpoints/main_supplement_0906/seed2026090702/rgbd_skill/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"}
+      ]
+    },
+    {
+      "id": "rgbd_gp",
+      "label": "RGB-D+GP",
+      "checkpoints": [
+        {"train_seed": "main-formal", "path": "checkpoints/joint_0906/formal/rgbd_gp/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "main-paired", "path": "checkpoints/joint_0906/paired/rgbd_gp/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "main-batch256", "path": "checkpoints/joint_0906/batch256/rgbd_gp/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"}
+      ]
+    },
+    {
+      "id": "rgbd_colored_gp",
+      "label": "RGB-D+colored GP (TAGPoint)",
+      "checkpoints": [
+        {"train_seed": "main-formal", "path": "checkpoints/joint_0906/formal/rgbd_colored_gp/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026090701", "path": "checkpoints/main_supplement_0906/seed2026090701/rgbd_colored_gp/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026090702", "path": "checkpoints/main_supplement_0906/seed2026090702/rgbd_colored_gp/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"}
+      ]
+    },
+    {
+      "id": "rgbd_gp_skill",
+      "label": "RGB-D+GP+skill",
+      "checkpoints": [
+        {"train_seed": "main-formal", "path": "checkpoints/joint_0906/formal/rgbd_gp_skill/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026090701", "path": "checkpoints/main_supplement_0906/seed2026090701/rgbd_gp_skill/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026090702", "path": "checkpoints/main_supplement_0906/seed2026090702/rgbd_gp_skill/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"}
+      ]
+    },
+    {
+      "id": "rgbd_grasp_part",
+      "label": "RGB-D+grasp",
+      "checkpoints": [
+        {"train_seed": "main-formal", "path": "checkpoints/joint_0906/formal/rgbd_grasp_part/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026090701", "path": "checkpoints/main_supplement_0906/seed2026090701/rgbd_grasp_part/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026090702", "path": "checkpoints/main_supplement_0906/seed2026090702/rgbd_grasp_part/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"}
+      ]
+    },
+    {
+      "id": "rgbd_grasp_part_colored",
+      "label": "RGB-D+colored grasp",
+      "checkpoints": [
+        {"train_seed": "main-formal", "path": "checkpoints/joint_0906/formal/rgbd_grasp_part_colored/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026090701", "path": "checkpoints/main_supplement_0906/seed2026090701/rgbd_grasp_part_colored/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"},
+        {"train_seed": "2026090702", "path": "checkpoints/main_supplement_0906/seed2026090702/rgbd_grasp_part_colored/actor_chkpt_last.pt", "wrist_image_transform": "center-crop-224"}
+      ]
+    }
+  ]
+}

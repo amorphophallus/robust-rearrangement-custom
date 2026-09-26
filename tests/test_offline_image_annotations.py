@@ -18,6 +18,15 @@ def make_observation(skill="pick"):
         "guidance_point_2d": {
             "color_image2": np.array([20.0, 20.0], dtype=np.float32),
         },
+        "guidance_point_clean": np.array([0.0, 0.0, 1.0], dtype=np.float32),
+        "guidance_point_n2": np.array([0.1, 0.0, 1.0], dtype=np.float32),
+        "guidance_point_n4": np.array([0.4, 0.0, 1.0], dtype=np.float32),
+        "guidance_point_2d_n2": {
+            "color_image2": np.array([22.0, 20.0], dtype=np.float32),
+        },
+        "guidance_point_2d_n4": {
+            "color_image2": np.array([28.0, 20.0], dtype=np.float32),
+        },
         "grasp_annotation_2d": {
             "color_image2": {
                 "style": "grasp_rect",
@@ -124,6 +133,43 @@ class OfflineImageAnnotationTest(unittest.TestCase):
                     use_skill_color=True,
                 )
                 np.testing.assert_array_equal(output["color_image2"], expected)
+
+    def test_noisy_guidance_point_uses_requested_frozen_level(self):
+        observation = make_observation(skill="push")
+        output = annotate_observation_image(
+            observation, "guidance-point", guidance_noise_level="n4"
+        )
+        self.assertGreater(output["color_image2"][20, 28, 0], 0)
+        np.testing.assert_array_equal(output["color_image2"][20, 20], 0)
+
+    def test_noisy_grasp_translates_pose_without_rotating_rectangle(self):
+        observation = make_observation(skill="pick")
+        observation["guidance_pose_clean"] = np.eye(4, dtype=np.float32)
+        observation["guidance_pose_clean"][2, 3] = 1.0
+        camera_info = {
+            "front_camera": {
+                "image_size": np.array([40, 40]),
+                "intrinsics": np.array(
+                    [[20.0, 0.0, 20.0], [0.0, 20.0, 20.0], [0.0, 0.0, 1.0]]
+                ),
+                "robot_base_to_camera": np.eye(4),
+            }
+        }
+        clean = annotate_observation_image(
+            observation,
+            "grasp-part",
+            trajectory_camera_info=camera_info,
+            guidance_noise_level="clean",
+        )
+        noisy = annotate_observation_image(
+            observation,
+            "grasp-part",
+            trajectory_camera_info=camera_info,
+            guidance_noise_level="n2",
+        )
+        clean_x = np.nonzero(clean["color_image2"])[1].mean()
+        noisy_x = np.nonzero(noisy["color_image2"])[1].mean()
+        self.assertGreater(noisy_x, clean_x)
 
     def test_unknown_mode_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unknown image annotation mode"):

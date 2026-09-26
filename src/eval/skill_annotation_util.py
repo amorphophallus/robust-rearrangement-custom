@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import copy
 import math
+import os
 from typing import Dict, Optional
 
 import cv2
@@ -223,6 +224,42 @@ def project_3d_to_2d(
     if uv[0] < 0 or uv[0] >= image_width or uv[1] < 0 or uv[1] >= image_height:
         return None
     return uv.astype(np.int32)
+
+
+def project_3d_to_2d_nearest_in_bounds(
+    point_robot_base: np.ndarray,
+    camera_info: Dict[str, np.ndarray],
+) -> Optional[np.ndarray]:
+    """Project a point and clamp an off-image projection to its nearest pixel.
+
+    The 3-D point remains untouched.  This only defines the deterministic 2-D
+    marker location when its pinhole projection lies outside the stored image:
+    clip each continuous image coordinate to the closed pixel domain
+    ``[0, width - 1] x [0, height - 1]``, then round.  A point behind the camera
+    has no corresponding image-domain point and still returns ``None``.
+    """
+
+    if point_robot_base is None:
+        return None
+    image_width, image_height = np.asarray(camera_info["image_size"], dtype=np.int32)
+    point = np.ones(4, dtype=np.float32)
+    point[:3] = np.asarray(point_robot_base, dtype=np.float32)
+    point_cam = np.asarray(camera_info["robot_base_to_camera"], dtype=np.float32) @ point
+    if not np.isfinite(point_cam).all() or point_cam[2] <= 1e-8:
+        return None
+    point_cv = point_cam[:3].copy()
+    point_cv[1] *= -1.0
+    pixel_h = np.asarray(camera_info["intrinsics"], dtype=np.float32) @ point_cv
+    u = float(pixel_h[0] / (pixel_h[2] + 1e-8))
+    v = float(pixel_h[1] / (pixel_h[2] + 1e-8))
+    if not np.isfinite(u) or not np.isfinite(v):
+        return None
+    clipped = np.clip(
+        np.array([u, v], dtype=np.float32),
+        np.array([0.0, 0.0], dtype=np.float32),
+        np.array([image_width - 1.0, image_height - 1.0], dtype=np.float32),
+    )
+    return np.rint(clipped).astype(np.int32)
 
 
 def _pose_to_numpy(guidance_pose) -> Optional[np.ndarray]:
@@ -518,6 +555,18 @@ class SkillAnnotator:
         self.furniture = furniture_factory(self.furniture_name)
         self.furniture.reset()
         self.assemble_idx = 0
+        raw_lamp_threshold = os.environ.get("RR_LAMP_BULB_FSM_POS_THRESHOLD")
+        self.lamp_bulb_fsm_pos_threshold = None
+        if raw_lamp_threshold:
+            values = tuple(float(value) for value in raw_lamp_threshold.split(","))
+            if len(values) != 3 or any(value <= 0 for value in values):
+                raise ValueError(
+                    "RR_LAMP_BULB_FSM_POS_THRESHOLD must contain three positive "
+                    "comma-separated values"
+                )
+            self.lamp_bulb_fsm_pos_threshold = values
+        self.lamp_bulb_fsm_confirm_steps = 0
+        self.lamp_bulb_fsm_assembled = False
 
     def _reset_parts(self):
         self.furniture.reset()
@@ -525,6 +574,8 @@ class SkillAnnotator:
     def reset(self):
         self.furniture.reset()
         self.assemble_idx = 0
+        self.lamp_bulb_fsm_confirm_steps = 0
+        self.lamp_bulb_fsm_assembled = False
         self.previous_skill = None
         self.previous_guidance_point_robot = None
         self.previous_guidance_pose_robot = None
@@ -583,6 +634,8 @@ class SkillAnnotator:
             name: self._snapshot_value(getattr(self, name))
             for name in (
                 "noise_seed_offset",
+                "lamp_bulb_fsm_confirm_steps",
+                "lamp_bulb_fsm_assembled",
                 "previous_skill",
                 "previous_guidance_point_robot",
                 "previous_guidance_pose_robot",
@@ -660,6 +713,43 @@ class SkillAnnotator:
 
     def _assembled(self, annotation_inputs, part_idx1, part_idx2):
         pair = (part_idx1, part_idx2)
+        lamp_fsm_override = (
+            self.furniture_name == "lamp"
+            and pair == (0, 1)
+            and self.lamp_bulb_fsm_pos_threshold is not None
+        )
+        if lamp_fsm_override:
+            part1 = self.furniture.parts[part_idx1]
+            part2 = self.furniture.parts[part_idx2]
+            rb_states = annotation_inputs["rb_states"]
+            part_idxs = annotation_inputs["part_idxs"]
+            part1_pose = C.to_homogeneous(
+                rb_states[part_idxs[part1.name]][0][:3],
+                C.quat2mat(rb_states[part_idxs[part1.name]][0][3:7]),
+            )
+            part2_pose = C.to_homogeneous(
+                rb_states[part_idxs[part2.name]][0][:3],
+                C.quat2mat(rb_states[part_idxs[part2.name]][0][3:7]),
+            )
+            rel_pose = torch_inv(part1_pose) @ part2_pose
+            original_threshold = self.furniture.assembled_pos_threshold
+            try:
+                self.furniture.assembled_pos_threshold = list(
+                    self.lamp_bulb_fsm_pos_threshold
+                )
+                assembled_now = self.furniture.assembled(
+                    rel_pose.cpu().numpy(),
+                    self.furniture.assembled_rel_poses[pair],
+                    pair=pair,
+                )
+            finally:
+                self.furniture.assembled_pos_threshold = original_threshold
+            self.lamp_bulb_fsm_confirm_steps = (
+                self.lamp_bulb_fsm_confirm_steps + 1 if assembled_now else 0
+            )
+            if self.lamp_bulb_fsm_confirm_steps >= 3:
+                self.lamp_bulb_fsm_assembled = True
+            return self.lamp_bulb_fsm_assembled
         if "assembled_mask" in annotation_inputs and annotation_inputs["assembled_mask"] is not None:
             try:
                 pair_idx = self.furniture.should_be_assembled.index(pair)
@@ -827,7 +917,16 @@ class SkillAnnotator:
         num_pairs = len(self.furniture.should_be_assembled)
         if incoming_assemble_idx is not None:
             incoming_assemble_idx = int(incoming_assemble_idx)
-            if self.assemble_idx >= num_pairs or incoming_assemble_idx < self.assemble_idx:
+            fsm_is_intentionally_ahead = (
+                self.furniture_name == "lamp"
+                and self.lamp_bulb_fsm_pos_threshold is not None
+                and self.lamp_bulb_fsm_assembled
+                and incoming_assemble_idx < self.assemble_idx
+            )
+            if self.assemble_idx >= num_pairs or (
+                incoming_assemble_idx < self.assemble_idx
+                and not fsm_is_intentionally_ahead
+            ):
                 self.assemble_idx = incoming_assemble_idx
         camera_info = _build_camera_info(
             annotation_inputs,
@@ -857,7 +956,10 @@ class SkillAnnotator:
                 )
             return {
                 "skill": self.previous_skill,
-                "skill_state": self.previous_skill_state,
+                # Publish an explicit terminal FSM state.  Keeping the prior
+                # screw/place label here made a completed final skill
+                # indistinguishable from one that was still active.
+                "skill_state": "done",
                 "assembly_step": self.previous_assembly_step,
                 "guidance_point": self.previous_guidance_point,
                 "guidance_point_clean": self.previous_guidance_point_clean,
@@ -869,7 +971,10 @@ class SkillAnnotator:
                 "grasp_annotation_2d": grasp_annotation_2d,
                 "camera_info": camera_info,
                 "verify": None,
-                "debug": {"phase": "complete"},
+                "debug": {
+                    "phase": "complete",
+                    "completed_skill_state": self.previous_skill_state,
+                },
                 "annotation_noise": dict(self.previous_annotation_noise or {}),
             }
 
@@ -937,7 +1042,11 @@ class SkillAnnotator:
         if incoming_assemble_idx is not None:
             self.assemble_idx = max(self.assemble_idx, incoming_assemble_idx)
 
-        if skill is None or skill_state == "done":
+        # Do not advance the published phase label until its scripted geometry
+        # is available.  Some FurnitureBench part FSMs expose the next skill one
+        # control step before ``get_guidance_point()`` becomes valid; advancing
+        # only the label would create a mislabeled frame with a missing target.
+        if skill is None or skill_state == "done" or guidance_point_robot is None:
             skill = self.previous_skill
             skill_state_label = self.previous_skill_state
             assembly_step = self.previous_assembly_step

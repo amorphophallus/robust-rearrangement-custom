@@ -1,5 +1,6 @@
 import gzip
 import pickle
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -9,6 +10,7 @@ from src.eval.state_bank import (
     _EnvSkillClock,
     _active_part_stage,
     _randomness_name,
+    _root_state_for_target_env,
     load_state_record,
     save_state_record,
     state_arrays_for_restore,
@@ -145,3 +147,61 @@ def test_load_rejects_unvalidated_pickle(tmp_path):
         pickle.dump({"schema": "wrong"}, stream)
     with pytest.raises(ValueError, match="schema"):
         load_state_record(path)
+
+
+class _FakeGym:
+    def get_env_origin(self, env):
+        return env.origin
+
+
+def _fake_env(origin):
+    return SimpleNamespace(
+        isaac_gym=_FakeGym(),
+        envs=[SimpleNamespace(origin=SimpleNamespace(**origin))],
+    )
+
+
+def test_legacy_furniturebench_root_state_is_env_local():
+    root_state = np.zeros((2, 13), dtype=np.float32)
+    root_state[:, :3] = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    physics_state = {"layout": {"env_origin": [0.0, 4.0, 0.0]}}
+
+    restored = _root_state_for_target_env(
+        _fake_env({"x": 0.0, "y": 0.0, "z": 0.0}),
+        physics_state,
+        root_state,
+        0,
+    )
+
+    np.testing.assert_array_equal(restored, root_state)
+    assert restored is not root_state
+
+
+def test_explicit_sim_world_root_state_is_translated():
+    root_state = np.zeros((1, 13), dtype=np.float32)
+    root_state[0, :3] = [2.1, 0.2, 0.3]
+    physics_state = {
+        "layout": {
+            "root_state_frame": "sim-world",
+            "env_origin": [2.0, 0.0, 0.0],
+        }
+    }
+
+    restored = _root_state_for_target_env(
+        _fake_env({"x": 0.0, "y": 3.0, "z": 0.0}),
+        physics_state,
+        root_state,
+        0,
+    )
+
+    np.testing.assert_allclose(restored[0, :3], [0.1, 3.2, 0.3], atol=1e-6)
+
+
+def test_unknown_root_state_frame_fails_closed():
+    with pytest.raises(ValueError, match="coordinate frame"):
+        _root_state_for_target_env(
+            _fake_env({"x": 0.0, "y": 0.0, "z": 0.0}),
+            {"layout": {"root_state_frame": "camera"}},
+            np.zeros((1, 13), dtype=np.float32),
+            0,
+        )

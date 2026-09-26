@@ -6,7 +6,10 @@ from src.common.guidance import (
     transform_guidance_point,
     transform_guidance_pose,
 )
-from src.eval.skill_annotation_util import project_3d_to_2d
+from src.eval.skill_annotation_util import (
+    project_3d_to_2d,
+    project_3d_to_2d_nearest_in_bounds,
+)
 
 
 def test_legacy_sim_guidance_converts_to_robot_base():
@@ -59,4 +62,20 @@ def test_robot_base_camera_transform_preserves_legacy_projection():
     np.testing.assert_array_equal(
         project_3d_to_2d(point_robot, camera),
         [expected_u, expected_v],
+    )
+
+
+def test_nearest_in_bounds_projection_clamps_only_the_2d_marker():
+    camera = {
+        "image_size": np.array([224, 224]),
+        "intrinsics": np.array(
+            [[100.0, 0.0, 112.0], [0.0, 100.0, 112.0], [0.0, 0.0, 1.0]],
+            dtype=np.float32,
+        ),
+        "robot_base_to_camera": np.eye(4, dtype=np.float32),
+    }
+    off_image = np.array([2.0, -2.0, 1.0], dtype=np.float32)
+    assert project_3d_to_2d(off_image, camera) is None
+    np.testing.assert_array_equal(
+        project_3d_to_2d_nearest_in_bounds(off_image, camera), [223, 223]
     )

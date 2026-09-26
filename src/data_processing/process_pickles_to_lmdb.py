@@ -27,7 +27,10 @@ from src.data_processing.process_pickles import (
     process_pickle_file,
     serialize_normalizer_stats,
 )
-from src.data_processing.offline_image_annotations import IMAGE_ANNOTATION_MODES
+from src.data_processing.offline_image_annotations import (
+    GUIDANCE_NOISE_LEVELS,
+    IMAGE_ANNOTATION_MODES,
+)
 from src.dataset.lmdb import (
     EPISODE_INDEX_KEY,
     DEFAULT_FRAME_COMPRESSION,
@@ -596,6 +599,8 @@ def process_episode_group(
     timeline_frequency_hz,
     max_timeline_residual_ms,
     max_camera_residual_ms,
+    require_fixed_guidance_noise,
+    guidance_noise_level,
 ):
     if timeline_mode == "legacy-real-10hz":
         if len(group["paths"]) != 1:
@@ -624,6 +629,8 @@ def process_episode_group(
             required_annotation_source=None,
             include_env_metadata=True,
             trajectory_data=reconstructed,
+            require_fixed_guidance_noise=require_fixed_guidance_noise,
+            guidance_noise_level=guidance_noise_level,
         )
         processed["timeline_report"] = timeline_report
         return processed
@@ -639,6 +646,8 @@ def process_episode_group(
             required_source_image_annotation_mode=required_source_image_annotation_mode,
             required_annotation_source=required_annotation_source,
             include_env_metadata=True,
+            require_fixed_guidance_noise=require_fixed_guidance_noise,
+            guidance_noise_level=guidance_noise_level,
         )
         for path in group["paths"]
     ]
@@ -658,6 +667,8 @@ def process_batch(
     timeline_frequency_hz,
     max_timeline_residual_ms,
     max_camera_residual_ms,
+    require_fixed_guidance_noise,
+    guidance_noise_level,
 ):
     if n_cpus <= 1:
         return [
@@ -673,6 +684,8 @@ def process_batch(
                 timeline_frequency_hz=timeline_frequency_hz,
                 max_timeline_residual_ms=max_timeline_residual_ms,
                 max_camera_residual_ms=max_camera_residual_ms,
+                require_fixed_guidance_noise=require_fixed_guidance_noise,
+                guidance_noise_level=guidance_noise_level,
             )
             for group in batch_groups
         ]
@@ -692,6 +705,8 @@ def process_batch(
                     timeline_frequency_hz=timeline_frequency_hz,
                     max_timeline_residual_ms=max_timeline_residual_ms,
                     max_camera_residual_ms=max_camera_residual_ms,
+                    require_fixed_guidance_noise=require_fixed_guidance_noise,
+                    guidance_noise_level=guidance_noise_level,
                 ),
                 batch_groups,
             )
@@ -850,6 +865,20 @@ def main():
         ),
     )
     parser.add_argument(
+        "--require-fixed-guidance-noise",
+        action="store_true",
+        help=(
+            "Fail closed unless every frame contains finite clean/n2/n4 3-D and "
+            "front-camera 2-D points plus calibration, and preserve them in LMDB."
+        ),
+    )
+    parser.add_argument(
+        "--guidance-noise-level",
+        choices=GUIDANCE_NOISE_LEVELS,
+        default="clean",
+        help="Select the persisted clean/n2/n4 guidance used for image rendering.",
+    )
+    parser.add_argument(
         "--provenance-json",
         type=Path,
         default=None,
@@ -910,6 +939,10 @@ def main():
                 "legacy-real-10hz preserves one source pickle per episode and "
                 "cannot be combined with --episode-groups-json"
             )
+    if args.guidance_noise_level != "clean" and not args.require_fixed_guidance_noise:
+        raise ValueError(
+            "A noisy --guidance-noise-level requires --require-fixed-guidance-noise."
+        )
 
     provenance = {}
     if args.provenance_json is not None:
@@ -1072,6 +1105,8 @@ def main():
             timeline_frequency_hz=args.timeline_frequency_hz,
             max_timeline_residual_ms=args.max_timeline_residual_ms,
             max_camera_residual_ms=args.max_camera_residual_ms,
+            require_fixed_guidance_noise=args.require_fixed_guidance_noise,
+            guidance_noise_level=args.guidance_noise_level,
         )
         batch_image_bytes = 0
         batch_lowdim_bytes = 0
@@ -1281,6 +1316,15 @@ def main():
         "image_annotation_mode": args.image_annotation_mode,
         "source_image_annotation_mode": args.require_source_image_annotation_mode,
         "annotation_source": args.annotation_source,
+        "fixed_guidance_noise_required": args.require_fixed_guidance_noise,
+        "guidance_noise_level": args.guidance_noise_level,
+        "guidance_2d_out_of_bounds_policy": "nearest_in_bounds_pixel",
+        "guidance_noise_definition": {
+            "mode": "gaussian_clip_2sigma",
+            "sampling_scope": "scripted_phase",
+            "shared_standard_sample_across_levels": True,
+            "levels_m": {"n2": 0.006, "n4": 0.024},
+        },
         "timeline_mode": args.timeline_mode,
         "timeline_frequency_hz": args.timeline_frequency_hz,
         "max_timeline_residual_ms": args.max_timeline_residual_ms,

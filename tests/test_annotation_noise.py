@@ -7,8 +7,34 @@ from src.eval.annotation_noise import (
     make_annotation_noise_config,
     load_guidance_shuffle_bank,
     write_guidance_shuffle_bank,
+    generate_fixed_guidance_point_noise,
 )
 import pytest
+
+
+def test_fixed_n2_n4_noise_is_phase_stable_and_exactly_shared():
+    points = [
+        np.array([0.1, 0.2, 0.3], dtype=np.float32),
+        np.array([0.2, 0.3, 0.4], dtype=np.float32),
+        np.array([0.3, 0.4, 0.5], dtype=np.float32),
+    ]
+    variants = generate_fixed_guidance_point_noise(
+        points,
+        [("pick", 0), ("pick", 0), ("place", 0)],
+        seed=0,
+        episode_index=2,
+    )
+
+    np.testing.assert_array_equal(
+        variants["standard_noise"][0], variants["standard_noise"][1]
+    )
+    assert not np.array_equal(
+        variants["standard_noise"][1], variants["standard_noise"][2]
+    )
+    for clean, n2, n4 in zip(points, variants["n2"], variants["n4"]):
+        np.testing.assert_allclose(n4 - clean, 4.0 * (n2 - clean), atol=1e-7)
+        assert np.max(np.abs(n2 - clean)) <= 0.0120001
+        assert np.max(np.abs(n4 - clean)) <= 0.0480001
 
 
 def test_point_noise_keeps_tracking_pose_position_aligned_with_drawn_point():

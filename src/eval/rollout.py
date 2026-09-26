@@ -349,6 +349,7 @@ def resize_crop_depth(obs, key):
     except KeyError:
         pass
 
+
 def squeeze_and_numpy(d: Dict[str, Union[torch.Tensor, np.ndarray, float, int, None]]):
     """
     Recursively squeeze and convert tensors to numpy arrays
@@ -1064,6 +1065,17 @@ def rollout(
     # Resize the depth image
     resize_depth(obs, "depth_image1")
     resize_crop_depth(obs, "depth_image2")
+    wrist_rgb_shape = tuple(obs["color_image1"].shape) if "color_image1" in obs else None
+    wrist_depth_shape = (
+        tuple(obs["depth_image1"].shape)
+        if obs.get("depth_image1") is not None
+        else None
+    )
+    print(
+        "Policy pre-transform wrist observation: "
+        f"rgb={wrist_rgb_shape} "
+        f"depth={wrist_depth_shape}"
+    )
     vlm_predictions: list[VLMPrediction] = []
     if use_vlm:
         initial_annotations, vlm_predictions = _query_vlm_annotations(
@@ -1105,6 +1117,8 @@ def rollout(
     _attach_skill_tensor_to_obs(obs, actor, initial_skills)
 
     if resize_video:
+        # Keep saved rollout pixels on the raw/canonical collection path.  The
+        # policy-only wrist transform must never rewrite source trajectory data.
         resize_image(video_obs, "color_image1")
         resize_crop_image(video_obs, "color_image2")
         resize_depth(video_obs, "depth_image1")
@@ -1710,6 +1724,8 @@ def calculate_success_rate(
     tracking_metric_type: Optional[str] = None,
     vlm_noise_projection_samples: int = DEFAULT_MONTE_CARLO_SAMPLES_PER_PAIR,
     eepose_frame: str = ROBOT_BASE,
+    record_fixed_guidance_noise: bool = False,
+    guidance_noise_seed: int = 0,
     state_bank_out_dir: Optional[Path] = None,
     state_bank_skill_offsets: tuple[int, ...] = (0,),
     state_bank_stride: int = 0,
@@ -2262,6 +2278,11 @@ def calculate_success_rate(
                         eepose_frame=ROBOT_BASE,
                         eepose_original_frame=SIM_LOCAL,
                         policy_eepose_frame=eepose_frame,
+                        record_fixed_guidance_noise=record_fixed_guidance_noise,
+                        guidance_noise_seed=guidance_noise_seed,
+                        guidance_noise_episode_index=(
+                            previous_total_rollouts + env_idx
+                        ),
                     )
                     saved_rollouts_count += 1
 

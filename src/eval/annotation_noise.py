@@ -11,6 +11,12 @@ from src.common.eepose import ROBOT_BASE
 from src.common.guidance import GUIDANCE_SCHEMA_VERSION, normalize_guidance_frame
 
 
+FIXED_GUIDANCE_POINT_NOISE_STD_M = {
+    "n2": 0.006,
+    "n4": 0.024,
+}
+
+
 @dataclass(frozen=True)
 class AnnotationNoiseConfig:
     pos_std_m: float = 0.0
@@ -200,6 +206,69 @@ def _rotation_geodesic_deg(rotation: np.ndarray) -> float:
         ]
     )
     return float(np.degrees(np.arctan2(sine, cosine)))
+
+def generate_fixed_guidance_point_noise(
+    guidance_points,
+    phase_keys,
+    *,
+    seed: int,
+    episode_index: int = 0,
+) -> dict[str, list[np.ndarray]]:
+    """Generate paired n2/n4 point targets once for a complete trajectory.
+
+    One clipped standard-normal vector is sampled on every phase transition and
+    held fixed until the phase changes.  Both noise levels use that same vector,
+    so the n4 displacement is exactly four times the n2 displacement.  This is
+    intentionally an offline data-product operation: every image condition can
+    consume the serialized points without sampling again.
+    """
+
+    points = list(guidance_points)
+    keys = list(phase_keys)
+    if len(points) != len(keys):
+        raise ValueError(
+            "guidance_points and phase_keys must have identical lengths, got "
+            f"{len(points)} and {len(keys)}"
+        )
+    if seed < 0 or episode_index < 0:
+        raise ValueError("seed and episode_index must be non-negative")
+
+    output = {
+        "standard_noise": [],
+        "n2": [],
+        "n4": [],
+    }
+    previous_key = object()
+    standard_noise = None
+    phase_index = 0
+    for frame_index, (point, phase_key) in enumerate(zip(points, keys)):
+        point = np.asarray(point, dtype=np.float32)
+        if point.shape != (3,) or not np.isfinite(point).all():
+            raise ValueError(
+                "Fixed noisy guidance requires a finite clean 3-D point on every "
+                f"frame; frame {frame_index} has shape/value {point!r}"
+            )
+        if phase_key != previous_key:
+            phase_index += 1
+            previous_key = phase_key
+            phase_seed = (
+                int(seed)
+                + int(episode_index) * 1_009_003
+                + phase_index * 9_176
+            )
+            rng = np.random.default_rng(phase_seed)
+            standard_noise = _sample_vector(rng, 1.0, "gaussian_clip_2sigma")
+
+        standard_noise = np.asarray(standard_noise, dtype=np.float32)
+        n2_delta = standard_noise * np.float32(
+            FIXED_GUIDANCE_POINT_NOISE_STD_M["n2"]
+        )
+        # Derive n4 from n2 rather than sampling or rounding independently.
+        n4_delta = n2_delta * np.float32(4.0)
+        output["standard_noise"].append(standard_noise.copy())
+        output["n2"].append((point + n2_delta).astype(np.float32))
+        output["n4"].append((point + n4_delta).astype(np.float32))
+    return output
 
 
 @dataclass

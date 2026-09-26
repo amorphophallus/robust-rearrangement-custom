@@ -68,6 +68,15 @@ TIMESERIES_KEYS = (
     "skill",
     "augment_states",
     "parts_poses",
+    "guidance_point",
+    "guidance_point_2d",
+    "guidance_point_n2",
+    "guidance_point_2d_n2",
+    "guidance_point_n4",
+    "guidance_point_2d_n4",
+    "guidance_point_noise_standard",
+    "front_camera_intrinsics",
+    "front_camera_robot_base_to_camera",
     "obs_valid",
     "timeline_timestamp_ns",
     "source_action_index",
@@ -285,6 +294,8 @@ def process_pickle_file(
     eepose_frame: str = ROBOT_BASE,
     image_size: int = None,
     trajectory_data=None,
+    require_fixed_guidance_noise: bool = False,
+    guidance_noise_level: str = "clean",
 ):
     """
     Process a single pickle file and return processed data.
@@ -354,6 +365,7 @@ def process_pickle_file(
                 observation,
                 image_annotation_mode,
                 trajectory_camera_info=data.get("camera_info"),
+                guidance_noise_level=guidance_noise_level,
             )
             for observation in obs
         ]
@@ -450,6 +462,86 @@ def process_pickle_file(
         if "parts_poses" in obs[0]
         else np.array([], dtype=np.float32)
     )
+
+    def observation_array(key, shape, *, camera_key=None):
+        values = []
+        for observation in obs:
+            value = observation.get(key)
+            if camera_key is not None:
+                value = value.get(camera_key) if isinstance(value, dict) else None
+            if value is None:
+                values.append(np.full(shape, np.nan, dtype=np.float32))
+                continue
+            array = np.asarray(value, dtype=np.float32)
+            if array.shape != shape or not np.isfinite(array).all():
+                raise ValueError(
+                    f"{pickle_path}: invalid {key} value with shape {array.shape}; "
+                    f"expected finite {shape}"
+                )
+            values.append(array)
+        return np.asarray(values, dtype=np.float32)
+
+    guidance_point = observation_array("guidance_point_clean", (3,))
+    guidance_point_2d = observation_array(
+        "guidance_point_2d", (2,), camera_key="color_image2"
+    )
+    guidance_point_n2 = observation_array("guidance_point_n2", (3,))
+    guidance_point_2d_n2 = observation_array(
+        "guidance_point_2d_n2", (2,), camera_key="color_image2"
+    )
+    guidance_point_n4 = observation_array("guidance_point_n4", (3,))
+    guidance_point_2d_n4 = observation_array(
+        "guidance_point_2d_n4", (2,), camera_key="color_image2"
+    )
+    guidance_point_noise_standard = observation_array(
+        "guidance_point_noise_standard", (3,)
+    )
+
+    front_camera = data.get("camera_info", {}).get("front_camera")
+    if isinstance(front_camera, dict):
+        front_intrinsics = np.asarray(
+            front_camera.get("intrinsics"), dtype=np.float32
+        )
+        front_extrinsics = front_camera.get("robot_base_to_camera")
+        if front_extrinsics is None:
+            # Canonicalized legacy files retain the historical key name even
+            # though the matrix now maps robot base to camera.
+            front_extrinsics = front_camera.get("sim_local_to_camera")
+        front_extrinsics = np.asarray(front_extrinsics, dtype=np.float32)
+    else:
+        front_intrinsics = np.full((3, 3), np.nan, dtype=np.float32)
+        front_extrinsics = np.full((4, 4), np.nan, dtype=np.float32)
+    if front_intrinsics.shape != (3, 3):
+        front_intrinsics = np.full((3, 3), np.nan, dtype=np.float32)
+    if front_extrinsics.shape != (4, 4):
+        front_extrinsics = np.full((4, 4), np.nan, dtype=np.float32)
+    front_camera_intrinsics = np.repeat(
+        front_intrinsics[None, ...], len(obs), axis=0
+    )
+    front_camera_robot_base_to_camera = np.repeat(
+        front_extrinsics[None, ...], len(obs), axis=0
+    )
+
+    if require_fixed_guidance_noise:
+        required_arrays = {
+            "guidance_point": guidance_point,
+            "guidance_point_2d": guidance_point_2d,
+            "guidance_point_n2": guidance_point_n2,
+            "guidance_point_2d_n2": guidance_point_2d_n2,
+            "guidance_point_n4": guidance_point_n4,
+            "guidance_point_2d_n4": guidance_point_2d_n4,
+            "guidance_point_noise_standard": guidance_point_noise_standard,
+            "front_camera_intrinsics": front_camera_intrinsics,
+            "front_camera_robot_base_to_camera": front_camera_robot_base_to_camera,
+        }
+        missing = [
+            key for key, value in required_arrays.items() if not np.isfinite(value).all()
+        ]
+        if missing:
+            raise ValueError(
+                f"{pickle_path}: fixed guidance contract has missing/non-finite "
+                f"arrays: {missing}"
+            )
 
     # TODO: Make sure this is rectified in the controller-end and
     # Clip xyz delta position actions to ±0.025
@@ -588,6 +680,15 @@ def process_pickle_file(
         "skill": skill,
         "augment_states": augment_states,
         "parts_poses": parts_poses,
+        "guidance_point": guidance_point,
+        "guidance_point_2d": guidance_point_2d,
+        "guidance_point_n2": guidance_point_n2,
+        "guidance_point_2d_n2": guidance_point_2d_n2,
+        "guidance_point_n4": guidance_point_n4,
+        "guidance_point_2d_n4": guidance_point_2d_n4,
+        "guidance_point_noise_standard": guidance_point_noise_standard,
+        "front_camera_intrinsics": front_camera_intrinsics,
+        "front_camera_robot_base_to_camera": front_camera_robot_base_to_camera,
         **timeline_arrays,
         "episode_length": episode_length,
         "task": task,
