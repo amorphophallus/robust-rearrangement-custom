@@ -23,7 +23,11 @@ from src.behavior.base import (
     model_uses_guidance_point,
     model_uses_guidance_point_colored,
 )
-from src.common.skills import batch_skills_to_onehot_tensor
+from src.common.skills import (
+    SKILL_ORDER,
+    batch_skills_to_onehot_tensor,
+    skill_onehot_to_gripper_action_vector,
+)
 from src.common.image_annotations import resize_guidance_point_for_image
 from src.visualization.render_mp4 import create_in_memory_mp4
 from src.common.context import suppress_all_output
@@ -807,12 +811,20 @@ def _attach_skill_tensor_to_obs(obs, actor: Actor, skills):
     if not getattr(actor, "requires_skill_input", False):
         return
 
-    obs["skill"] = batch_skills_to_onehot_tensor(
+    onehot = batch_skills_to_onehot_tensor(
         skills,
-        skill_dim=getattr(actor, "skill_dim", 0),
+        skill_dim=(
+            len(SKILL_ORDER)
+            if getattr(actor, "gripper_action_vector", False)
+            else getattr(actor, "skill_dim", 0)
+        ),
         device=actor.device,
         dtype=torch.float32,
     )
+    if getattr(actor, "gripper_action_vector", False):
+        obs["gripper_action_vector"] = skill_onehot_to_gripper_action_vector(onehot)
+    else:
+        obs["skill"] = onehot
 
 
 def _query_vlm_annotations(
@@ -953,6 +965,10 @@ def rollout(
     use_vlm = annotation_source == "vlm"
     if annotation_source not in {"scripted", "vlm"}:
         raise ValueError(f"unsupported annotation_source: {annotation_source}")
+    if getattr(actor, "gripper_action_vector", False) and annotation_source != "scripted":
+        raise ValueError(
+            "gripper_action_vector evaluation requires scripted skill annotations."
+        )
     if use_vlm and vlm_client is None:
         raise ValueError("annotation_source=vlm requires a VLM client")
     if saved_media_env_count is None:

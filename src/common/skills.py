@@ -13,6 +13,36 @@ SKILL_TO_ONEHOT = {
     for idx, skill in enumerate(SKILL_ORDER)
 }
 
+# Match the policy action convention: open=-1, close=+1.
+GRIPPER_ACTION_BY_SKILL = {
+    "pick": 1.0,
+    "place": -1.0,
+    "insert": -1.0,
+    "screw": 1.0,
+    "push": -1.0,
+}
+
+
+def skill_onehot_to_gripper_action_vector(skill: torch.Tensor) -> torch.Tensor:
+    """Convert a valid five-way skill one-hot to a raw (..., 1) gripper signal."""
+    if skill.ndim < 1 or skill.shape[-1] != len(SKILL_ORDER):
+        raise ValueError(
+            f"Expected skill one-hot last dimension {len(SKILL_ORDER)}, "
+            f"got {tuple(skill.shape)}."
+        )
+    valid = (
+        torch.isfinite(skill).all()
+        and torch.all((skill == 0) | (skill == 1))
+        and torch.all(skill.sum(dim=-1) == 1)
+    )
+    if not valid:
+        raise ValueError(
+            "gripper_action_vector requires a valid, non-empty skill one-hot "
+            "for every observation."
+        )
+    values = skill.new_tensor([GRIPPER_ACTION_BY_SKILL[name] for name in SKILL_ORDER])
+    return (skill * values).sum(dim=-1, keepdim=True)
+
 
 def _normalize_skill_label(skill: Optional[str]) -> Optional[str]:
     if skill is None:

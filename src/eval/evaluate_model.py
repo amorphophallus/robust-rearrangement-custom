@@ -1344,6 +1344,14 @@ if __name__ == "__main__":
                 )
                 assert cfg.control.control_mode == args.action_type
                 validate_annotation_config(cfg)
+                if (
+                    cfg.get("data", {}).get("gripper_action_vector", False)
+                    and args.annotation_source != "scripted"
+                ):
+                    raise ValueError(
+                        "gripper_action_vector evaluation requires "
+                        "--annotation-source scripted."
+                    )
 
                 print(OmegaConf.to_yaml(cfg))
 

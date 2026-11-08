@@ -7,7 +7,9 @@ import torch
 
 import src.common.geometry as C
 from src.common.control import ControlMode
+from src.common.skills import skill_onehot_to_gripper_action_vector
 from src.dataset.base import BaseSequenceDataset, DatasetShardSpec, EpisodeRef
+from src.dataset.lmdb import validate_gp_skill_gripper_vector_source
 from src.dataset.normalizer import LinearNormalizer
 from src.dataset.storage import build_lazy_image_stores, combine_datasets, combine_episode_subset
 
@@ -345,6 +347,7 @@ class RGBDDataset(BaseSequenceDataset):
         shard_spec: Optional[DatasetShardSpec] = None,
         include_skill_input: bool = True,
         load_skill_metadata: bool = False,
+        gripper_action_vector: bool = False,
     ):
         super().__init__(
             dataset_paths=dataset_paths,
@@ -361,6 +364,11 @@ class RGBDDataset(BaseSequenceDataset):
         self.minority_class_power = minority_class_power
         self.load_into_memory = load_into_memory
         self.include_skill_input = include_skill_input
+        self.gripper_action_vector = gripper_action_vector
+        if self.gripper_action_vector:
+            if not self.include_skill_input:
+                raise ValueError("gripper_action_vector requires skill input.")
+            validate_gp_skill_gripper_vector_source(self.dataset_paths)
         self.load_skill_metadata = load_skill_metadata or include_skill_input
         self.non_image_keys = [
             "robot_state",
@@ -403,12 +411,23 @@ class RGBDDataset(BaseSequenceDataset):
         if self.include_skill_input:
             if skill_values is None:
                 raise KeyError("Skill input was requested, but no `skill` data was loaded.")
-            self.train_data["skill"] = float_tensor_from_numpy(skill_values)
-        self._fit_normalizer(
-            observation_filtered_normalizer_data(
-                self.train_data, self.observation_valid
-            )
+            skill_tensor = float_tensor_from_numpy(skill_values)
+            if self.gripper_action_vector:
+                self.train_data["gripper_action_vector"] = (
+                    skill_onehot_to_gripper_action_vector(skill_tensor)
+                )
+            else:
+                self.train_data["skill"] = skill_tensor
+        normalizer_data = observation_filtered_normalizer_data(
+            self.train_data, self.observation_valid
         )
+        if self.gripper_action_vector:
+            normalizer_data = {
+                key: value
+                for key, value in normalizer_data.items()
+                if key != "gripper_action_vector"
+            }
+        self._fit_normalizer(normalizer_data)
 
         if self.control_mode == ControlMode.relative:
             if not self._using_external_normalizer:
@@ -444,7 +463,10 @@ class RGBDDataset(BaseSequenceDataset):
         )
         self.action_dim = self.train_data["action"].shape[-1]
         self.robot_state_dim = self.train_data["robot_state"].shape[-1]
-        self.skill_dim = int(skill_values.shape[-1]) if skill_values is not None else 0
+        self.skill_dim = (
+            1 if self.gripper_action_vector
+            else int(skill_values.shape[-1]) if skill_values is not None else 0
+        )
         self.has_nonzero_skill = bool(np.any(skill_values > 0)) if skill_values is not None else False
         self._apply_minority_class_power(self.minority_class_power)
 
@@ -486,7 +508,8 @@ class RGBDDataset(BaseSequenceDataset):
         nsample["depth_image2"] = nsample["depth_image2"][: self.obs_horizon, :]
         nsample["robot_state"] = nsample["robot_state"][: self.obs_horizon, :]
         if self.include_skill_input:
-            nsample["skill"] = nsample["skill"][: self.obs_horizon, :]
+            condition_key = "gripper_action_vector" if self.gripper_action_vector else "skill"
+            nsample[condition_key] = nsample[condition_key][: self.obs_horizon, :]
         nsample["action"] = nsample["action"][self.first_action_idx : self.final_action_idx, :].clone()
         nsample["action_valid_mask"] = action_valid_mask(
             self.pred_horizon,

@@ -77,6 +77,33 @@ def validate_annotation_config(cfg: DictConfig):
     uses_grasp = model_uses_grasp(cfg)
     uses_grasp_colored = model_uses_grasp_colored(cfg)
     uses_grasp_part = model_uses_grasp_part(cfg)
+    uses_gripper_vector = bool(_config_data_flag(cfg, "gripper_action_vector"))
+
+    if uses_gripper_vector:
+        if _config_data_flag(cfg, "annotate_skill_one_hot"):
+            raise ValueError(
+                "data.gripper_action_vector and data.annotate_skill_one_hot "
+                "are mutually exclusive."
+            )
+        if (
+            observation_type != "rgbd"
+            or actor_name_from_config(cfg) != "diffusion"
+            or cfg.actor.diffusion_model.name != "dit"
+        ):
+            raise ValueError("data.gripper_action_vector requires an RGB-D DiT diffusion policy.")
+        if (
+            not uses_guidance_point
+            or uses_guidance_point_colored
+            or uses_grasp
+            or uses_grasp_colored
+            or uses_grasp_part
+        ):
+            raise ValueError(
+                "data.gripper_action_vector only supports uncolored "
+                "guidance-point GP-skill data."
+            )
+        if cfg.data.get("storage_format") != "lmdb":
+            raise ValueError("data.gripper_action_vector requires LMDB GP-skill data.")
 
     if uses_grasp and uses_grasp_part:
         raise ValueError(
@@ -116,6 +143,8 @@ def validate_annotation_config(cfg: DictConfig):
 
 
 def model_requires_skill_input(cfg: DictConfig) -> bool:
+    if _config_data_flag(cfg, "gripper_action_vector"):
+        return True
     skill_flag = _config_data_flag(cfg, "annotate_skill_one_hot")
     if skill_flag is not None:
         return skill_flag
@@ -125,6 +154,8 @@ def model_requires_skill_input(cfg: DictConfig) -> bool:
 
 
 def model_skill_dim(cfg: DictConfig) -> int:
+    if _config_data_flag(cfg, "gripper_action_vector"):
+        return 1
     if not model_requires_skill_input(cfg):
         return 0
 
@@ -246,6 +277,9 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
         # and fail fast if either camera depth is absent.
         self._rgbd_observation_contract_logged = False
         self.requires_skill_input = model_requires_skill_input(cfg)
+        self.gripper_action_vector = bool(
+            _config_data_flag(cfg, "gripper_action_vector")
+        )
         self.skill_dim = model_skill_dim(cfg) if self.requires_skill_input else None
 
         # Define what parts of the robot state to use
@@ -511,12 +545,17 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
                 dtype=nrobot_state.dtype,
             )
 
-        if "skill" not in batch:
+        condition_key = (
+            "gripper_action_vector"
+            if getattr(self, "gripper_action_vector", False)
+            else "skill"
+        )
+        if condition_key not in batch:
             raise KeyError(
-                "This model was trained with skill input, but the batch does not contain a `skill` tensor."
+                f"This model requires `{condition_key}` input, but the batch does not contain it."
             )
 
-        skill = batch["skill"].to(device=nrobot_state.device, dtype=nrobot_state.dtype)
+        skill = batch[condition_key].to(device=nrobot_state.device, dtype=nrobot_state.dtype)
         if skill.shape[-1] != self.skill_dim:
             raise ValueError(
                 f"Expected training skill dim {self.skill_dim}, got {skill.shape[-1]}."
@@ -532,14 +571,19 @@ class Actor(torch.nn.Module, PrintParamCountMixin, metaclass=PostInitCaller):
             )
 
         skill_steps = []
+        condition_key = (
+            "gripper_action_vector"
+            if getattr(self, "gripper_action_vector", False)
+            else "skill"
+        )
         for step_obs in obs:
-            if "skill" not in step_obs or step_obs["skill"] is None:
+            if condition_key not in step_obs or step_obs[condition_key] is None:
                 raise KeyError(
-                    "This model was trained with skill input, but eval observations do not contain `skill`. "
+                    f"This model requires `{condition_key}` input, but eval observations do not contain it. "
                     "Enable skill annotation for policy input."
                 )
 
-            skill = step_obs["skill"]
+            skill = step_obs[condition_key]
             if not torch.is_tensor(skill):
                 skill = torch.as_tensor(
                     skill,

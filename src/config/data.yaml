@@ -22,6 +22,10 @@ data:
   annotate_grasp_colored: false
   annotate_grasp_part: false
   annotate_skill_one_hot: false
+  # Derive a raw 1D open=-1 / close=+1 condition from scripted, uncolored
+  # rgbd-gp-skill LMDB one-hot labels. Requires RGB-D DiT and GP annotation;
+  # mutually exclusive with annotate_skill_one_hot as a model input.
+  gripper_action_vector: false
   # Metadata for datasets generated with noisy visual guidance annotations.
   # These values are recorded in the training config; the dataset suffix selects
   # the actual clean/noisy LMDB.

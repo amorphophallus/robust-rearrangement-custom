@@ -433,6 +433,40 @@ def validate_lmdb_metadata_contract(
     return summaries
 
 
+def validate_gp_skill_gripper_vector_source(
+    paths: Union[Sequence[Path], Path]
+) -> None:
+    """Fail closed unless every input is the scripted, uncolored GP-skill LMDB."""
+    if isinstance(paths, (str, Path)):
+        paths = [paths]
+    for raw_path in paths:
+        path = Path(raw_path)
+        attrs = read_lmdb_attrs(path)
+        provenance = attrs.get("provenance")
+        actual = {
+            "provenance.condition": (
+                provenance.get("condition") if isinstance(provenance, dict) else None
+            ),
+            "annotation_source": attrs.get("annotation_source"),
+            "image_annotation_mode": attrs.get("image_annotation_mode"),
+        }
+        expected = {
+            "provenance.condition": "rgbd-gp-skill",
+            "annotation_source": "scripted",
+            "image_annotation_mode": "guidance-point",
+        }
+        mismatches = [
+            f"{key}: expected {value!r}, got {actual[key]!r}"
+            for key, value in expected.items()
+            if actual[key] != value
+        ]
+        if mismatches:
+            raise ValueError(
+                f"gripper_action_vector GP-skill contract failed for {path}: "
+                + "; ".join(mismatches)
+            )
+
+
 class LMDBImageStore:
     def __init__(self, path: Union[str, Path]):
         self.path = Path(path)

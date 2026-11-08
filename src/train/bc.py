@@ -25,6 +25,7 @@ from src.behavior import get_actor
 from src.behavior.base import (
     Actor,
     model_requires_skill_input,
+    model_skill_dim,
     model_uses_grasp,
     model_uses_grasp_colored,
     model_uses_grasp_part,
@@ -39,7 +40,10 @@ from src.common.pytorch_util import dict_to_device
 from src.common.skills import SKILL_ORDER
 from src.dataset.dataloader import AsyncDevicePrefetchLoader, build_dataloader
 from src.dataset.dataset import ImageDataset, StateDataset, RGBDDataset
-from src.dataset.lmdb import validate_lmdb_metadata_contract
+from src.dataset.lmdb import (
+    validate_gp_skill_gripper_vector_source,
+    validate_lmdb_metadata_contract,
+)
 from src.dataset.source_sampling import (
     SourceWeightedSampler,
     dataset_sample_envs,
@@ -157,12 +161,14 @@ def now():
 
 
 def configure_observation_annotation_flags(cfg: DictConfig):
+    validate_annotation_config(cfg)
     annotate_guidance_point = model_uses_guidance_point(cfg)
     annotate_guidance_point_colored = model_uses_guidance_point_colored(cfg)
     annotate_grasp = model_uses_grasp(cfg)
     annotate_grasp_colored = model_uses_grasp_colored(cfg)
     annotate_grasp_part = model_uses_grasp_part(cfg)
-    annotate_skill_one_hot = model_requires_skill_input(cfg)
+    vector_enabled = bool(cfg.data.get("gripper_action_vector", False))
+    annotate_skill_one_hot = model_requires_skill_input(cfg) and not vector_enabled
 
     OmegaConf.set_struct(cfg, False)
     cfg.data.annotate_guidance_point = annotate_guidance_point
@@ -171,7 +177,11 @@ def configure_observation_annotation_flags(cfg: DictConfig):
     cfg.data.annotate_grasp_colored = annotate_grasp_colored
     cfg.data.annotate_grasp_part = annotate_grasp_part
     cfg.data.annotate_skill_one_hot = annotate_skill_one_hot
-    cfg.skill_dim = len(SKILL_ORDER) if annotate_skill_one_hot else 0
+    cfg.skill_dim = (
+        model_skill_dim(cfg)
+        if vector_enabled
+        else (len(SKILL_ORDER) if annotate_skill_one_hot else 0)
+    )
     OmegaConf.set_struct(cfg, True)
     validate_annotation_config(cfg)
 
@@ -641,6 +651,8 @@ def main(cfg: DictConfig):
                 cfg.data.get("required_lmdb_attrs_by_domain", None)
             ),
         )
+    if cfg.data.get("gripper_action_vector", False):
+        validate_gp_skill_gripper_vector_source(list(data_path))
 
     dataset: Union[ImageDataset, StateDataset]
     load_into_memory = resolve_load_into_memory(
@@ -682,6 +694,7 @@ def main(cfg: DictConfig):
             load_into_memory=load_into_memory,
             include_skill_input=include_skill_input,
             load_skill_metadata=load_skill_metadata,
+            gripper_action_vector=bool(cfg.data.get("gripper_action_vector", False)),
         )
     elif cfg.observation_type == "state":
         dataset = StateDataset(
@@ -753,7 +766,7 @@ def main(cfg: DictConfig):
 
     cfg.robot_state_dim = dataset.robot_state_dim
     cfg.action_dim = dataset.action_dim
-    cfg.skill_dim = len(SKILL_ORDER) if include_skill_input else 0
+    cfg.skill_dim = model_skill_dim(cfg)
 
     if cfg.observation_type == "state":
         cfg.parts_poses_dim = dataset.parts_poses_dim
