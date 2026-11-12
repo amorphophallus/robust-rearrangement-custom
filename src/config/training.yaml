@@ -9,6 +9,8 @@ training:
   
   num_epochs: 10000
   batch_size: 256
+  # Effective global batch remains batch_size; DDP accumulates this many microbatches.
+  gradient_accumulation_steps: 1
   start_epoch: 0
   steps_per_epoch: 1000 # Set to -1 to do one pass over the dataset
 

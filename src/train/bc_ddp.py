@@ -9,7 +9,7 @@ import shutil
 import tempfile
 import math
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1436,6 +1436,17 @@ def main(cfg: DictConfig):
             )
 
         per_rank_batch_size = cfg.training.batch_size // world_size
+        gradient_accumulation_steps = int(
+            cfg.training.get("gradient_accumulation_steps", 1)
+        )
+        if gradient_accumulation_steps < 1 or (
+            per_rank_batch_size % gradient_accumulation_steps != 0
+        ):
+            raise ValueError(
+                "training.gradient_accumulation_steps must be positive and "
+                "divide the per-rank effective batch size."
+            )
+        microbatch_size = per_rank_batch_size // gradient_accumulation_steps
         data_init_start_perf = perf_counter()
 
         OmegaConf.set_struct(cfg, False)
@@ -1445,6 +1456,8 @@ def main(cfg: DictConfig):
         cfg.training.rank = rank
         cfg.training.local_rank = local_rank
         cfg.training.per_rank_batch_size = per_rank_batch_size
+        cfg.training.microbatch_size = microbatch_size
+        cfg.training.gradient_accumulation_steps = gradient_accumulation_steps
         OmegaConf.set_struct(cfg, True)
 
         if main_process:
@@ -1494,9 +1507,7 @@ def main(cfg: DictConfig):
                     f"({raw_storage_bytes_per_sample / (1024**2):.3f} MiB)."
                 )
 
-        ddp_shard_enabled = bool(
-            world_size > 1 and cfg.data.get("ddp_shard_enabled", False)
-        )
+        ddp_shard_enabled = bool(cfg.data.get("ddp_shard_enabled", False))
         episode_selection_index = cfg.data.get("episode_selection_index", None)
         if episode_selection_index is not None and not ddp_shard_enabled:
             raise ValueError(
@@ -1732,7 +1743,7 @@ def main(cfg: DictConfig):
                 )
             trainloader = build_dataloader(
                 dataset=train_dataset,
-                batch_size=per_rank_batch_size,
+                batch_size=microbatch_size,
                 num_workers=cfg.data.dataloader_workers,
                 shuffle=False,
                 pin_memory=True,
@@ -1740,7 +1751,10 @@ def main(cfg: DictConfig):
                 persistent_workers=cfg.data.get("persistent_workers", False),
                 prefetch_factor=cfg.data.get("prefetch_factor", None),
                 sampler=train_sampler,
-                steps_per_epoch=train_steps_per_epoch,
+                steps_per_epoch=(
+                    train_steps_per_epoch * gradient_accumulation_steps
+                    if train_steps_per_epoch != -1 else -1
+                ),
             )
 
             if main_process:
@@ -1764,7 +1778,7 @@ def main(cfg: DictConfig):
                     )
                 testloader = build_dataloader(
                     dataset=test_dataset,
-                    batch_size=per_rank_batch_size,
+                    batch_size=microbatch_size,
                     num_workers=cfg.data.dataloader_workers,
                     shuffle=test_sampler is None,
                     pin_memory=True,
@@ -1826,7 +1840,7 @@ def main(cfg: DictConfig):
             )
             trainloader = build_dataloader(
                 dataset=train_dataset,
-                batch_size=per_rank_batch_size,
+                batch_size=microbatch_size,
                 num_workers=cfg.data.dataloader_workers,
                 shuffle=False,
                 pin_memory=True,
@@ -1834,7 +1848,10 @@ def main(cfg: DictConfig):
                 persistent_workers=cfg.data.get("persistent_workers", False),
                 prefetch_factor=cfg.data.get("prefetch_factor", None),
                 sampler=train_sampler,
-                steps_per_epoch=cfg.training.steps_per_epoch,
+                steps_per_epoch=(
+                    cfg.training.steps_per_epoch * gradient_accumulation_steps
+                    if cfg.training.steps_per_epoch != -1 else -1
+                ),
             )
 
             testloader = None
@@ -1846,7 +1863,7 @@ def main(cfg: DictConfig):
                 )
                 testloader = build_dataloader(
                     dataset=test_dataset,
-                    batch_size=per_rank_batch_size,
+                    batch_size=microbatch_size,
                     num_workers=cfg.data.dataloader_workers,
                     shuffle=True,
                     pin_memory=True,
@@ -1951,7 +1968,9 @@ def main(cfg: DictConfig):
             name=cfg.lr_scheduler.name,
             optimizer=opt_noise,
             num_warmup_steps=cfg.lr_scheduler.warmup_steps,
-            num_training_steps=len(trainloader) * cfg.training.num_epochs,
+            num_training_steps=(
+                len(trainloader) // gradient_accumulation_steps
+            ) * cfg.training.num_epochs,
         )
 
         optimizers = [("actor", opt_noise)]
@@ -1967,7 +1986,9 @@ def main(cfg: DictConfig):
                 name=cfg.lr_scheduler.name,
                 optimizer=opt_encoder,
                 num_warmup_steps=cfg.lr_scheduler.encoder_warmup_steps,
-                num_training_steps=len(trainloader) * cfg.training.num_epochs,
+                num_training_steps=(
+                    len(trainloader) // gradient_accumulation_steps
+                ) * cfg.training.num_epochs,
             )
             optimizers.append(("encoder", opt_encoder))
             lr_schedulers.append(lr_scheduler_encoder)
@@ -2259,34 +2280,52 @@ def main(cfg: DictConfig):
             actor.train()
             train_sampler.set_epoch(epoch_idx)
 
+            optimizer_steps_per_epoch = len(trainloader) // gradient_accumulation_steps
+            if optimizer_steps_per_epoch < 1:
+                raise RuntimeError("Training dataloader has no complete optimizer step.")
             tepoch = tqdm(
-                range(len(trainloader)),
+                range(optimizer_steps_per_epoch),
                 desc=f"Training [rank {rank}]",
                 leave=False,
-                total=len(trainloader),
+                total=optimizer_steps_per_epoch,
                 disable=not main_process,
             )
             train_loop_started_unix = datetime.now().timestamp()
             train_iterator = None
             for _ in tepoch:
-                data_wait_start_perf = perf_counter()
-                try:
-                    if train_iterator is None:
-                        train_iterator = iter(trainloader)
-                    batch = next(train_iterator)
-                except StopIteration as exc:
-                    raise RuntimeError(
-                        "Training dataloader stopped before its reported length."
-                    ) from exc
-                train_data_wait_seconds += perf_counter() - data_wait_start_perf
-                compute_start_perf = perf_counter()
-
                 for _, opt in optimizers:
                     opt.zero_grad()
+                loss_cpu = 0.0
+                step_loss_logs = defaultdict(float)
+                for microbatch_idx in range(gradient_accumulation_steps):
+                    data_wait_start_perf = perf_counter()
+                    try:
+                        if train_iterator is None:
+                            train_iterator = iter(trainloader)
+                        batch = next(train_iterator)
+                    except StopIteration as exc:
+                        raise RuntimeError(
+                            "Training dataloader stopped before its reported length."
+                        ) from exc
+                    train_data_wait_seconds += perf_counter() - data_wait_start_perf
+                    compute_start_perf = perf_counter()
+                    batch = prepare_batch(batch)
+                    sync_context = (
+                        actor.no_sync()
+                        if microbatch_idx + 1 < gradient_accumulation_steps
+                        else nullcontext()
+                    )
+                    with sync_context:
+                        loss, losses_log = actor(batch)
+                        (loss / gradient_accumulation_steps).backward()
+                    loss_cpu += loss.item() / gradient_accumulation_steps
+                    for key, value in losses_log.items():
+                        step_loss_logs[key] += (
+                            float(value) / gradient_accumulation_steps
+                        )
+                    train_compute_seconds += perf_counter() - compute_start_perf
 
-                batch = prepare_batch(batch)
-                loss, losses_log = actor(batch)
-                loss.backward()
+                compute_start_perf = perf_counter()
 
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     actor.parameters(),
@@ -2300,15 +2339,14 @@ def main(cfg: DictConfig):
                 if ema is not None:
                     ema.update()
 
-                loss_cpu = loss.item()
                 train_metric_sums["epoch_loss"] += loss_cpu
                 train_metric_counts["epoch_loss"] += 1
                 train_metric_sums["grad_norm"] += grad_norm.item()
                 train_metric_counts["grad_norm"] += 1
 
-                for key, value in losses_log.items():
+                for key, value in step_loss_logs.items():
                     train_loss_keys.add(key)
-                    train_metric_sums[key] += float(value)
+                    train_metric_sums[key] += value
                     train_metric_counts[key] += 1
 
                 train_compute_seconds += perf_counter() - compute_start_perf
